@@ -833,27 +833,62 @@ func (r *Runner) RunAI(settings *models.Settings, skillID string, task *models.T
 	case "clarify":
 		promptTemplate = settings.PromptClarify
 		if promptTemplate == "" {
-			promptTemplate = "Tu es l'agent de clarification technique pour Fretzee Studio. Analyse la tâche suivante :\nClé : {issueKey}\nTitre : {issueTitle}\nDescription : {issueDesc}\n\nIdentifie les ambiguïtés, les dépendances critiques, et formule 3 à 5 questions d'alignement précises et concises à destination de l'équipe produit / tech pour cadrer le développement."
+			promptTemplate = "Tu es l'agent de cadrage technique pour Taskacao. Analyse la tâche suivante :\nClé : {issueKey}\nTitre : {issueTitle}\nDescription : {issueDesc}\n\nIdentifie les ambiguïtés, les dépendances critiques, et formule 3 à 5 questions d'alignement précises et concises à destination de l'équipe produit / tech pour cadrer le développement."
 		}
 	case "specify":
 		promptTemplate = settings.PromptSpecify
 		if promptTemplate == "" {
-			promptTemplate = "Tu es le Product Owner & Architecte technique pour Fretzee Studio. Rédige une spécification technique Speckit complète pour la tâche :\nClé : {issueKey}\nTitre : {issueTitle}\nDescription : {issueDesc}\n\nInclus :\n1. Objectifs & User Stories\n2. Architecture & Composants touchés (Backend Go / Frontend React)\n3. Contrat d'interface / API / Base de données\n4. Critères d'acceptation et plan de tests."
+			promptTemplate = `Tu es le Product Owner & Architecte technique pour Taskacao. Rédige une spécification technique Speckit complète pour la tâche :
+Clé : {issueKey}
+Titre : {issueTitle}
+Description : {issueDesc}
+Branche Git cible : {branchName}
+Dossier du projet : {repoPath}
+
+Contenu attendu :
+1. Contexte & User Stories
+2. Architecture et composants cibles (fichiers à créer / modifier)
+3. Critères d'acceptation détaillés (Scénarios Given / When / Then)
+4. Plan de tests et de validation.`
 		}
 	case "implement":
 		promptTemplate = settings.PromptImplement
 		if promptTemplate == "" {
-			promptTemplate = "Tu es le développeur pour Fretzee Studio. Prépare le plan d'implémentation et la stratégie de modifications de code pour la tâche :\nClé : {issueKey}\nTitre : {issueTitle}\nDescription : {issueDesc}\nBranche : {branchName}\n\nIndique les fichiers à créer/éditer, les tests unitaires à lancer (go test ./...), et les règles de validation à respecter."
+			promptTemplate = `Tu es le développeur senior autonome pour Taskacao. Tu dois IMPLÉMENTER ET ÉCRIRE DIRECTEMENT les modifications de code dans le projet ({repoPath}) pour accomplir cette tâche.
+
+Contexte de la tâche :
+Clé : {issueKey}
+Titre : {issueTitle}
+Description : {issueDesc}
+Branche Git : {branchName}
+Dossier du projet : {repoPath}
+
+INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
+1. Vérifie le code existant et assure-toi d'être sur la branche Git '{branchName}'.
+2. Écris et modifie concrètement les fichiers nécessaires dans le projet pour implémenter complètement la fonctionnalité ou résoudre le bug.
+3. Exécute les commandes de test et de build du projet (ex: npm run build ou go test ./... selon la stack) pour vérifier que le code compile et fonctionne parfaitement sans régression.
+4. Fournis un compte-rendu clair des fichiers modifiés/créés et des résultats des validations.`
 		}
 	case "create_pr":
 		promptTemplate = settings.PromptCreatePR
 		if promptTemplate == "" {
-			promptTemplate = "Tu es l'agent release pour Fretzee Studio. Rédige la Pull Request pour la tâche :\nClé : {issueKey}\nTitre : {issueTitle}\nDescription : {issueDesc}\nBranche : {branchName}\n\nFournis :\n1. Message de commit sémantique (ex: feat({issueKey}): description)\n2. Titre de la PR\n3. Description complète en Markdown avec le résumé des changements et la checklist de validation."
+			promptTemplate = `Tu es l'ingénieur DevOps & Release pour Taskacao. Tu dois préparer et créer la Pull Request / Merge Request pour la tâche :
+Clé : {issueKey}
+Titre : {issueTitle}
+Description : {issueDesc}
+Branche Git : {branchName}
+Dossier du projet : {repoPath}
+
+INSTRUCTIONS D'EXÉCUTION :
+1. Vérifie l'état de git diff et git status sur la branche {branchName}.
+2. Assure-toi que les commits sont conventionnels (ex: 'feat({issueKey}): {issueTitle}').
+3. Si configuré (GitHub CLI / GitLab), pousse la branche et crée la Pull Request.
+4. Fournis l'URL de la Pull Request ou le compte-rendu complet pour l'équipe.`
 		}
 	case "pick":
 		promptTemplate = settings.PromptPick
 		if promptTemplate == "" {
-			promptTemplate = "Tu es le routeur d'orchestration pour Fretzee Studio. Analyse l'état de la tâche {issueKey} ({issueTitle}) et détermine la prochaine action requise dans le cycle SDLC."
+			promptTemplate = "Tu es le routeur d'orchestration pour Taskacao. Analyse l'état de la tâche {issueKey} ({issueTitle}) et détermine la prochaine action requise dans le cycle SDLC."
 		}
 	}
 
@@ -889,7 +924,7 @@ func (r *Runner) RunAI(settings *models.Settings, skillID string, task *models.T
 
 	steps = append(steps, fmt.Sprintf("🤖 Moteur IA : %s", strings.ToUpper(provider)))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	var output string

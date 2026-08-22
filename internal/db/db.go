@@ -1600,6 +1600,17 @@ func (d *DB) processSkillJob(job SkillJob) {
 	branch := fmt.Sprintf("%s-%s", task.Key, cleanTitle)
 	if task.BranchName == nil || *task.BranchName == "" {
 		task.BranchName = &branch
+		d.mu.Lock()
+		_, _ = d.conn.Exec("UPDATE tasks SET branch_name = ? WHERE id = ?", branch, task.ID)
+		d.mu.Unlock()
+	}
+
+	// Prepare git branch in repo if .git exists
+	if settings.RepoPath != "" && task.BranchName != nil && *task.BranchName != "" {
+		gitDir := filepath.Join(settings.RepoPath, ".git")
+		if fi, err := os.Stat(gitDir); err == nil && fi.IsDir() {
+			_ = exec.Command("git", "-C", settings.RepoPath, "checkout", "-B", *task.BranchName).Run()
+		}
 	}
 
 	// Run AI execution via runner
@@ -1660,6 +1671,16 @@ func (d *DB) processSkillJob(job SkillJob) {
 		task.Labels = SetWorkflowLabel(task.Labels, "Implemented")
 		action = fmt.Sprintf("Implémentation exécutée avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
 		summary = fmt.Sprintf("Développement terminé sur la branche %s ➔ Étape: À tester [Label: Implemented]", *task.BranchName)
+
+		// Check if changes exist in project repository to stage
+		if settings.RepoPath != "" && task.BranchName != nil {
+			diffCheck := exec.Command("git", "-C", settings.RepoPath, "status", "--porcelain")
+			if diffOut, err := diffCheck.Output(); err == nil && len(strings.TrimSpace(string(diffOut))) > 0 {
+				_ = exec.Command("git", "-C", settings.RepoPath, "add", "-A").Run()
+				commitMsg := fmt.Sprintf("feat(%s): %s", task.Key, task.Title)
+				_ = exec.Command("git", "-C", settings.RepoPath, "commit", "-m", commitMsg).Run()
+			}
+		}
 
 	case "create_pr", "review":
 		task.Status = models.StatusToClose

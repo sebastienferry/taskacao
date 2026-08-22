@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Status } from '../types'
+import { TaskacaoLogo } from './TaskacaoLogo'
 
 const renderProjectIcon = (iconName: string, size = 15, className = '') => {
   switch (iconName) {
@@ -120,35 +121,40 @@ export const Sidebar: React.FC = () => {
       } h-screen z-20 shrink-0`}
     >
       {/* Brand Header */}
-      <div className="flex items-center justify-between h-14 px-3.5 border-b border-[var(--border-color)]">
+      <div className="flex items-center justify-between h-14 px-3 border-b border-[var(--border-color)]">
         {!sidebarCollapsed ? (
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-md accent-bg shrink-0">
-              <Layers size={18} />
-            </div>
-            <div className="flex flex-col min-w-0">
-              <span className="font-semibold tracking-tight text-sm truncate text-[var(--text-primary)]">
+          <>
+            <div className="flex items-center gap-2.5 min-w-0 overflow-hidden">
+              <TaskacaoLogo size={32} className="shrink-0 drop-shadow-sm" />
+              <span className="font-bold tracking-tight text-base text-[var(--text-primary)] truncate">
                 {t.app.title}
               </span>
-              <span className="text-[10px] font-mono text-[var(--text-muted)] truncate flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                AI: {settings.aiProvider.toUpperCase()} | Multi-Tracker
-              </span>
             </div>
-          </div>
+
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(true)}
+              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors shrink-0"
+              title={t.nav.toggleSidebar || 'Replier'}
+            >
+              <ChevronLeft size={16} />
+            </button>
+          </>
         ) : (
-          <div className="mx-auto w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-md accent-bg">
-            <Layers size={18} />
+          <div className="w-full flex items-center justify-center">
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(false)}
+              className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-[var(--bg-tertiary)] transition-all relative group"
+              title={`${t.app.title} - ${t.nav.toggleSidebar || 'Déplier'}`}
+            >
+              <TaskacaoLogo size={32} className="shrink-0 drop-shadow-sm" />
+              <span className="absolute -bottom-0.5 -right-0.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-full p-0.5 text-[var(--text-muted)] group-hover:text-[var(--text-primary)] opacity-0 group-hover:opacity-100 transition-opacity shadow-xs">
+                <ChevronRight size={10} />
+              </span>
+            </button>
           </div>
         )}
-
-        <button
-          onClick={() => setSidebarCollapsed(prev => !prev)}
-          className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-          title={sidebarCollapsed ? 'Déplier' : 'Replier'}
-        >
-          {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        </button>
       </div>
 
       {/* Project Switcher Bar */}
