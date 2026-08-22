@@ -201,6 +201,9 @@ export const Sidebar: React.FC = () => {
                   onClick={() => {
                     setSelectedProjectId('all')
                     setIsProjectDropdownOpen(false)
+                    if (activeView === 'activities' || activeView === 'sync') {
+                      setActiveView('board')
+                    }
                   }}
                   className={`w-full flex items-center justify-between p-2 rounded-xl text-xs transition-all ${
                     selectedProjectId === 'all'
@@ -229,6 +232,9 @@ export const Sidebar: React.FC = () => {
                         onClick={() => {
                           setSelectedProjectId(p.id)
                           setIsProjectDropdownOpen(false)
+                          if (activeView === 'activities' || activeView === 'sync') {
+                            setActiveView('board')
+                          }
                         }}
                         className={`group/item w-full flex items-center justify-between p-2 rounded-xl text-xs cursor-pointer transition-all ${
                           isSel
@@ -395,6 +401,9 @@ export const Sidebar: React.FC = () => {
                     setAssigneeFilter(null)
                     setPriorityFilter(null)
                     setLabelFilter(null)
+                    if (activeView === 'activities' || activeView === 'sync') {
+                      setActiveView('board')
+                    }
                   }}
                   className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
                     isActive
@@ -442,7 +451,12 @@ export const Sidebar: React.FC = () => {
           )}
           <div className="space-y-0.5">
             <button
-              onClick={() => setAssigneeFilter(isMyTasksActive ? null : settings.userName)}
+              onClick={() => {
+                setAssigneeFilter(isMyTasksActive ? null : settings.userName)
+                if (activeView === 'activities' || activeView === 'sync') {
+                  setActiveView('board')
+                }
+              }}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
                 isMyTasksActive
                   ? 'bg-[var(--accent-light)] accent-text font-semibold'
@@ -456,7 +470,12 @@ export const Sidebar: React.FC = () => {
               </div>
             </button>
             <button
-              onClick={() => setPriorityFilter(isUrgentActive ? null : 'urgent')}
+              onClick={() => {
+                setPriorityFilter(isUrgentActive ? null : 'urgent')
+                if (activeView === 'activities' || activeView === 'sync') {
+                  setActiveView('board')
+                }
+              }}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
                 isUrgentActive
                   ? 'bg-[var(--accent-light)] accent-text font-semibold'
@@ -486,7 +505,12 @@ export const Sidebar: React.FC = () => {
                 return (
                   <button
                     key={lbl}
-                    onClick={() => setLabelFilter(isSelected ? null : lbl)}
+                    onClick={() => {
+                      setLabelFilter(isSelected ? null : lbl)
+                      if (activeView === 'activities' || activeView === 'sync') {
+                        setActiveView('board')
+                      }
+                    }}
                     className={`w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-xs transition-all ${
                       isSelected
                         ? 'bg-[var(--accent-light)] accent-text font-semibold'

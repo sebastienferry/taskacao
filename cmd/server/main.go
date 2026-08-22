@@ -36,6 +36,7 @@ func main() {
 	// API Routes
 	mux.HandleFunc("/api/health", h.HandleHealth)
 	mux.HandleFunc("/api/cli-status", h.HandleCliStatus)
+	mux.HandleFunc("/api/git-status", h.HandleGitStatus)
 	mux.HandleFunc("/api/sync/all", h.HandleSyncAll)
 	mux.HandleFunc("/api/sync/linear", h.HandleSyncLinear)
 	mux.HandleFunc("/api/sync/github", h.HandleSyncGithub)

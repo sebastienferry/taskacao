@@ -322,6 +322,25 @@ export interface TranslationSchema {
       clearConfirm: string
     }
   }
+  statusBar: {
+    branch: string
+    clean: string
+    modified: string
+    untracked: string
+    noRepo: string
+    notGit: string
+    refresh: string
+    aiProvider: string
+    activeJobs: string
+    ready: string
+    runningSkill: string
+    cwd: string
+    remote: string
+    latestCommit: string
+    copyBranch: string
+    branchCopied: string
+    viewDiff: string
+  }
   toasts: {
     taskCreated: string
     taskUpdated: string
@@ -666,6 +685,25 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
         clearConfirm: 'Êtes-vous sûr de vouloir vider toutes les activités terminées / échouées ?',
       },
     },
+    statusBar: {
+      branch: 'Branche',
+      clean: 'Arbre de travail propre',
+      modified: 'modifié(s)',
+      untracked: 'non suivi(s)',
+      noRepo: 'Aucun dépôt Git',
+      notGit: 'Pas un dépôt Git',
+      refresh: 'Actualiser l\'état Git',
+      aiProvider: 'Moteur IA',
+      activeJobs: 'job(s) actif(s)',
+      ready: 'Prêt',
+      runningSkill: 'Skill en cours d\'exécution',
+      cwd: 'CWD',
+      remote: 'Dépôt distant',
+      latestCommit: 'Dernier commit',
+      copyBranch: 'Copier le nom de la branche',
+      branchCopied: 'Nom de la branche copié !',
+      viewDiff: 'Voir le Git Diff',
+    },
     toasts: {
       taskCreated: 'Tâche créée avec succès !',
       taskUpdated: 'Tâche mise à jour !',
@@ -1007,6 +1045,25 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
         clearCompleted: 'Clear Completed History',
         clearConfirm: 'Are you sure you want to delete all completed / failed activities?',
       },
+    },
+    statusBar: {
+      branch: 'Branch',
+      clean: 'Clean working tree',
+      modified: 'modified',
+      untracked: 'untracked',
+      noRepo: 'No Git repository',
+      notGit: 'Not a Git repository',
+      refresh: 'Refresh Git Status',
+      aiProvider: 'AI Engine',
+      activeJobs: 'active job(s)',
+      ready: 'Ready',
+      runningSkill: 'Skill running',
+      cwd: 'CWD',
+      remote: 'Remote repository',
+      latestCommit: 'Latest commit',
+      copyBranch: 'Copy branch name',
+      branchCopied: 'Branch name copied!',
+      viewDiff: 'View Git Diff',
     },
     toasts: {
       taskCreated: 'Task created successfully!',

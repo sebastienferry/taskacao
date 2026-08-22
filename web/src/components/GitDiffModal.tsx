@@ -21,7 +21,7 @@ import { useApp } from '../context/AppContext'
 import type { GitDiffResult } from '../types'
 
 export const GitDiffModal: React.FC = () => {
-  const { diffTask, setDiffTask, fetchGitDiff, addToast } = useApp()
+  const { diffTask, setDiffTask, fetchGitDiff, checkoutTaskBranch, addToast } = useApp()
 
   const [diffResult, setDiffResult] = useState<GitDiffResult | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -188,8 +188,23 @@ export const GitDiffModal: React.FC = () => {
             </div>
           </div>
 
-          {/* Action buttons */}
+            {/* Action buttons */}
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={async () => {
+                if (diffTask) {
+                  await checkoutTaskBranch(diffTask.id)
+                  await loadDiff()
+                }
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition-colors"
+              title="Basculez votre environnement de travail local sur cette branche"
+            >
+              <GitBranch size={13} />
+              <span>Checkout branche</span>
+            </button>
+
             {diffTask.prUrl && (
               <a
                 href={diffTask.prUrl}

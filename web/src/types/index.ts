@@ -108,6 +108,22 @@ export interface GitDiffResult {
   error?: string
 }
 
+export interface GitStatusInfo {
+  repoPath: string
+  isGitRepo: boolean
+  branch: string
+  baseBranch?: string
+  isClean: boolean
+  modifiedCount: number
+  untrackedCount: number
+  ahead: number
+  behind: number
+  remoteName?: string
+  remoteUrl?: string
+  latestCommit?: string
+  error?: string
+}
+
 export interface Skill {
   id: string
   name: string
