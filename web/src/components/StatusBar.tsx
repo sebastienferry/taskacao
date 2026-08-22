@@ -23,7 +23,6 @@ export const StatusBar: React.FC = () => {
     setActiveView,
     setIsProfileOpen,
     setIsProjectModalOpen,
-    cliStatuses,
     t,
     addToast,
   } = useApp()
@@ -119,6 +118,17 @@ export const StatusBar: React.FC = () => {
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
                 <span>*{totalDirty}</span>
+              </span>
+            )}
+
+            {/* Ahead / Behind Indicator */}
+            {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
+              <span
+                className="hidden sm:inline-flex items-center gap-0.5 text-[9px] text-cyan-300 font-mono pl-0.5 font-bold"
+                title={`${gitStatus.ahead} commit(s) en avance, ${gitStatus.behind} commit(s) en retard`}
+              >
+                {gitStatus.ahead > 0 && <span>↑{gitStatus.ahead}</span>}
+                {gitStatus.behind > 0 && <span>↓{gitStatus.behind}</span>}
               </span>
             )}
 
