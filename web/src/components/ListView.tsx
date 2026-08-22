@@ -129,7 +129,7 @@ export const ListView: React.FC = () => {
         return { id: 'implement', label: 'Code' }
       case 'to_test':
       case 'to_validate':
-        return { id: 'create_pr', label: 'PR' }
+        return { id: 'create_pr', label: 'PR / Merge' }
       default:
         return null
     }

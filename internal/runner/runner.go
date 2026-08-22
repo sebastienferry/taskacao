@@ -872,18 +872,23 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 	case "create_pr":
 		promptTemplate = settings.PromptCreatePR
 		if promptTemplate == "" {
-			promptTemplate = `Tu es l'ingénieur DevOps & Release pour Taskacao. Tu dois préparer et créer la Pull Request / Merge Request pour la tâche :
+			promptTemplate = `Tu es l'ingénieur DevOps & Release pour Taskacao. Tu dois finaliser la tâche, commiter et créer la Pull Request ou effectuer la fusion (merge) locale :
 Clé : {issueKey}
 Titre : {issueTitle}
 Description : {issueDesc}
 Branche Git : {branchName}
 Dossier du projet : {repoPath}
 
-INSTRUCTIONS D'EXÉCUTION :
-1. Vérifie l'état de git diff et git status sur la branche {branchName}.
-2. Assure-toi que les commits sont conventionnels (ex: 'feat({issueKey}): {issueTitle}').
-3. Si configuré (GitHub CLI / GitLab), pousse la branche et crée la Pull Request.
-4. Fournis l'URL de la Pull Request ou le compte-rendu complet pour l'équipe.`
+INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
+1. Vérifie l'état Git dans '{repoPath}' ('git status' et 'git remote').
+2. Assure-toi que toutes les modifications sur la branche '{branchName}' sont commitées proprement avec un message conventionnel (ex: 'feat({issueKey}): {issueTitle}').
+3. CAS A : Si un dépôt distant (remote 'origin' ou GitHub/GitLab) est configuré :
+   - Pousse la branche vers le remote : 'git push -u origin {branchName}'
+   - Crée la Pull Request via 'gh pr create' ou 'glab mr create' si disponible.
+4. CAS B : Si AUCUN remote distant n'est configuré (dépôt local uniquement) :
+   - Bascule sur la branche principale : 'git checkout main' (ou 'git checkout master' selon la branche par défaut).
+   - Fusionne la branche de la tâche : 'git merge --no-ff {branchName} -m "Merge branch \'{branchName}\' for {issueKey}: {issueTitle}"'
+5. Fournis un compte-rendu clair de l'action réalisée (Pull Request créée ou Merge local effectué sur la branche principale).`
 		}
 	case "pick":
 		promptTemplate = settings.PromptPick
@@ -1179,3 +1184,124 @@ func (r *Runner) GetGitDiff(repoDir string, branchName string, taskKey string, p
 		PrURL:        prURL,
 	}, nil
 }
+
+// GetCwdGitStatus returns git status, active branch, and repo state for a directory
+func (r *Runner) GetCwdGitStatus(repoDir string) (*models.GitStatusInfo, error) {
+	if repoDir == "" {
+		cwd, err := os.Getwd()
+		if err == nil && cwd != "" {
+			repoDir = cwd
+		}
+	}
+
+	if repoDir == "" {
+		return &models.GitStatusInfo{
+			Error: "Répertoire de travail non spécifié",
+		}, nil
+	}
+
+	if fi, err := os.Stat(repoDir); err != nil || !fi.IsDir() {
+		return &models.GitStatusInfo{
+			RepoPath:  repoDir,
+			IsGitRepo: false,
+			Error:     fmt.Sprintf("Le répertoire '%s' n'existe pas", repoDir),
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check if git repo
+	if _, err := r.runCommand(ctx, repoDir, "git", "rev-parse", "--is-inside-work-tree"); err != nil {
+		return &models.GitStatusInfo{
+			RepoPath:  repoDir,
+			IsGitRepo: false,
+			Error:     "Ce dossier n'est pas un dépôt Git",
+		}, nil
+	}
+
+	// Real repo top level path
+	topLevel, err := r.runCommand(ctx, repoDir, "git", "rev-parse", "--show-toplevel")
+	if err == nil && strings.TrimSpace(topLevel) != "" {
+		repoDir = strings.TrimSpace(topLevel)
+	}
+
+	// Current active branch
+	branch, _ := r.runCommand(ctx, repoDir, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	branch = strings.TrimSpace(branch)
+	if branch == "HEAD" || branch == "" {
+		// Detached HEAD or tag
+		if tag, err := r.runCommand(ctx, repoDir, "git", "describe", "--tags", "--always"); err == nil && strings.TrimSpace(tag) != "" {
+			branch = strings.TrimSpace(tag)
+		} else if shortHash, err := r.runCommand(ctx, repoDir, "git", "rev-parse", "--short", "HEAD"); err == nil {
+			branch = strings.TrimSpace(shortHash)
+		}
+	}
+
+	// Base branch detection
+	baseBranch := "main"
+	if _, err := r.runCommand(ctx, repoDir, "git", "rev-parse", "--verify", "main"); err != nil {
+		if _, errMaster := r.runCommand(ctx, repoDir, "git", "rev-parse", "--verify", "master"); errMaster == nil {
+			baseBranch = "master"
+		}
+	}
+
+	// Status porcelain
+	porcelainOut, _ := r.runCommand(ctx, repoDir, "git", "status", "--porcelain")
+	modifiedCount := 0
+	untrackedCount := 0
+	for _, line := range strings.Split(porcelainOut, "\n") {
+		line = strings.TrimRight(line, "\r\n")
+		if len(line) < 2 {
+			continue
+		}
+		if strings.HasPrefix(line, "??") {
+			untrackedCount++
+		} else {
+			modifiedCount++
+		}
+	}
+
+	isClean := (modifiedCount == 0 && untrackedCount == 0)
+
+	// Remote info
+	remoteName, _ := r.runCommand(ctx, repoDir, "git", "remote")
+	remoteName = strings.TrimSpace(strings.Split(remoteName, "\n")[0])
+	remoteURL := ""
+	if remoteName != "" {
+		if rURL, err := r.runCommand(ctx, repoDir, "git", "remote", "get-url", remoteName); err == nil {
+			remoteURL = strings.TrimSpace(rURL)
+		}
+	}
+
+	// Ahead / Behind counts against upstream if configured
+	ahead := 0
+	behind := 0
+	if countsOut, err := r.runCommand(ctx, repoDir, "git", "rev-list", "--left-right", "--count", "HEAD...@{u}"); err == nil {
+		parts := strings.Fields(countsOut)
+		if len(parts) >= 2 {
+			ahead, _ = strconv.Atoi(parts[0])
+			behind, _ = strconv.Atoi(parts[1])
+		}
+	}
+
+	// Latest commit message & short hash
+	latestCommit, _ := r.runCommand(ctx, repoDir, "git", "log", "-1", "--format=%h %s (%cr)")
+	latestCommit = strings.TrimSpace(latestCommit)
+
+	return &models.GitStatusInfo{
+		RepoPath:       repoDir,
+		IsGitRepo:      true,
+		Branch:         branch,
+		BaseBranch:     baseBranch,
+		IsClean:        isClean,
+		ModifiedCount:  modifiedCount,
+		UntrackedCount: untrackedCount,
+		Ahead:          ahead,
+		Behind:         behind,
+		RemoteName:     remoteName,
+		RemoteURL:      remoteURL,
+		LatestCommit:   latestCommit,
+	}, nil
+}
+

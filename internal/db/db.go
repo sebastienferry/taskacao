@@ -580,6 +580,102 @@ func (d *DB) GetTaskGitDiff(taskIDOrKey string) (*models.GitDiffResult, error) {
 	return d.runner.GetGitDiff(repoPath, branchName, task.Key, task.PrURL)
 }
 
+// EnsureTaskGitBranch ensures that the project git repository is switched to the task's dedicated branch.
+// It auto-commits any pending changes on previous branches, creates the branch if non-existent, and switches to it.
+func (d *DB) EnsureTaskGitBranch(repoPath string, task *models.Task) (string, error) {
+	if repoPath == "" || task == nil {
+		return "", nil
+	}
+
+	gitDir := filepath.Join(repoPath, ".git")
+	if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() {
+		return "", nil
+	}
+
+	// Compute branch name if not set
+	if task.BranchName == nil || *task.BranchName == "" {
+		cleanTitle := strings.ToLower(task.Title)
+		cleanTitle = strings.ReplaceAll(cleanTitle, " ", "-")
+		cleanTitle = strings.ReplaceAll(cleanTitle, "'", "-")
+		cleanTitle = strings.ReplaceAll(cleanTitle, "\"", "")
+		cleanTitle = strings.ReplaceAll(cleanTitle, "/", "-")
+		cleanTitle = strings.ReplaceAll(cleanTitle, "\\", "-")
+		if len(cleanTitle) > 30 {
+			cleanTitle = cleanTitle[:30]
+		}
+		branch := fmt.Sprintf("%s-%s", task.Key, cleanTitle)
+		task.BranchName = &branch
+
+		d.mu.Lock()
+		_, _ = d.conn.Exec("UPDATE tasks SET branch_name = ? WHERE id = ?", branch, task.ID)
+		d.mu.Unlock()
+	}
+
+	targetBranch := *task.BranchName
+
+	// 1. Get current branch
+	currentBranchCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	curOut, curErr := currentBranchCmd.Output()
+	currentBranch := ""
+	if curErr == nil {
+		currentBranch = strings.TrimSpace(string(curOut))
+	}
+
+	// 2. If already on the target branch, we are good
+	if currentBranch == targetBranch {
+		return targetBranch, nil
+	}
+
+	// 3. If there are uncommitted changes on the old branch, auto-commit them cleanly to prevent checkout collisions
+	statusOut, _ := exec.Command("git", "-C", repoPath, "status", "--porcelain").Output()
+	if len(strings.TrimSpace(string(statusOut))) > 0 {
+		_ = exec.Command("git", "-C", repoPath, "add", "-A").Run()
+		commitMsg := fmt.Sprintf("chore: auto-save progress on '%s' before switching to task '%s'", currentBranch, task.Key)
+		_ = exec.Command("git", "-C", repoPath, "commit", "-m", commitMsg).Run()
+	}
+
+	// 4. Check if target branch already exists
+	checkBranchCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", targetBranch)
+	if err := checkBranchCmd.Run(); err == nil {
+		// Branch exists: switch to it
+		switchCmd := exec.Command("git", "-C", repoPath, "checkout", targetBranch)
+		if out, err := switchCmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("erreur bascule branche %s: %s (%w)", targetBranch, string(out), err)
+		}
+	} else {
+		// Branch does not exist: create and switch
+		createCmd := exec.Command("git", "-C", repoPath, "checkout", "-b", targetBranch)
+		if _, err := createCmd.CombinedOutput(); err != nil {
+			// Fallback with -B
+			createCmd2 := exec.Command("git", "-C", repoPath, "checkout", "-B", targetBranch)
+			if out2, err2 := createCmd2.CombinedOutput(); err2 != nil {
+				return "", fmt.Errorf("erreur création branche %s: %s (%w)", targetBranch, string(out2), err2)
+			}
+		}
+	}
+
+	return targetBranch, nil
+}
+
+func (d *DB) GetGitStatus(projectIDOrPath string) (*models.GitStatusInfo, error) {
+	d.mu.RLock()
+	repoPath := projectIDOrPath
+	if projectIDOrPath != "" {
+		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
+			repoPath = proj.RepoPath
+		}
+	}
+	if repoPath == "" {
+		settings, _ := d.getSettingsUnsafe()
+		if settings != nil && settings.RepoPath != "" {
+			repoPath = settings.RepoPath
+		}
+	}
+	d.mu.RUnlock()
+
+	return d.runner.GetCwdGitStatus(repoPath)
+}
+
 func (d *DB) getNextTaskKey(prefix string) (string, error) {
 	if prefix == "" {
 		prefix = "TASK"
@@ -1589,33 +1685,24 @@ func (d *DB) processSkillJob(job SkillJob) {
 		}
 	}
 
-	// Compute branch name if not set
-	cleanTitle := strings.ToLower(task.Title)
-	cleanTitle = strings.ReplaceAll(cleanTitle, " ", "-")
-	cleanTitle = strings.ReplaceAll(cleanTitle, "'", "-")
-	cleanTitle = strings.ReplaceAll(cleanTitle, "\"", "")
-	if len(cleanTitle) > 30 {
-		cleanTitle = cleanTitle[:30]
-	}
-	branch := fmt.Sprintf("%s-%s", task.Key, cleanTitle)
-	if task.BranchName == nil || *task.BranchName == "" {
-		task.BranchName = &branch
-		d.mu.Lock()
-		_, _ = d.conn.Exec("UPDATE tasks SET branch_name = ? WHERE id = ?", branch, task.ID)
-		d.mu.Unlock()
-	}
-
-	// Prepare git branch in repo if .git exists
-	if settings.RepoPath != "" && task.BranchName != nil && *task.BranchName != "" {
-		gitDir := filepath.Join(settings.RepoPath, ".git")
-		if fi, err := os.Stat(gitDir); err == nil && fi.IsDir() {
-			_ = exec.Command("git", "-C", settings.RepoPath, "checkout", "-B", *task.BranchName).Run()
+	// Safely ensure task Git branch (auto-saving any previous branch changes and creating/switching branch)
+	var branchSwitchStep string
+	if settings.RepoPath != "" {
+		switchedBranch, sErr := d.EnsureTaskGitBranch(settings.RepoPath, task)
+		if sErr != nil {
+			branchSwitchStep = fmt.Sprintf("⚠️ Avertissement Git branche : %v", sErr)
+		} else if switchedBranch != "" {
+			branchSwitchStep = fmt.Sprintf("🌿 Branche Git synchronisée et active : %s", switchedBranch)
 		}
 	}
 
 	// Run AI execution via runner
 	realAIOutput, runnerSteps, execErr := d.runner.RunAI(settings, job.SkillID, task, job.Prompt)
 	completedTime := time.Now()
+
+	if branchSwitchStep != "" {
+		runnerSteps = append([]string{branchSwitchStep}, runnerSteps...)
+	}
 
 	// Check if canceled during execution
 	select {
@@ -1685,10 +1772,47 @@ func (d *DB) processSkillJob(job SkillJob) {
 	case "create_pr", "review":
 		task.Status = models.StatusToClose
 		task.Labels = SetWorkflowLabel(task.Labels, "Reviewed")
-		prURL := fmt.Sprintf("https://github.com/%s/pull/%s", settings.GithubRepo, strings.TrimPrefix(task.Key, "FRE-"))
-		task.PrURL = &prURL
-		action = fmt.Sprintf("Revue & Pull Request préparées avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
-		summary = fmt.Sprintf("PR prête pour revue : %s ➔ Étape: À fermer [Label: Reviewed]", prURL)
+
+		// Check if remote repository is configured
+		hasRemote := false
+		if settings.RepoPath != "" {
+			remotesCmd := exec.Command("git", "-C", settings.RepoPath, "remote")
+			if remOut, err := remotesCmd.Output(); err == nil && len(strings.TrimSpace(string(remOut))) > 0 {
+				hasRemote = true
+			}
+		}
+
+		if hasRemote && settings.GithubRepo != "" {
+			prURL := fmt.Sprintf("https://github.com/%s/pull/%s", settings.GithubRepo, strings.TrimPrefix(task.Key, "FRE-"))
+			task.PrURL = &prURL
+			action = fmt.Sprintf("Revue & Pull Request préparées avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
+			summary = fmt.Sprintf("PR prête pour revue : %s ➔ Étape: À fermer [Label: Reviewed]", prURL)
+		} else {
+			// No remote configured: Perform safe local git merge into main/master
+			baseBranch := "main"
+			if settings.RepoPath != "" {
+				if err := exec.Command("git", "-C", settings.RepoPath, "rev-parse", "--verify", "main").Run(); err != nil {
+					if err2 := exec.Command("git", "-C", settings.RepoPath, "rev-parse", "--verify", "master").Run(); err2 == nil {
+						baseBranch = "master"
+					}
+				}
+
+				if task.BranchName != nil && *task.BranchName != "" && *task.BranchName != baseBranch {
+					_ = exec.Command("git", "-C", settings.RepoPath, "checkout", baseBranch).Run()
+					mergeMsg := fmt.Sprintf("Merge branch '%s' for %s: %s", *task.BranchName, task.Key, task.Title)
+					mergeCmd := exec.Command("git", "-C", settings.RepoPath, "merge", "--no-ff", *task.BranchName, "-m", mergeMsg)
+					if _, mErr := mergeCmd.CombinedOutput(); mErr != nil {
+						_ = exec.Command("git", "-C", settings.RepoPath, "merge", *task.BranchName).Run()
+					}
+				}
+			}
+			branchDisplay := "active"
+			if task.BranchName != nil {
+				branchDisplay = *task.BranchName
+			}
+			action = fmt.Sprintf("Fusion locale Git (%s ➔ %s) exécutée avec %s", branchDisplay, baseBranch, strings.ToUpper(settings.AIProvider))
+			summary = fmt.Sprintf("Branche '%s' fusionnée localement dans '%s' (aucun remote configuré) ➔ Étape: À fermer [Label: Reviewed]", branchDisplay, baseBranch)
+		}
 
 	case "pick":
 		if task.Status == models.StatusToClarify || task.Status == models.StatusBacklog {
@@ -2742,24 +2866,25 @@ Implémenter les changements de code de manière rigoureuse et testée selon la 
 	},
 	{
 		ID:          "create_pr",
-		Name:        "Review & Pull Request",
+		Name:        "Review & Pull Request / Merge",
 		DirName:     "create-pr",
-		Description: "Revue finale, commit conventionnel et création de la Pull Request GitHub.",
+		Description: "Revue finale, commit conventionnel et création de la Pull Request (ou fusion locale si aucun remote n'est configuré).",
 		Content: `---
 name: create-pr
-description: Effectue la revue finale, génère des commits conventionnels et publie la Pull Request sur GitHub.
+description: Effectue la revue finale, génère des commits conventionnels et publie la Pull Request sur GitHub (ou fusionne localement si aucun remote n'est configuré).
 ---
-# Skill : Review & Create PR
+# Skill : Review, Pull Request & Local Merge
 
 ## Objectif
-Revoir les changements, valider la qualité du code, commiter avec des messages conventionnels et créer la Pull Request.
+Revoir les changements, valider la qualité du code, commiter avec des messages conventionnels et publier la Pull Request (ou fusionner localement si aucun remote n'est configuré).
 
 ## Instructions
-1. Effectuer un git diff pour inspecter tous les changements réalisés.
-2. Vérifier l'absence d'erreurs, de secrets ou de code mort.
-3. Créer un commit conventionnel (ex: feat(scope): ... ou fix(scope): ...).
-4. Pousser la branche sur le dépôt distant (git push -u origin <branch>).
-5. Créer la Pull Request via gh pr create avec un résumé détaillé et le lien vers le ticket.
+1. Effectuer un 'git status' et 'git diff' pour inspecter tous les changements sur la branche.
+2. S'assurer que les modifications sont commitées (ex: feat(scope): ... ou fix(scope): ...).
+3. Vérifier les remotes via 'git remote' :
+   - **Si remote présent** : Pousser la branche ('git push -u origin <branch>') et créer la Pull Request ('gh pr create' ou 'glab mr create').
+   - **Si aucun remote configuré** : Basculer sur la branche principale ('git checkout main') et fusionner la branche ('git merge --no-ff <branch>').
+4. Produire un compte-rendu clair des actions réalisées.
 `,
 	},
 	{

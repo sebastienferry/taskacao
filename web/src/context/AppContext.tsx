@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { Task, Status, Priority, UserSettings, ViewMode, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult } from '../types'
+import type { Task, Status, Priority, UserSettings, ViewMode, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult, GitStatusInfo } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 
 interface AppContextType {
@@ -18,6 +18,9 @@ interface AppContextType {
   tasks: Task[]
   skills: Skill[]
   cliStatuses: CliStatus[]
+  gitStatus: GitStatusInfo | null
+  isFetchingGitStatus: boolean
+  fetchGitStatus: (targetPathOrProject?: string) => Promise<GitStatusInfo | null>
   isLoading: boolean
   isSkillRunning: boolean
   isSyncing: boolean
@@ -86,6 +89,7 @@ interface AppContextType {
   diffTask: Task | null
   setDiffTask: (task: Task | null) => void
   fetchGitDiff: (taskId: string) => Promise<GitDiffResult | null>
+  checkoutTaskBranch: (taskId: string) => Promise<boolean>
 }
 
 const defaultSettings: UserSettings = {
@@ -187,6 +191,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (selectedProjectId === 'all') return null
     return projects.find(p => p.id === selectedProjectId || p.slug === selectedProjectId) || null
   }, [projects, selectedProjectId])
+
+  // Git Status State
+  const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null)
+  const [isFetchingGitStatus, setIsFetchingGitStatus] = useState(false)
 
   // Activities & Queue State
   const [activities, setActivities] = useState<TaskActivity[]>([])
@@ -301,6 +309,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [])
 
+  const fetchGitStatus = useCallback(async (targetPathOrProject?: string): Promise<GitStatusInfo | null> => {
+    try {
+      setIsFetchingGitStatus(true)
+      const params = new URLSearchParams()
+      if (targetPathOrProject) {
+        params.append('path', targetPathOrProject)
+      } else if (currentProject && currentProject.repoPath) {
+        params.append('path', currentProject.repoPath)
+      } else if (settings.repoPath) {
+        params.append('path', settings.repoPath)
+      }
+
+      const res = await fetch(`${API_BASE}/git-status?${params.toString()}`)
+      if (res.ok) {
+        const data: GitStatusInfo = await res.json()
+        setGitStatus(data)
+        return data
+      }
+      return null
+    } catch (err) {
+      console.warn('Failed to load git status', err)
+      return null
+    } finally {
+      setIsFetchingGitStatus(false)
+    }
+  }, [currentProject, settings.repoPath])
+
   const fetchTasks = useCallback(async () => {
     try {
       setIsLoading(true)
@@ -332,7 +367,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     fetchProjects()
     fetchActivities()
     fetchActivityStats()
-  }, [fetchSettings, fetchSkills, fetchCliStatus, fetchProjects, fetchActivities, fetchActivityStats])
+    fetchGitStatus()
+  }, [fetchSettings, fetchSkills, fetchCliStatus, fetchProjects, fetchActivities, fetchActivityStats, fetchGitStatus])
 
   useEffect(() => {
     fetchTasks()
@@ -958,6 +994,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [])
 
+  const checkoutTaskBranch = useCallback(async (taskId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/checkout-branch`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.error || 'Failed to switch branch')
+      }
+      const data = await res.json()
+      addToast({
+        type: 'success',
+        title: 'Branche Git active',
+        description: data.message || `Bascule effectuée sur ${data.branch}`,
+      })
+      await fetchTasks()
+      return true
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Erreur Git checkout',
+        description: err.message,
+      })
+      return false
+    }
+  }, [addToast, fetchTasks])
+
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1027,6 +1090,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         tasks: filteredTasks,
         skills,
         cliStatuses,
+        gitStatus,
+        isFetchingGitStatus,
+        fetchGitStatus,
         isLoading,
         isSkillRunning,
         isSyncing,
@@ -1053,6 +1119,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         diffTask,
         setDiffTask,
         fetchGitDiff,
+        checkoutTaskBranch,
         hideDone,
         setHideDone,
         toggleHideDone,

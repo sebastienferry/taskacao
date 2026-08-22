@@ -162,6 +162,22 @@ type GitDiffResult struct {
 	Error        string        `json:"error,omitempty"`
 }
 
+type GitStatusInfo struct {
+	RepoPath       string `json:"repoPath"`
+	IsGitRepo      bool   `json:"isGitRepo"`
+	Branch         string `json:"branch"`
+	BaseBranch     string `json:"baseBranch,omitempty"`
+	IsClean        bool   `json:"isClean"`
+	ModifiedCount  int    `json:"modifiedCount"`
+	UntrackedCount int    `json:"untrackedCount"`
+	Ahead          int    `json:"ahead"`
+	Behind         int    `json:"behind"`
+	RemoteName     string `json:"remoteName,omitempty"`
+	RemoteURL      string `json:"remoteUrl,omitempty"`
+	LatestCommit   string `json:"latestCommit,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
 type Task struct {
 	ID             string         `json:"id"`
 	ProjectID      string         `json:"projectId"`

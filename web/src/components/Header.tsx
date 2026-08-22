@@ -15,7 +15,8 @@ import {
   Bot,
   Type,
   Eye,
-  EyeOff
+  EyeOff,
+  GitBranch,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Status, Priority, Density } from '../types'
@@ -23,6 +24,7 @@ import type { Status, Priority, Density } from '../types'
 export const Header: React.FC = () => {
   const {
     tasks,
+    gitStatus,
     activeJobCount,
     searchQuery,
     setSearchQuery,
@@ -155,6 +157,29 @@ export const Header: React.FC = () => {
 
       {/* Right Controls */}
       <div className="flex items-center gap-2">
+        {/* Active Git Branch Badge */}
+        {gitStatus?.branch && (
+          <div
+            onClick={() => {
+              if (gitStatus.branch) {
+                navigator.clipboard.writeText(gitStatus.branch)
+              }
+            }}
+            className="hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-mono font-semibold bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-cyan-500/40 cursor-pointer transition-all shadow-xs"
+            title={`Branche Git active : ${gitStatus.branch} (${gitStatus.isClean ? 'Clean' : '*' + (gitStatus.modifiedCount + gitStatus.untrackedCount)}) - Cliquer pour copier`}
+          >
+            <GitBranch size={13} className="text-cyan-400 shrink-0" />
+            <span className="text-cyan-300 dark:text-cyan-400 font-bold truncate max-w-[160px]">{gitStatus.branch}</span>
+            {gitStatus.isClean ? (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Arbre propre" />
+            ) : (
+              <span className="text-[10px] text-amber-400 font-bold" title="Fichiers modifiés">
+                *{(gitStatus.modifiedCount + gitStatus.untrackedCount)}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* AI Engine Badge */}
         <div
           onClick={() => setIsProfileOpen(true)}

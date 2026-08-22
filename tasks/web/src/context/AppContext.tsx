@@ -1,8 +1,20 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
-import type { Task, Status, Priority, UserSettings, ViewMode, ToastMessage, Skill, TaskActivity, CliStatus, TaskSource } from '../types'
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
+import type { Task, Status, Priority, UserSettings, ViewMode, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 
 interface AppContextType {
+  projects: Project[]
+  selectedProjectId: string | 'all'
+  setSelectedProjectId: (id: string | 'all') => void
+  currentProject: Project | null
+  createProject: (data: Partial<Project>) => Promise<Project | null>
+  updateProject: (id: string, updates: Partial<Project>) => Promise<Project | null>
+  deleteProject: (id: string) => Promise<boolean>
+  fetchProjects: () => Promise<void>
+  isProjectModalOpen: boolean
+  setIsProjectModalOpen: (open: boolean) => void
+  editingProject: Project | null
+  setEditingProject: (p: Project | null) => void
   tasks: Task[]
   skills: Skill[]
   cliStatuses: CliStatus[]
@@ -46,20 +58,34 @@ interface AppContextType {
   toasts: ToastMessage[]
   addToast: (toast: Omit<ToastMessage, 'id'>) => void
   removeToast: (id: string) => void
-  createTask: (task: { title: string; description?: string; status?: Status; priority?: Priority; labels?: string[]; assignee?: string; dueDate?: string | null; source?: TaskSource; externalUrl?: string }) => Promise<Task | null>
+  createTask: (task: { title: string; description?: string; status?: Status; priority?: Priority; labels?: string[]; assignee?: string; dueDate?: string | null; source?: TaskSource; externalUrl?: string; projectId?: string }) => Promise<Task | null>
   updateTask: (id: string, updates: Partial<Task>) => Promise<Task | null>
   convertTask: (id: string, target: 'linear' | 'github') => Promise<Task | null>
   moveTask: (id: string, newStatus: Status, newPosition: number) => Promise<void>
   deleteTask: (id: string) => Promise<boolean>
   runSkill: (taskId: string, skillId: string, prompt?: string) => Promise<TaskActivity | null>
   syncAll: () => Promise<void>
-  syncLinear: () => Promise<void>
-  syncGithub: () => Promise<void>
+  syncLinear: (team?: string) => Promise<void>
+  syncGithub: (repo?: string) => Promise<void>
   fetchCliStatus: () => Promise<void>
   reseedDemo: () => Promise<void>
   refreshTasks: () => Promise<void>
+  activities: TaskActivity[]
+  activityStats: ActivityStats
+  selectedActivity: TaskActivity | null
+  setSelectedActivity: (activity: TaskActivity | null) => void
+  activeJobCount: number
+  fetchActivities: () => Promise<void>
+  fetchActivityStats: () => Promise<void>
+  retryActivity: (id: string) => Promise<void>
+  cancelActivity: (id: string) => Promise<void>
+  deleteActivity: (id: string) => Promise<void>
+  clearCompletedActivities: () => Promise<void>
   availableLabels: string[]
   availableAssignees: string[]
+  diffTask: Task | null
+  setDiffTask: (task: Task | null) => void
+  fetchGitDiff: (taskId: string) => Promise<GitDiffResult | null>
 }
 
 const defaultSettings: UserSettings = {
@@ -100,7 +126,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isSyncing, setIsSyncing] = useState(false)
   const [runningSkillId, setRunningSkillId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [activeView, setActiveView] = useState<ViewMode>('board')
+  const [activeView, setActiveViewState] = useState<ViewMode>('board')
+  const fetchTasksRef = useRef<() => Promise<void>>(() => Promise.resolve())
+  const setActiveView = useCallback((view: ViewMode) => {
+    setActiveViewState(view)
+    if (view === 'board' || view === 'list') {
+      fetchTasksRef.current()
+    }
+  }, [])
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<Status | null>(null)
   const [priorityFilter, setPriorityFilter] = useState<Priority | null>(null)
@@ -109,6 +142,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [sourceFilter, setSourceFilter] = useState<'all' | TaskSource>('all')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+  const [diffTask, setDiffTask] = useState<Task | null>(null)
   const [hideDone, setHideDoneState] = useState<boolean>(() => {
     try {
       return localStorage.getItem('fretzee_hide_done') === 'true'
@@ -138,6 +172,42 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [settings, setSettings] = useState<UserSettings>(defaultSettings)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
 
+  // Projects State
+  const [projects, setProjects] = useState<Project[]>([])
+  const [selectedProjectId, setSelectedProjectIdState] = useState<string | 'all'>(() => {
+    try {
+      return localStorage.getItem('fretzee_selected_project_id') || 'all'
+    } catch {
+      return 'all'
+    }
+  })
+  const setSelectedProjectId = useCallback((id: string | 'all') => {
+    setSelectedProjectIdState(id)
+    try {
+      localStorage.setItem('fretzee_selected_project_id', id)
+    } catch {}
+  }, [])
+  const [isProjectModalOpen, setIsProjectModalOpen] = useState(false)
+  const [editingProject, setEditingProject] = useState<Project | null>(null)
+
+  const currentProject = useMemo(() => {
+    if (selectedProjectId === 'all') return null
+    return projects.find(p => p.id === selectedProjectId || p.slug === selectedProjectId) || null
+  }, [projects, selectedProjectId])
+
+  // Activities & Queue State
+  const [activities, setActivities] = useState<TaskActivity[]>([])
+  const [activityStats, setActivityStats] = useState<ActivityStats>({
+    total: 0,
+    queued: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    canceled: 0,
+  })
+  const [selectedActivity, setSelectedActivity] = useState<TaskActivity | null>(null)
+  const prevActiveActivitiesRef = useRef<Map<string, string>>(new Map())
+
   const addToast = useCallback((toast: Omit<ToastMessage, 'id'>) => {
     const id = Math.random().toString(36).substring(2, 9)
     const newToast: ToastMessage = { ...toast, id, duration: toast.duration || 3500 }
@@ -162,22 +232,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       root.classList.remove('light')
     }
 
-    root.classList.remove('density-compact', 'density-standard', 'density-comfortable')
-    root.classList.add(`density-${settings.density}`)
-
-    body.classList.remove('density-compact', 'density-standard', 'density-comfortable')
-    body.classList.add(`density-${settings.density}`)
+    body.setAttribute('data-accent', settings.accentColor || 'indigo')
+    body.setAttribute('data-density', settings.density || 'standard')
   }, [settings.theme, settings.accentColor, settings.density])
 
   const fetchSettings = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/settings`)
       if (res.ok) {
-        const data = await res.json()
+        const data: UserSettings = await res.json()
         setSettings(data)
-        if (data.defaultView) {
-          setActiveView(data.defaultView)
-        }
       }
     } catch (err) {
       console.warn('Failed to load settings from server', err)
@@ -188,7 +252,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const res = await fetch(`${API_BASE}/skills`)
       if (res.ok) {
-        const data = await res.json()
+        const data: Skill[] = await res.json()
         setSkills(data)
       }
     } catch (err) {
@@ -200,11 +264,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const res = await fetch(`${API_BASE}/cli-status`)
       if (res.ok) {
-        const data = await res.json()
+        const data: CliStatus[] = await res.json()
         setCliStatuses(data)
       }
     } catch (err) {
-      console.warn('Failed to load CLI status', err)
+      console.warn('Failed to load CLI statuses', err)
+    }
+  }, [])
+
+  const fetchProjects = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/projects`)
+      if (res.ok) {
+        const data: Project[] = await res.json()
+        setProjects(data || [])
+      }
+    } catch (err) {
+      console.warn('Failed to load projects', err)
+    }
+  }, [])
+
+  const fetchActivities = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/activities`)
+      if (res.ok) {
+        const data: TaskActivity[] = await res.json()
+        setActivities(data)
+      }
+    } catch (err) {
+      console.warn('Failed to load activities', err)
+    }
+  }, [])
+
+  const fetchActivityStats = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/activities/stats`)
+      if (res.ok) {
+        const data: ActivityStats = await res.json()
+        setActivityStats(data)
+      }
+    } catch (err) {
+      console.warn('Failed to load activity stats', err)
     }
   }, [])
 
@@ -212,6 +312,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       setIsLoading(true)
       const params = new URLSearchParams()
+      if (selectedProjectId && selectedProjectId !== 'all') {
+        params.append('projectId', selectedProjectId)
+      }
       if (searchQuery) params.append('q', searchQuery)
       if (statusFilter) params.append('status', statusFilter)
       if (priorityFilter) params.append('priority', priorityFilter)
@@ -221,39 +324,101 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: Task[] = await res.json()
       setTasks(data)
+      setSelectedTask(curr => {
+        if (!curr) return null
+        return data.find((t: Task) => t.id === curr.id) || curr
+      })
       setError(null)
     } catch (err: any) {
       setError(err.message || 'Failed to fetch tasks')
     } finally {
       setIsLoading(false)
     }
-  }, [searchQuery, statusFilter, priorityFilter, labelFilter])
+  }, [searchQuery, statusFilter, priorityFilter, labelFilter, selectedProjectId])
+
+  useEffect(() => {
+    fetchTasksRef.current = fetchTasks
+  }, [fetchTasks])
 
   useEffect(() => {
     fetchSettings()
     fetchSkills()
     fetchCliStatus()
-  }, [fetchSettings, fetchSkills, fetchCliStatus])
+    fetchProjects()
+    fetchActivities()
+    fetchActivityStats()
+  }, [fetchSettings, fetchSkills, fetchCliStatus, fetchProjects, fetchActivities, fetchActivityStats])
 
   useEffect(() => {
     fetchTasks()
   }, [fetchTasks])
 
-  // Periodic background auto-refresh every 30 seconds
+  // Active Job Count (queued or running)
+  const activeJobCount = activities.filter(
+    a => a.status === 'queued' || a.status === 'pending' || a.status === 'running'
+  ).length
+
+  // Smart background polling for queue execution & tasks
   useEffect(() => {
-    const interval = setInterval(() => {
-      fetch(`${API_BASE}/tasks`)
-        .then(res => res.json())
-        .then((data: Task[]) => {
-          if (Array.isArray(data)) {
-            setTasks(data)
+    const pollInterval = activeJobCount > 0 ? 2500 : 20000
+
+    const interval = setInterval(async () => {
+      try {
+        const [actRes, statsRes] = await Promise.all([
+          fetch(`${API_BASE}/activities`),
+          fetch(`${API_BASE}/activities/stats`),
+        ])
+
+        if (actRes.ok) {
+          const newActivities: TaskActivity[] = await actRes.json()
+          setActivities(newActivities)
+
+          // Detect finished activities
+          const prevMap = prevActiveActivitiesRef.current
+          let needTaskRefresh = false
+
+          newActivities.forEach(act => {
+            const prevStatus = prevMap.get(act.id)
+            if (prevStatus && (prevStatus === 'queued' || prevStatus === 'pending' || prevStatus === 'running')) {
+              if (act.status === 'completed') {
+                needTaskRefresh = true
+                addToast({
+                  type: 'success',
+                  title: t.toasts.skillCompleted,
+                  description: `${act.skillName} (${act.taskKey || 'Tâche'}) terminée avec succès !`,
+                })
+              } else if (act.status === 'failed') {
+                needTaskRefresh = true
+                addToast({
+                  type: 'error',
+                  title: t.toasts.error,
+                  description: `Échec de ${act.skillName} (${act.taskKey || 'Tâche'})`,
+                })
+              }
+            }
+          })
+
+          // Update tracking map
+          const nextMap = new Map<string, string>()
+          newActivities.forEach(a => nextMap.set(a.id, a.status))
+          prevActiveActivitiesRef.current = nextMap
+
+          if (needTaskRefresh) {
+            await fetchTasksRef.current()
           }
-        })
-        .catch(() => {})
-    }, 30000)
+        }
+
+        if (statsRes.ok) {
+          const newStats = await statsRes.json()
+          setActivityStats(newStats)
+        }
+      } catch (err) {
+        console.warn('Queue polling error', err)
+      }
+    }, pollInterval)
 
     return () => clearInterval(interval)
-  }, [])
+  }, [activeJobCount, t, addToast])
 
   const updateSettings = async (newSettings: Partial<UserSettings>) => {
     const merged = { ...settings, ...newSettings }
@@ -284,12 +449,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const syncAll = async () => {
     setIsSyncing(true)
-    addToast({
-      type: 'info',
-      title: 'Synchronisation globale en cours...',
-      description: `Linear (${settings.linearTeam || 'FRE'}) + GitHub (${settings.githubRepo || 'fretzee/studio'})`,
-    })
-
     try {
       const res = await fetch(`${API_BASE}/sync/all`, { method: 'POST' })
       if (!res.ok) {
@@ -297,11 +456,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         throw new Error(errData.error || 'Global sync failed')
       }
       const data = await res.json()
-      setTasks(data.tasks || [])
+      if (data.activity) {
+        setActivities(prev => [data.activity, ...prev.filter(a => a.id !== data.activity.id)])
+      }
+      fetchActivityStats()
       addToast({
-        type: 'success',
-        title: t.toasts.syncSuccess,
-        description: data.message,
+        type: 'info',
+        title: 'Synchronisation globale lancée',
+        description: 'La tâche a été ajoutée à la file d\'attente (consultable dans Activités).',
       })
     } catch (err: any) {
       addToast({
@@ -314,26 +476,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  const syncLinear = async () => {
+  const syncLinear = async (team?: string) => {
     setIsSyncing(true)
-    addToast({
-      type: 'info',
-      title: 'Synchronisation Linear CLI...',
-      description: `Équipe: ${settings.linearTeam || 'FRE'}`,
-    })
-
     try {
-      const res = await fetch(`${API_BASE}/sync/linear`, { method: 'POST' })
+      const res = await fetch(`${API_BASE}/sync/linear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: team || settings.linearTeam || 'FRE' }),
+      })
       if (!res.ok) {
         const errData = await res.json()
         throw new Error(errData.error || 'Linear sync failed')
       }
       const data = await res.json()
-      setTasks(data.tasks || [])
+      if (data.activity) {
+        setActivities(prev => [data.activity, ...prev.filter(a => a.id !== data.activity.id)])
+      }
+      fetchActivityStats()
       addToast({
-        type: 'success',
-        title: t.toasts.syncSuccess,
-        description: data.message,
+        type: 'info',
+        title: 'Synchronisation Linear lancée',
+        description: `Équipe ${team || settings.linearTeam || 'FRE'} — Suivi en direct dans Activités.`,
       })
     } catch (err: any) {
       addToast({
@@ -346,26 +509,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  const syncGithub = async () => {
+  const syncGithub = async (repo?: string) => {
     setIsSyncing(true)
-    addToast({
-      type: 'info',
-      title: 'Synchronisation GitHub CLI...',
-      description: `Repo: ${settings.githubRepo || 'fretzee/studio'}`,
-    })
-
     try {
-      const res = await fetch(`${API_BASE}/sync/github`, { method: 'POST' })
+      const res = await fetch(`${API_BASE}/sync/github`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: repo || settings.githubRepo || 'sebastienferry/fretzee-studio' }),
+      })
       if (!res.ok) {
         const errData = await res.json()
         throw new Error(errData.error || 'GitHub sync failed')
       }
       const data = await res.json()
-      setTasks(data.tasks || [])
+      if (data.activity) {
+        setActivities(prev => [data.activity, ...prev.filter(a => a.id !== data.activity.id)])
+      }
+      fetchActivityStats()
       addToast({
-        type: 'success',
-        title: t.toasts.syncSuccess,
-        description: data.message,
+        type: 'info',
+        title: 'Synchronisation GitHub lancée',
+        description: `Repo ${repo || settings.githubRepo || 'sebastienferry/fretzee-studio'} — Suivi dans Activités.`,
       })
     } catch (err: any) {
       addToast({
@@ -375,6 +539,95 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
     } finally {
       setIsSyncing(false)
+    }
+  }
+
+  const createProject = async (data: Partial<Project>): Promise<Project | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.error || 'Failed to create project')
+      }
+      const created: Project = await res.json()
+      await fetchProjects()
+      setSelectedProjectId(created.id)
+      addToast({
+        type: 'success',
+        title: 'Projet créé',
+        description: `Le projet ${created.name} a été créé avec succès.`,
+      })
+      return created
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+      return null
+    }
+  }
+
+  const updateProject = async (id: string, updates: Partial<Project>): Promise<Project | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      })
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.error || 'Failed to update project')
+      }
+      const updated: Project = await res.json()
+      await fetchProjects()
+      addToast({
+        type: 'success',
+        title: 'Projet mis à jour',
+        description: `Le projet ${updated.name} a été actualisé.`,
+      })
+      return updated
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+      return null
+    }
+  }
+
+  const deleteProject = async (id: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.error || 'Failed to delete project')
+      }
+      if (selectedProjectId === id) {
+        setSelectedProjectId('all')
+      }
+      await fetchProjects()
+      await fetchTasks()
+      addToast({
+        type: 'warning',
+        title: 'Projet supprimé',
+        description: 'Les tâches ont été réassignées au projet principal.',
+      })
+      return true
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+      return false
     }
   }
 
@@ -388,16 +641,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     dueDate?: string | null
     source?: TaskSource
     externalUrl?: string
+    projectId?: string
   }): Promise<Task | null> => {
     try {
+      const defaultProj = taskData.projectId || (selectedProjectId !== 'all' ? selectedProjectId : (projects[0]?.id || 'fretzee-studio'))
       const res = await fetch(`${API_BASE}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(taskData),
+        body: JSON.stringify({
+          ...taskData,
+          projectId: defaultProj,
+        }),
       })
       if (!res.ok) throw new Error('Creation failed')
       const created: Task = await res.json()
       setTasks(prev => [created, ...prev])
+      fetchProjects()
       addToast({
         type: 'success',
         title: t.toasts.taskCreated,
@@ -416,7 +675,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const updateTask = async (id: string, updates: Partial<Task>): Promise<Task | null> => {
     try {
-      const res = await fetch(`${API_BASE}/tasks/${id}`, {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -445,7 +704,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const convertTask = async (id: string, target: 'linear' | 'github'): Promise<Task | null> => {
     try {
-      const res = await fetch(`${API_BASE}/tasks/${id}/convert`, {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/convert`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target }),
@@ -487,7 +746,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     })
 
     try {
-      const res = await fetch(`${API_BASE}/tasks/${id}/move`, {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/move`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus, position: newPosition }),
@@ -515,12 +774,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setRunningSkillId(skillId)
     addToast({
       type: 'info',
-      title: t.toasts.skillStarted,
-      description: `Moteur: ${settings.aiProvider.toUpperCase()} (${skillId})`,
+      title: t.toasts.skillQueued,
+      description: `Moteur: ${settings.aiProvider.toUpperCase()} (${skillId}) - Poussée en file d'attente`,
     })
 
     try {
-      const res = await fetch(`${API_BASE}/tasks/${taskId}/run-skill`, {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/run-skill`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skillId, prompt }),
@@ -538,12 +797,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (selectedTask && selectedTask.id === taskId) {
         setSelectedTask(updatedTask)
       }
-
-      addToast({
-        type: 'success',
-        title: t.skills.skillSuccess,
-        description: `${updatedTask.key} ➔ ${t.status[updatedTask.status]}`,
-      })
+      setActivities(prev => [activity, ...prev.filter(a => a.id !== activity.id)])
+      await fetchActivityStats()
 
       return activity
     } catch (err: any) {
@@ -559,9 +814,88 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
+  const retryActivity = async (id: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/activities/${id}/retry`, { method: 'POST' })
+      if (!res.ok) throw new Error('Retry failed')
+      addToast({
+        type: 'info',
+        title: t.toasts.activityRetried,
+      })
+      await fetchActivities()
+      await fetchActivityStats()
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+    }
+  }
+
+  const cancelActivity = async (id: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/activities/${id}/cancel`, { method: 'POST' })
+      if (!res.ok) throw new Error('Cancel failed')
+      addToast({
+        type: 'warning',
+        title: t.toasts.activityCanceled,
+      })
+      await fetchActivities()
+      await fetchActivityStats()
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+    }
+  }
+
+  const deleteActivity = async (id: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/activities/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Delete failed')
+      setActivities(prev => prev.filter(a => a.id !== id))
+      if (selectedActivity && selectedActivity.id === id) {
+        setSelectedActivity(null)
+      }
+      addToast({
+        type: 'warning',
+        title: t.toasts.activityDeleted,
+      })
+      await fetchActivityStats()
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+    }
+  }
+
+  const clearCompletedActivities = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/activities`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Clear failed')
+      addToast({
+        type: 'info',
+        title: t.toasts.activitiesCleared,
+      })
+      await fetchActivities()
+      await fetchActivityStats()
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+    }
+  }
+
   const deleteTask = async (id: string): Promise<boolean> => {
     try {
-      const res = await fetch(`${API_BASE}/tasks/${id}`, {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}`, {
         method: 'DELETE',
       })
       if (!res.ok) throw new Error('Delete failed')
@@ -589,8 +923,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setIsLoading(true)
       const res = await fetch(`${API_BASE}/seed`, { method: 'POST' })
       if (!res.ok) throw new Error('Reseed failed')
-      const data = await res.json()
-      setTasks(data.tasks || [])
+      await fetchProjects()
+      await fetchTasksRef.current()
+      await fetchActivities()
+      await fetchActivityStats()
       addToast({
         type: 'success',
         title: t.toasts.demoReseeded,
@@ -606,10 +942,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  // Filter tasks by active source filter (all / linear / github / local)
-  const filteredTasks = sourceFilter === 'all' 
-    ? tasks 
-    : tasks.filter(t => (t.source || 'local') === sourceFilter)
+  // Filter tasks by active source filter (all / linear / github / local) and assignee
+  const filteredTasks = useMemo(() => {
+    let result = tasks
+    if (sourceFilter !== 'all') {
+      result = result.filter(t => (t.source || 'local') === sourceFilter)
+    }
+    if (assigneeFilter) {
+      result = result.filter(t => t.assignee === assigneeFilter)
+    }
+    return result
+  }, [tasks, sourceFilter, assigneeFilter])
 
   const availableLabels = Array.from(
     new Set(tasks.flatMap(t => t.labels || []).filter(Boolean))
@@ -618,6 +961,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const availableAssignees = Array.from(
     new Set(tasks.map(t => t.assignee).filter(Boolean))
   )
+
+  const fetchGitDiff = useCallback(async (taskId: string): Promise<GitDiffResult | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/git-diff`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data: GitDiffResult = await res.json()
+      return data
+    } catch (err: any) {
+      console.error('Failed to fetch git diff', err)
+      return null
+    }
+  }, [])
 
   // Global Keyboard Shortcuts
   useEffect(() => {
@@ -648,12 +1003,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
 
       if (e.key === 'Escape') {
-        if (isCommandPaletteOpen) {
+        if (diffTask) {
+          setDiffTask(null)
+        } else if (isCommandPaletteOpen) {
           setIsCommandPaletteOpen(false)
         } else if (isQuickAddOpen) {
           setIsQuickAddOpen(false)
         } else if (selectedTask) {
           setSelectedTask(null)
+        } else if (selectedActivity) {
+          setSelectedActivity(null)
         } else if (isProfileOpen) {
           setIsProfileOpen(false)
         } else if (searchQuery) {
@@ -664,11 +1023,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isCommandPaletteOpen, isQuickAddOpen, selectedTask, isProfileOpen, searchQuery])
+  }, [isCommandPaletteOpen, isQuickAddOpen, selectedTask, selectedActivity, isProfileOpen, searchQuery, diffTask])
 
   return (
     <AppContext.Provider
       value={{
+        projects,
+        selectedProjectId,
+        setSelectedProjectId,
+        currentProject,
+        createProject,
+        updateProject,
+        deleteProject,
+        fetchProjects,
+        isProjectModalOpen,
+        setIsProjectModalOpen,
+        editingProject,
+        setEditingProject,
         tasks: filteredTasks,
         skills,
         cliStatuses,
@@ -695,6 +1066,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setSidebarCollapsed,
         selectedTask,
         setSelectedTask,
+        diffTask,
+        setDiffTask,
+        fetchGitDiff,
         hideDone,
         setHideDone,
         toggleHideDone,
@@ -724,6 +1098,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         fetchCliStatus,
         reseedDemo,
         refreshTasks: fetchTasks,
+        activities,
+        activityStats,
+        selectedActivity,
+        setSelectedActivity,
+        activeJobCount,
+        fetchActivities,
+        fetchActivityStats,
+        retryActivity,
+        cancelActivity,
+        deleteActivity,
+        clearCompletedActivities,
         availableLabels,
         availableAssignees,
       }}

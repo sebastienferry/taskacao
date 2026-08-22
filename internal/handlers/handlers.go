@@ -59,6 +59,28 @@ func (h *Handler) HandleCliStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, statuses)
 }
 
+func (h *Handler) HandleGitStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	target := r.URL.Query().Get("path")
+	if target == "" {
+		target = r.URL.Query().Get("projectId")
+	}
+	if target == "" {
+		target = r.URL.Query().Get("repoPath")
+	}
+
+	status, err := h.db.GetGitStatus(target)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 func (h *Handler) HandleSyncAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -356,6 +378,12 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/diff"):
 		subAction = "git-diff"
 		id = strings.TrimSuffix(rawPath, "/diff")
+	case strings.HasSuffix(rawPath, "/checkout-branch"):
+		subAction = "checkout-branch"
+		id = strings.TrimSuffix(rawPath, "/checkout-branch")
+	case strings.HasSuffix(rawPath, "/checkout"):
+		subAction = "checkout-branch"
+		id = strings.TrimSuffix(rawPath, "/checkout")
 	default:
 		id = rawPath
 	}
@@ -467,6 +495,37 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, diffRes)
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/checkout-branch
+	if subAction == "checkout-branch" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
+		task, err := h.db.GetTaskByID(id)
+		if err != nil || task == nil {
+			writeError(w, http.StatusNotFound, "Tâche non trouvée")
+			return
+		}
+		repoPath := ""
+		if task.ProjectID != "" {
+			if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil && proj.RepoPath != "" {
+				repoPath = proj.RepoPath
+			}
+		}
+		if repoPath == "" {
+			if settings, _ := h.db.GetSettings(); settings != nil && settings.RepoPath != "" {
+				repoPath = settings.RepoPath
+			}
+		}
+		branch, err := h.db.EnsureTaskGitBranch(repoPath, task)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"message": fmt.Sprintf("Bascule effectuée avec succès sur la branche '%s'", branch),
+			"branch":  branch,
+			"repoPath": repoPath,
+		})
 		return
 	}
 
