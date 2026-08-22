@@ -1,0 +1,540 @@
+import React, { useState, useRef, useEffect } from 'react'
+import {
+  Inbox,
+  HelpCircle,
+  FileCode,
+  Flame,
+  CheckCircle2,
+  Columns,
+  ListFilter,
+  Activity,
+  Tag,
+  Settings,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  ShieldCheck,
+  User,
+  Layers,
+  RotateCcw,
+  RefreshCw,
+  Bot,
+  Folder,
+  Terminal,
+  Zap,
+  Box,
+  Code2,
+  Cpu,
+  Sparkles,
+  Workflow,
+  Plus,
+  Settings2,
+} from 'lucide-react'
+import { useApp } from '../context/AppContext'
+import type { Status } from '../types'
+
+const renderProjectIcon = (iconName: string, size = 15, className = '') => {
+  switch (iconName) {
+    case 'Terminal': return <Terminal size={size} className={className} />
+    case 'Zap': return <Zap size={size} className={className} />
+    case 'Flame': return <Flame size={size} className={className} />
+    case 'Layers': return <Layers size={size} className={className} />
+    case 'Box': return <Box size={size} className={className} />
+    case 'Code2': return <Code2 size={size} className={className} />
+    case 'Cpu': return <Cpu size={size} className={className} />
+    case 'Sparkles': return <Sparkles size={size} className={className} />
+    case 'Workflow': return <Workflow size={size} className={className} />
+    default: return <Folder size={size} className={className} />
+  }
+}
+
+export const Sidebar: React.FC = () => {
+  const {
+    tasks,
+    projects,
+    selectedProjectId,
+    setSelectedProjectId,
+    currentProject,
+    setIsProjectModalOpen,
+    setEditingProject,
+    activities,
+    activeJobCount,
+    activeView,
+    setActiveView,
+    statusFilter,
+    setStatusFilter,
+    priorityFilter,
+    setPriorityFilter,
+    labelFilter,
+    setLabelFilter,
+    assigneeFilter,
+    setAssigneeFilter,
+    sidebarCollapsed,
+    setSidebarCollapsed,
+    setIsProfileOpen,
+    isSyncing,
+    reseedDemo,
+    settings,
+    availableLabels,
+    t,
+  } = useApp()
+
+  const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false)
+  const projectDropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (projectDropdownRef.current && !projectDropdownRef.current.contains(e.target as Node)) {
+        setIsProjectDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const counts: Record<string, number> = {
+    all: tasks.length,
+    to_clarify: tasks.filter(t => t.status === 'to_clarify' || t.status === 'backlog').length,
+    to_specify: tasks.filter(t => t.status === 'to_specify' || t.status === 'specified').length,
+    to_implement: tasks.filter(t => t.status === 'to_implement' || t.status === 'in_progress').length,
+    to_test: tasks.filter(t => t.status === 'to_test' || t.status === 'to_validate').length,
+    to_close: tasks.filter(t => t.status === 'to_close' || t.status === 'done').length,
+  }
+
+  const workflowItems: { status: Status | null; label: string; stageLabel: string; stageColor: string; icon: React.ReactNode; count: number; color: string }[] = [
+    { status: null, label: t.nav.allTasks, stageLabel: '', stageColor: '', icon: <Inbox size={16} />, count: counts.all, color: 'text-slate-400' },
+    { status: 'to_clarify', label: t.status.to_clarify, stageLabel: 'New', stageColor: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30', icon: <HelpCircle size={16} />, count: counts.to_clarify, color: 'text-cyan-400' },
+    { status: 'to_specify', label: t.status.to_specify, stageLabel: 'Clarified', stageColor: 'bg-amber-500/15 text-amber-400 border-amber-500/30', icon: <FileCode size={16} />, count: counts.to_specify, color: 'text-amber-400' },
+    { status: 'to_implement', label: t.status.to_implement, stageLabel: 'Specified', stageColor: 'bg-blue-500/15 text-blue-400 border-blue-500/30', icon: <Flame size={16} />, count: counts.to_implement, color: 'text-blue-400' },
+    { status: 'to_test', label: t.status.to_test, stageLabel: 'Implemented', stageColor: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30', icon: <ShieldCheck size={16} />, count: counts.to_test, color: 'text-indigo-400' },
+    { status: 'to_close', label: t.status.to_close, stageLabel: 'Reviewed', stageColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', icon: <CheckCircle2 size={16} />, count: counts.to_close, color: 'text-emerald-400' },
+  ]
+
+  const isMyTasksActive = assigneeFilter === settings.userName
+  const isUrgentActive = priorityFilter === 'urgent' || priorityFilter === 'high'
+
+  return (
+    <aside
+      className={`relative flex flex-col border-r transition-all duration-300 ease-in-out select-none bg-[var(--bg-secondary)] border-[var(--border-color)] ${
+        sidebarCollapsed ? 'w-16' : 'w-64'
+      } h-screen z-20 shrink-0`}
+    >
+      {/* Brand Header */}
+      <div className="flex items-center justify-between h-14 px-3.5 border-b border-[var(--border-color)]">
+        {!sidebarCollapsed ? (
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-md accent-bg shrink-0">
+              <Layers size={18} />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span className="font-semibold tracking-tight text-sm truncate text-[var(--text-primary)]">
+                {t.app.title}
+              </span>
+              <span className="text-[10px] font-mono text-[var(--text-muted)] truncate flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                AI: {settings.aiProvider.toUpperCase()} | Multi-Tracker
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="mx-auto w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-md accent-bg">
+            <Layers size={18} />
+          </div>
+        )}
+
+        <button
+          onClick={() => setSidebarCollapsed(prev => !prev)}
+          className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+          title={sidebarCollapsed ? 'Déplier' : 'Replier'}
+        >
+          {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
+      </div>
+
+      {/* Project Switcher Bar */}
+      <div className="px-2.5 pt-2.5 pb-1 relative" ref={projectDropdownRef}>
+        {!sidebarCollapsed ? (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIsProjectDropdownOpen(prev => !prev)}
+              className="w-full flex items-center justify-between p-2 rounded-xl bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] border border-[var(--border-color)] transition-all text-left group shadow-xs"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
+                  currentProject
+                    ? `bg-${currentProject.color || 'indigo'}-500/20 text-${currentProject.color || 'indigo'}-400 border border-${currentProject.color || 'indigo'}-500/30`
+                    : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                }`}>
+                  {currentProject ? renderProjectIcon(currentProject.icon, 13) : <Layers size={13} />}
+                </div>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-bold text-[var(--text-primary)] truncate">
+                    {currentProject ? currentProject.name : 'Tous les projets'}
+                  </span>
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono truncate">
+                    {currentProject ? `${currentProject.linearTeam || 'FRE'} · ${currentProject.taskCount || 0} tâches` : `${projects.length} projets`}
+                  </span>
+                </div>
+              </div>
+
+              <ChevronDown size={14} className={`text-[var(--text-muted)] group-hover:text-[var(--text-primary)] transition-transform duration-200 ${isProjectDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Dropdown Menu */}
+            {isProjectDropdownOpen && (
+              <div className="absolute left-0 top-full mt-1.5 w-72 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center justify-between">
+                  <span>Espaces Projets</span>
+                  <span className="font-mono text-[9px]">{projects.length} projets</span>
+                </div>
+
+                {/* All Projects Option */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedProjectId('all')
+                    setIsProjectDropdownOpen(false)
+                  }}
+                  className={`w-full flex items-center justify-between p-2 rounded-xl text-xs transition-all ${
+                    selectedProjectId === 'all'
+                      ? 'bg-[var(--accent-light)] accent-text font-bold'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-5 h-5 rounded-md bg-[var(--accent-color)]/20 text-[var(--accent-color)] flex items-center justify-center">
+                      <Layers size={12} />
+                    </div>
+                    <span>Tous les projets</span>
+                  </div>
+                  <span className="text-[10px] font-mono opacity-75">{counts.all}</span>
+                </button>
+
+                <div className="my-1 border-t border-[var(--border-color)]"></div>
+
+                {/* Project List */}
+                <div className="max-h-48 overflow-y-auto space-y-0.5">
+                  {projects.map(p => {
+                    const isSel = selectedProjectId === p.id || selectedProjectId === p.slug
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => {
+                          setSelectedProjectId(p.id)
+                          setIsProjectDropdownOpen(false)
+                        }}
+                        className={`group/item w-full flex items-center justify-between p-2 rounded-xl text-xs cursor-pointer transition-all ${
+                          isSel
+                            ? 'bg-[var(--accent-light)] accent-text font-bold'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 bg-${p.color || 'indigo'}-500/20 text-${p.color || 'indigo'}-400`}>
+                            {renderProjectIcon(p.icon, 12)}
+                          </div>
+                          <div className="flex flex-col min-w-0">
+                            <span className="truncate">{p.name}</span>
+                            <span className="text-[9px] text-[var(--text-muted)] font-mono truncate max-w-[120px]">
+                              {p.linearTeam || 'FRE'} · {p.repoPath ? p.repoPath.split('/').pop() : ''}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-[var(--bg-primary)] text-[var(--text-muted)]">
+                            {p.taskCount || 0}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditingProject(p)
+                              setIsProjectModalOpen(true)
+                              setIsProjectDropdownOpen(false)
+                            }}
+                            className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-primary)] opacity-0 group-hover/item:opacity-100 transition-opacity"
+                            title="Configurer ce projet"
+                          >
+                            <Settings2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="my-1 border-t border-[var(--border-color)]"></div>
+
+                {/* Add New Project Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingProject(null)
+                    setIsProjectModalOpen(true)
+                    setIsProjectDropdownOpen(false)
+                  }}
+                  className="w-full flex items-center gap-2 p-2 rounded-xl text-xs font-semibold text-[var(--accent-color)] hover:bg-[var(--accent-light)] transition-colors"
+                >
+                  <Plus size={14} />
+                  <span>Nouveau projet...</span>
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setIsProjectModalOpen(true)}
+            className="w-full flex items-center justify-center p-2 rounded-xl bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] text-[var(--accent-color)] transition-colors"
+            title={currentProject ? currentProject.name : 'Changer de projet'}
+          >
+            {currentProject ? renderProjectIcon(currentProject.icon, 16) : <Layers size={16} />}
+          </button>
+        )}
+      </div>
+
+      {/* Navigation & Filters Container */}
+      <div className="flex-1 overflow-y-auto px-2.5 py-3 space-y-4">
+        {/* Quick Views */}
+        <div>
+          {!sidebarCollapsed && (
+            <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+              Vues
+            </div>
+          )}
+          <div className="space-y-0.5">
+            <button
+              onClick={() => setActiveView('board')}
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                activeView === 'board'
+                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.board}
+            >
+              <Columns size={15} className="shrink-0" />
+              {!sidebarCollapsed && <span className="truncate">{t.nav.board}</span>}
+            </button>
+            <button
+              onClick={() => setActiveView('list')}
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                activeView === 'list'
+                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.list}
+            >
+              <ListFilter size={15} className="shrink-0" />
+              {!sidebarCollapsed && <span className="truncate">{t.nav.list}</span>}
+            </button>
+            <button
+              onClick={() => setActiveView('activities')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                activeView === 'activities'
+                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.activities}
+            >
+              <div className="flex items-center gap-2.5 min-w-0 truncate">
+                <Activity size={15} className="shrink-0 text-cyan-400" />
+                {!sidebarCollapsed && <span className="truncate">{t.nav.activities}</span>}
+              </div>
+              {!sidebarCollapsed && (
+                activeJobCount > 0 ? (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-blue-500 text-white font-bold animate-pulse">
+                    {activeJobCount}
+                  </span>
+                ) : activities.length > 0 ? (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
+                    {activities.length}
+                  </span>
+                ) : null
+              )}
+            </button>
+            <button
+              onClick={() => setActiveView('sync')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                activeView === 'sync'
+                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.sync || "Synchronisation"}
+            >
+              <div className="flex items-center gap-2.5 min-w-0 truncate">
+                <RefreshCw size={15} className={`shrink-0 text-indigo-400 ${isSyncing ? 'animate-spin' : ''}`} />
+                {!sidebarCollapsed && <span className="truncate">{t.nav.sync || "Synchronisation"}</span>}
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* Workflow Stages */}
+        <div>
+          {!sidebarCollapsed && (
+            <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+              Agentic Workflow
+            </div>
+          )}
+          <div className="space-y-0.5">
+            {workflowItems.map(item => {
+              const isActive = statusFilter === item.status && !assigneeFilter && !priorityFilter && !labelFilter
+              return (
+                <button
+                  key={item.status || 'all'}
+                  onClick={() => {
+                    setStatusFilter(item.status)
+                    setAssigneeFilter(null)
+                    setPriorityFilter(null)
+                    setLabelFilter(null)
+                  }}
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    isActive
+                      ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                  }`}
+                  title={item.label}
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <span className={`${item.color} shrink-0`}>{item.icon}</span>
+                    {!sidebarCollapsed && (
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="truncate">{item.label}</span>
+                        {item.stageLabel && (
+                          <span className={`text-[9px] font-bold px-1 py-0 rounded border ${item.stageColor}`}>
+                            {item.stageLabel}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {!sidebarCollapsed && (
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                        isActive
+                          ? 'bg-[var(--accent-color)] text-white font-bold'
+                          : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
+                      }`}
+                    >
+                      {item.count}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Quick Filters */}
+        <div>
+          {!sidebarCollapsed && (
+            <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+              {t.nav.filters}
+            </div>
+          )}
+          <div className="space-y-0.5">
+            <button
+              onClick={() => setAssigneeFilter(isMyTasksActive ? null : settings.userName)}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                isMyTasksActive
+                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.myTasks}
+            >
+              <div className="flex items-center gap-2.5 truncate">
+                <User size={15} className="text-cyan-400 shrink-0" />
+                {!sidebarCollapsed && <span className="truncate">{t.nav.myTasks}</span>}
+              </div>
+            </button>
+            <button
+              onClick={() => setPriorityFilter(isUrgentActive ? null : 'urgent')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                isUrgentActive
+                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.urgentHigh}
+            >
+              <div className="flex items-center gap-2.5 truncate">
+                <Flame size={15} className="text-rose-400 shrink-0" />
+                {!sidebarCollapsed && <span className="truncate">{t.nav.urgentHigh}</span>}
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* Labels Section */}
+        {availableLabels.length > 0 && (
+          <div>
+            {!sidebarCollapsed && (
+              <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                {t.nav.labels}
+              </div>
+            )}
+            <div className="space-y-0.5">
+              {availableLabels.slice(0, 6).map(lbl => {
+                const isSelected = labelFilter === lbl
+                return (
+                  <button
+                    key={lbl}
+                    onClick={() => setLabelFilter(isSelected ? null : lbl)}
+                    className={`w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-xs transition-all ${
+                      isSelected
+                        ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                    }`}
+                    title={lbl}
+                  >
+                    <Tag size={12} className="shrink-0 text-slate-400" />
+                    {!sidebarCollapsed && <span className="truncate">#{lbl}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Footer Profile & Settings */}
+      <div className="p-2 border-t border-[var(--border-color)] space-y-1">
+        <button
+          onClick={() => setIsProfileOpen(true)}
+          className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] transition-colors group text-left"
+          title={t.nav.settings}
+        >
+          <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs accent-bg text-white shadow shrink-0">
+            {settings.userName ? settings.userName.substring(0, 2).toUpperCase() : 'SF'}
+          </div>
+          {!sidebarCollapsed && (
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-semibold truncate text-[var(--text-primary)]">
+                {settings.userName || 'Sylvain Ferry'}
+              </div>
+              <div className="text-[10px] text-[var(--text-muted)] truncate flex items-center gap-1 font-mono">
+                <Bot size={11} className="text-amber-400" />
+                {settings.aiProvider.toUpperCase()} | Linear+GH
+              </div>
+            </div>
+          )}
+          {!sidebarCollapsed && (
+            <Settings size={15} className="text-[var(--text-muted)] group-hover:text-[var(--text-primary)] transition-transform group-hover:rotate-45" />
+          )}
+        </button>
+
+        {!sidebarCollapsed && (
+          <button
+            onClick={() => reseedDemo()}
+            className="w-full flex items-center gap-2 px-2.5 py-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] rounded transition-colors"
+            title={t.nav.reseedDemo}
+          >
+            <RotateCcw size={11} />
+            <span className="truncate">{t.nav.reseedDemo}</span>
+          </button>
+        )}
+      </div>
+    </aside>
+  )
+}
