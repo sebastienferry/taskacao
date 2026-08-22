@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import {
   Inbox,
   HelpCircle,
@@ -7,26 +7,59 @@ import {
   CheckCircle2,
   Columns,
   ListFilter,
+  Activity,
   Tag,
   Settings,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   ShieldCheck,
   User,
   Layers,
   RotateCcw,
   RefreshCw,
   Bot,
-  Globe2,
-  FolderGit2,
-  Folder
+  Folder,
+  Terminal,
+  Zap,
+  Box,
+  Code2,
+  Cpu,
+  Sparkles,
+  Workflow,
+  Plus,
+  Settings2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { Status, TaskSource } from '../types'
+import type { Status } from '../types'
+import { TaskacaoLogo } from './TaskacaoLogo'
+
+const renderProjectIcon = (iconName: string, size = 15, className = '') => {
+  switch (iconName) {
+    case 'Terminal': return <Terminal size={size} className={className} />
+    case 'Zap': return <Zap size={size} className={className} />
+    case 'Flame': return <Flame size={size} className={className} />
+    case 'Layers': return <Layers size={size} className={className} />
+    case 'Box': return <Box size={size} className={className} />
+    case 'Code2': return <Code2 size={size} className={className} />
+    case 'Cpu': return <Cpu size={size} className={className} />
+    case 'Sparkles': return <Sparkles size={size} className={className} />
+    case 'Workflow': return <Workflow size={size} className={className} />
+    default: return <Folder size={size} className={className} />
+  }
+}
 
 export const Sidebar: React.FC = () => {
   const {
     tasks,
+    projects,
+    selectedProjectId,
+    setSelectedProjectId,
+    currentProject,
+    setIsProjectModalOpen,
+    setEditingProject,
+    activities,
+    activeJobCount,
     activeView,
     setActiveView,
     statusFilter,
@@ -37,20 +70,28 @@ export const Sidebar: React.FC = () => {
     setLabelFilter,
     assigneeFilter,
     setAssigneeFilter,
-    sourceFilter,
-    setSourceFilter,
     sidebarCollapsed,
     setSidebarCollapsed,
     setIsProfileOpen,
-    syncAll,
-    syncLinear,
-    syncGithub,
     isSyncing,
     reseedDemo,
     settings,
     availableLabels,
     t,
   } = useApp()
+
+  const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false)
+  const projectDropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (projectDropdownRef.current && !projectDropdownRef.current.contains(e.target as Node)) {
+        setIsProjectDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   const counts: Record<string, number> = {
     all: tasks.length,
@@ -59,9 +100,6 @@ export const Sidebar: React.FC = () => {
     to_implement: tasks.filter(t => t.status === 'to_implement' || t.status === 'in_progress').length,
     to_test: tasks.filter(t => t.status === 'to_test' || t.status === 'to_validate').length,
     to_close: tasks.filter(t => t.status === 'to_close' || t.status === 'done').length,
-    srcLinear: tasks.filter(t => t.source === 'linear').length,
-    srcGithub: tasks.filter(t => t.source === 'github').length,
-    srcLocal: tasks.filter(t => !t.source || t.source === 'local').length,
   }
 
   const workflowItems: { status: Status | null; label: string; stageLabel: string; stageColor: string; icon: React.ReactNode; count: number; color: string }[] = [
@@ -71,13 +109,6 @@ export const Sidebar: React.FC = () => {
     { status: 'to_implement', label: t.status.to_implement, stageLabel: 'Specified', stageColor: 'bg-blue-500/15 text-blue-400 border-blue-500/30', icon: <Flame size={16} />, count: counts.to_implement, color: 'text-blue-400' },
     { status: 'to_test', label: t.status.to_test, stageLabel: 'Implemented', stageColor: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30', icon: <ShieldCheck size={16} />, count: counts.to_test, color: 'text-indigo-400' },
     { status: 'to_close', label: t.status.to_close, stageLabel: 'Reviewed', stageColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', icon: <CheckCircle2 size={16} />, count: counts.to_close, color: 'text-emerald-400' },
-  ]
-
-  const sourceItems: { id: 'all' | TaskSource; label: string; icon: React.ReactNode; count: number; color: string }[] = [
-    { id: 'all', label: 'Toutes les sources', icon: <Globe2 size={15} />, count: counts.all, color: 'text-slate-400' },
-    { id: 'linear', label: `Linear (${settings.linearTeam || 'FRE'})`, icon: <span className="font-bold text-indigo-400 font-mono text-xs">◆</span>, count: counts.srcLinear, color: 'text-indigo-400' },
-    { id: 'github', label: `GitHub (${settings.githubRepo ? settings.githubRepo.split('/')[1] || 'GH' : 'GH'})`, icon: <FolderGit2 size={15} />, count: counts.srcGithub, color: 'text-purple-400' },
-    { id: 'local', label: 'Local SQLite', icon: <Folder size={15} />, count: counts.srcLocal, color: 'text-emerald-400' },
   ]
 
   const isMyTasksActive = assigneeFilter === settings.userName
@@ -90,35 +121,184 @@ export const Sidebar: React.FC = () => {
       } h-screen z-20 shrink-0`}
     >
       {/* Brand Header */}
-      <div className="flex items-center justify-between h-14 px-3.5 border-b border-[var(--border-color)]">
+      <div className="flex items-center justify-between h-14 px-3 border-b border-[var(--border-color)]">
         {!sidebarCollapsed ? (
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-md accent-bg shrink-0">
-              <Layers size={18} />
-            </div>
-            <div className="flex flex-col min-w-0">
-              <span className="font-semibold tracking-tight text-sm truncate text-[var(--text-primary)]">
+          <>
+            <div className="flex items-center gap-2.5 min-w-0 overflow-hidden">
+              <TaskacaoLogo size={32} className="shrink-0 drop-shadow-sm" />
+              <span className="font-bold tracking-tight text-base text-[var(--text-primary)] truncate">
                 {t.app.title}
               </span>
-              <span className="text-[10px] font-mono text-[var(--text-muted)] truncate flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                AI: {settings.aiProvider.toUpperCase()} | Multi-Tracker
-              </span>
             </div>
-          </div>
+
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(true)}
+              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors shrink-0"
+              title={t.nav.toggleSidebar || 'Replier'}
+            >
+              <ChevronLeft size={16} />
+            </button>
+          </>
         ) : (
-          <div className="mx-auto w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-md accent-bg">
-            <Layers size={18} />
+          <div className="w-full flex items-center justify-center">
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(false)}
+              className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-[var(--bg-tertiary)] transition-all relative group"
+              title={`${t.app.title} - ${t.nav.toggleSidebar || 'Déplier'}`}
+            >
+              <TaskacaoLogo size={32} className="shrink-0 drop-shadow-sm" />
+              <span className="absolute -bottom-0.5 -right-0.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-full p-0.5 text-[var(--text-muted)] group-hover:text-[var(--text-primary)] opacity-0 group-hover:opacity-100 transition-opacity shadow-xs">
+                <ChevronRight size={10} />
+              </span>
+            </button>
           </div>
         )}
+      </div>
 
-        <button
-          onClick={() => setSidebarCollapsed(prev => !prev)}
-          className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-          title={sidebarCollapsed ? 'Déplier' : 'Replier'}
-        >
-          {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        </button>
+      {/* Project Switcher Bar */}
+      <div className="px-2.5 pt-2.5 pb-1 relative" ref={projectDropdownRef}>
+        {!sidebarCollapsed ? (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIsProjectDropdownOpen(prev => !prev)}
+              className="w-full flex items-center justify-between p-2 rounded-xl bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] border border-[var(--border-color)] transition-all text-left group shadow-xs"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
+                  currentProject
+                    ? `bg-${currentProject.color || 'indigo'}-500/20 text-${currentProject.color || 'indigo'}-400 border border-${currentProject.color || 'indigo'}-500/30`
+                    : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                }`}>
+                  {currentProject ? renderProjectIcon(currentProject.icon, 13) : <Layers size={13} />}
+                </div>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-bold text-[var(--text-primary)] truncate">
+                    {currentProject ? currentProject.name : 'Tous les projets'}
+                  </span>
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono truncate">
+                    {currentProject ? `${currentProject.linearTeam || 'FRE'} · ${currentProject.taskCount || 0} tâches` : `${projects.length} projets`}
+                  </span>
+                </div>
+              </div>
+
+              <ChevronDown size={14} className={`text-[var(--text-muted)] group-hover:text-[var(--text-primary)] transition-transform duration-200 ${isProjectDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Dropdown Menu */}
+            {isProjectDropdownOpen && (
+              <div className="absolute left-0 top-full mt-1.5 w-72 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center justify-between">
+                  <span>Espaces Projets</span>
+                  <span className="font-mono text-[9px]">{projects.length} projets</span>
+                </div>
+
+                {/* All Projects Option */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedProjectId('all')
+                    setIsProjectDropdownOpen(false)
+                  }}
+                  className={`w-full flex items-center justify-between p-2 rounded-xl text-xs transition-all ${
+                    selectedProjectId === 'all'
+                      ? 'bg-[var(--accent-light)] accent-text font-bold'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-5 h-5 rounded-md bg-[var(--accent-color)]/20 text-[var(--accent-color)] flex items-center justify-center">
+                      <Layers size={12} />
+                    </div>
+                    <span>Tous les projets</span>
+                  </div>
+                  <span className="text-[10px] font-mono opacity-75">{counts.all}</span>
+                </button>
+
+                <div className="my-1 border-t border-[var(--border-color)]"></div>
+
+                {/* Project List */}
+                <div className="max-h-48 overflow-y-auto space-y-0.5">
+                  {projects.map(p => {
+                    const isSel = selectedProjectId === p.id || selectedProjectId === p.slug
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => {
+                          setSelectedProjectId(p.id)
+                          setIsProjectDropdownOpen(false)
+                        }}
+                        className={`group/item w-full flex items-center justify-between p-2 rounded-xl text-xs cursor-pointer transition-all ${
+                          isSel
+                            ? 'bg-[var(--accent-light)] accent-text font-bold'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 bg-${p.color || 'indigo'}-500/20 text-${p.color || 'indigo'}-400`}>
+                            {renderProjectIcon(p.icon, 12)}
+                          </div>
+                          <div className="flex flex-col min-w-0">
+                            <span className="truncate">{p.name}</span>
+                            <span className="text-[9px] text-[var(--text-muted)] font-mono truncate max-w-[120px]">
+                              {p.linearTeam || 'FRE'} · {p.repoPath ? p.repoPath.split('/').pop() : ''}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-[var(--bg-primary)] text-[var(--text-muted)]">
+                            {p.taskCount || 0}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditingProject(p)
+                              setIsProjectModalOpen(true)
+                              setIsProjectDropdownOpen(false)
+                            }}
+                            className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-primary)] opacity-0 group-hover/item:opacity-100 transition-opacity"
+                            title="Configurer ce projet"
+                          >
+                            <Settings2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="my-1 border-t border-[var(--border-color)]"></div>
+
+                {/* Add New Project Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingProject(null)
+                    setIsProjectModalOpen(true)
+                    setIsProjectDropdownOpen(false)
+                  }}
+                  className="w-full flex items-center gap-2 p-2 rounded-xl text-xs font-semibold text-[var(--accent-color)] hover:bg-[var(--accent-light)] transition-colors"
+                >
+                  <Plus size={14} />
+                  <span>Nouveau projet...</span>
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setIsProjectModalOpen(true)}
+            className="w-full flex items-center justify-center p-2 rounded-xl bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] text-[var(--accent-color)] transition-colors"
+            title={currentProject ? currentProject.name : 'Changer de projet'}
+          >
+            {currentProject ? renderProjectIcon(currentProject.icon, 16) : <Layers size={16} />}
+          </button>
+        )}
       </div>
 
       {/* Navigation & Filters Container */}
@@ -155,91 +335,47 @@ export const Sidebar: React.FC = () => {
               <ListFilter size={15} className="shrink-0" />
               {!sidebarCollapsed && <span className="truncate">{t.nav.list}</span>}
             </button>
-          </div>
-        </div>
-
-        {/* Source Filter Section (Linear / GitHub / Local) */}
-        <div>
-          {!sidebarCollapsed && (
-            <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center justify-between">
-              <span>Trackers & Sources</span>
-              <button
-                onClick={syncAll}
-                disabled={isSyncing}
-                className="text-[10px] text-[var(--accent-color)] hover:underline flex items-center gap-1"
-                title="Tout synchroniser (Linear + GitHub)"
-              >
-                <RefreshCw size={10} className={isSyncing ? 'animate-spin' : ''} />
-                <span>Sync</span>
-              </button>
-            </div>
-          )}
-          <div className="space-y-0.5">
-            {sourceItems.map(src => {
-              const isSelected = sourceFilter === src.id
-              return (
-                <button
-                  key={src.id}
-                  onClick={() => setSourceFilter(src.id)}
-                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                    isSelected
-                      ? 'bg-[var(--accent-light)] accent-text font-semibold'
-                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
-                  }`}
-                  title={src.label}
-                >
-                  <div className="flex items-center gap-2 truncate">
-                    <span className={`${src.color} shrink-0`}>{src.icon}</span>
-                    {!sidebarCollapsed && <span className="truncate">{src.label}</span>}
-                  </div>
-                  {!sidebarCollapsed && (
-                    <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                        isSelected
-                          ? 'bg-[var(--accent-color)] text-white font-bold'
-                          : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
-                      }`}
-                    >
-                      {src.count}
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Sync Controls buttons */}
-        {!sidebarCollapsed && (
-          <div className="p-2 rounded-xl bg-[var(--bg-tertiary)]/40 border border-[var(--border-color)] space-y-1.5">
             <button
-              onClick={syncAll}
-              disabled={isSyncing}
-              className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-bold text-white accent-bg shadow-xs hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
+              onClick={() => setActiveView('activities')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                activeView === 'activities'
+                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.activities}
             >
-              <RefreshCw size={12} className={isSyncing ? 'animate-spin' : ''} />
-              <span>Tout Synchroniser</span>
+              <div className="flex items-center gap-2.5 min-w-0 truncate">
+                <Activity size={15} className="shrink-0 text-cyan-400" />
+                {!sidebarCollapsed && <span className="truncate">{t.nav.activities}</span>}
+              </div>
+              {!sidebarCollapsed && (
+                activeJobCount > 0 ? (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-blue-500 text-white font-bold animate-pulse">
+                    {activeJobCount}
+                  </span>
+                ) : activities.length > 0 ? (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
+                    {activities.length}
+                  </span>
+                ) : null
+              )}
             </button>
-            <div className="grid grid-cols-2 gap-1 text-[10px]">
-              <button
-                onClick={syncLinear}
-                disabled={isSyncing}
-                className="py-1 px-1.5 rounded bg-[var(--bg-secondary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] font-semibold truncate transition-colors"
-                title="Sync Linear CLI"
-              >
-                ◆ Linear
-              </button>
-              <button
-                onClick={syncGithub}
-                disabled={isSyncing}
-                className="py-1 px-1.5 rounded bg-[var(--bg-secondary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] font-semibold truncate transition-colors"
-                title="Sync GitHub CLI"
-              >
-                🐙 GitHub
-              </button>
-            </div>
+            <button
+              onClick={() => setActiveView('sync')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                activeView === 'sync'
+                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.sync || "Synchronisation"}
+            >
+              <div className="flex items-center gap-2.5 min-w-0 truncate">
+                <RefreshCw size={15} className={`shrink-0 text-indigo-400 ${isSyncing ? 'animate-spin' : ''}`} />
+                {!sidebarCollapsed && <span className="truncate">{t.nav.sync || "Synchronisation"}</span>}
+              </div>
+            </button>
           </div>
-        )}
+        </div>
 
         {/* Workflow Stages */}
         <div>

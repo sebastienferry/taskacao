@@ -1,0 +1,15 @@
+{
+  "createdAt": "2026-08-23T00:14:08+02:00",
+  "githubRepo": "",
+  "issueTracker": "local",
+  "linearTeam": "TASK",
+  "projectId": "tasks",
+  "projectName": "Taskacao",
+  "skills": [
+    "clarify-issue",
+    "specify-issue",
+    "code-issue",
+    "create-pr",
+    "pick-issue"
+  ]
+}
