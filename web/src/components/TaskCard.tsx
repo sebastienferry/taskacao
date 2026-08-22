@@ -104,8 +104,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
       draggable
       onDragStart={handleDragStartInternal}
       onClick={() => setSelectedTask(task)}
-      className={`group relative rounded-xl border bg-[var(--bg-secondary)] border-[var(--border-color)] p-3 hover:border-[var(--accent-color)]/60 hover:shadow-lg transition-all duration-200 cursor-grab active:cursor-grabbing select-none ${
-        isDragging ? 'opacity-40 scale-95 ring-2 ring-[var(--accent-color)] ring-dashed' : 'hover:-translate-y-0.5'
+      className={`group relative rounded-xl border bg-[var(--bg-secondary)] border-[var(--border-color)] p-3 hover:border-[var(--accent-color)]/60 hover:shadow-lg transition-colors transition-shadow duration-150 cursor-grab active:cursor-grabbing select-none ${
+        isDragging ? 'opacity-40 scale-95 ring-2 ring-[var(--accent-color)] ring-dashed' : ''
       }`}
     >
       {/* Top row: Key & Clickable Tracker Link, Priority, Quick Skill Trigger */}
@@ -151,7 +151,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
             <button
               onClick={handleQuickSkillClick}
               disabled={isSkillRunning}
-              className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold text-white accent-bg shadow-xs hover:opacity-90 transition-all active:scale-95"
+              className="opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold text-white accent-bg shadow-xs hover:opacity-90 transition-opacity duration-150 active:scale-95"
               title={`Lancer skill: ${nextSkill.label}`}
             >
               {isSkillRunning && runningSkillId === nextSkill.id ? (
