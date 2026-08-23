@@ -65,8 +65,17 @@ func TestCreateTaskWithCustomTrackerSource(t *testing.T) {
 
 	h := handlers.NewHandler(database)
 
+	// Create a test project with issueTracker="linear"
+	_, _ = database.CreateProject(models.CreateProjectRequest{
+		Name:         "Test Project",
+		Slug:         "test-proj",
+		IssueTracker: "linear",
+		LinearTeam:   "TEST",
+		RepoPath:     ".",
+	})
+
 	// 1. Create a task with explicitly specified source="local"
-	taskBody := `{"title": "Test Local Task", "source": "local", "projectId": "fretzee-studio"}`
+	taskBody := `{"title": "Test Local Task", "source": "local", "projectId": "test-proj"}`
 	req, err := http.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(taskBody))
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
@@ -93,8 +102,8 @@ func TestCreateTaskWithCustomTrackerSource(t *testing.T) {
 		t.Errorf("Expected task.Title='Test Local Task', got '%s'", task.Title)
 	}
 
-	// 2. Create another task where source is omitted (should fallback to project tracker)
-	taskBodyDefault := `{"title": "Default Project Tracker Task", "projectId": "fretzee-studio"}`
+	// 2. Create another task where source is omitted (should fallback to project tracker "linear")
+	taskBodyDefault := `{"title": "Default Project Tracker Task", "projectId": "test-proj"}`
 	req2, err := http.NewRequest(http.MethodPost, "/api/tasks", strings.NewReader(taskBodyDefault))
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
@@ -114,7 +123,7 @@ func TestCreateTaskWithCustomTrackerSource(t *testing.T) {
 	}
 
 	if task2.Source != "linear" {
-		t.Errorf("Expected task2.Source='linear' (from project fretzee-studio), got '%s'", task2.Source)
+		t.Errorf("Expected task2.Source='linear' (from project test-proj), got '%s'", task2.Source)
 	}
 }
 

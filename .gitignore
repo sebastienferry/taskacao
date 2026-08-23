@@ -1,9 +1,20 @@
-# Node / Dependencies
+# Binaries & build artifacts
+bin/
+*.exe
+
+# Node / Web Dependencies
 node_modules/
 dist/
 build/
 .env
 .env.local
+
+# Databases & local state
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 # OS
 .DS_Store
@@ -12,6 +23,9 @@ Thumbs.db
 # Logs & Temp
 *.log
 tmp/
+scratch/
 
-# Taskacao parallel agent worktrees
+# Taskacao config & parallel worktrees
 .tasks/
+.taskacao/
+.fretzee/

@@ -17,7 +17,8 @@ import {
   ExternalLink,
   FolderGit2,
   Eye,
-  EyeOff
+  EyeOff,
+  MessageSquare,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Task, Status, Priority } from '../types'
@@ -26,6 +27,7 @@ export const ListView: React.FC = () => {
   const {
     tasks,
     setSelectedTask,
+    setChatTask,
     setDiffTask,
     updateTask,
     deleteTask,
@@ -208,14 +210,23 @@ export const ListView: React.FC = () => {
           </select>
         </td>
 
-        {/* Quick Skill Runner */}
+        {/* Quick Skill Runner & Agent Chat */}
         <td className="py-2.5 px-3 whitespace-nowrap" onClick={e => e.stopPropagation()}>
           <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setChatTask(task)}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold text-white bg-[var(--accent-color)] shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+              title="💬 Discuter de cette tâche avec l'agent Copilot"
+            >
+              <MessageSquare size={10} />
+              <span>Discuter</span>
+            </button>
+
             {(task.status === 'to_clarify' || task.status === 'backlog') && (
               <button
                 onClick={() => runSkill(task.id, 'implement')}
                 disabled={isSkillRunning}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold text-white bg-linear-to-r from-blue-600 to-indigo-600 shadow-xs hover:opacity-90 active:scale-95 transition-all"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold text-white bg-linear-to-r from-blue-600 to-indigo-600 shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
                 title="Passer directement au code (Implémentation)"
               >
                 <Flame size={10} className="text-amber-300" />
@@ -227,7 +238,7 @@ export const ListView: React.FC = () => {
               <button
                 onClick={() => runSkill(task.id, nextSkill.id)}
                 disabled={isSkillRunning}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold text-white accent-bg shadow-xs hover:opacity-90 active:scale-95 transition-all"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold text-white accent-bg shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
                 title={`Exécuter ${nextSkill.label}`}
               >
                 {isSkillRunning && runningSkillId === nextSkill.id ? (

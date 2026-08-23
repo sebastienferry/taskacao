@@ -38,6 +38,7 @@ export const TaskDetailModal: React.FC = () => {
   const {
     selectedTask,
     setSelectedTask,
+    setChatTask,
     setDiffTask,
     updateTask,
     deleteTask,
@@ -1110,6 +1111,19 @@ export const TaskDetailModal: React.FC = () => {
 
               {/* Right: Quick switcher to Modal, PR Link, Delete, Close */}
               <div className="flex items-center gap-1.5 shrink-0">
+                {/* Discuss with Agent Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedTask) setChatTask(selectedTask)
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-[var(--accent-color)] hover:opacity-90 transition-all shadow-xs cursor-pointer active:scale-95"
+                  title="💬 Discuter en direct avec l'agent Copilot"
+                >
+                  <MessageSquare size={12} />
+                  <span>Discuter</span>
+                </button>
+
                 {/* Switch to Modal Button */}
                 <button
                   type="button"
@@ -1223,6 +1237,19 @@ export const TaskDetailModal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Discuss with Agent Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedTask) setChatTask(selectedTask)
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-[var(--accent-color)] hover:opacity-90 transition-all shadow-xs cursor-pointer active:scale-95"
+              title="💬 Discuter en direct avec l'agent Copilot"
+            >
+              <MessageSquare size={13} />
+              <span>Discuter avec l'agent</span>
+            </button>
+
             {/* Switch to Right Panel Button */}
             <button
               type="button"

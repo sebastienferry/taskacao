@@ -1,18 +1,18 @@
-# Fretzee Tasks (React + Go + SQLite)
+# Taskacao (React + Go + SQLite)
 
-Outil moderne et agentique de gestion des tâches pour **Fretzee Studio**, construit avec **Go**, **React 19**, **Tailwind CSS v4**, et **SQLite**.
+Outil moderne et agentique de gestion des tâches pour développeurs et équipes techniques, construit avec **Go**, **React 19**, **Tailwind CSS v4**, et **SQLite**.
 
 ---
 
 ## ✨ Fonctionnalités implémentées
 
-- 🔄 **Support Multi-Trackers Hybride (Linear & GitHub CLI)** :
+- 🔄 **Support Multi-Trackers Hybride (Linear, GitHub CLI & Local)** :
   - **Chargement & Synchronisation complète** :
-    - `POST /api/sync/all` : Synchronise à la fois Linear et GitHub en un seul clic !
-    - `POST /api/sync/linear` : Synchronise les tickets d'équipe Linear (ex: `FRE`).
-    - `POST /api/sync/github` : Synchronise les issues GitHub du repository (ex: `sebastienferry/fretzee-studio`).
+    - `POST /api/sync/all` : Synchronise à la fois Linear et GitHub en un seul clic.
+    - `POST /api/sync/linear` : Synchronise les tickets d'équipe Linear.
+    - `POST /api/sync/github` : Synchronise les issues GitHub du repository configuré.
   - **Création d'Issues avec routage CLI** :
-    - Choix de la destination lors de l'ajout rapide (<kbd>N</kbd> ou `+`) : 🟣 **Linear** (`FRE`), 🐙 **GitHub** (`GH`), ou 📁 **Local SQLite**.
+    - Choix de la destination lors de l'ajout rapide (<kbd>N</kbd> ou `+`) : 🟣 **Linear**, 🐙 **GitHub**, ou 📁 **Local SQLite**.
     - Exécution transparente de `linear issue create` ou `gh issue create` en arrière-plan avec récupération automatique des identifiants et URLs.
   - **Mise à jour d'état bidirectionnelle** :
     - Déplacer une carte dans le Kanban ou la Liste met à jour automatiquement l'état sur Linear (`linear issue update --state`) et sur GitHub (`gh issue close` / `reopen`).

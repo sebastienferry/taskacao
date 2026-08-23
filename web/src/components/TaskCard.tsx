@@ -10,7 +10,8 @@ import {
   GitPullRequest,
   ExternalLink,
   FolderGit2,
-  Folder
+  Folder,
+  MessageSquare,
 } from 'lucide-react'
 import type { Task, Priority } from '../types'
 import { useApp } from '../context/AppContext'
@@ -22,7 +23,7 @@ interface TaskCardProps {
 }
 
 export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStart }) => {
-  const { setSelectedTask, setDiffTask, runSkill, isSkillRunning, runningSkillId, t } = useApp()
+  const { setSelectedTask, setChatTask, setDiffTask, runSkill, isSkillRunning, runningSkillId, t } = useApp()
 
   const getPriorityBadge = (priority: Priority) => {
     switch (priority) {
@@ -238,6 +239,20 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Discuss with Agent button */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              setChatTask(task)
+            }}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold text-white bg-[var(--accent-color)] hover:opacity-90 transition-all cursor-pointer shadow-2xs active:scale-95"
+            title="💬 Discuter de cette tâche avec l'agent Copilot"
+          >
+            <MessageSquare size={10} />
+            <span>Discuter</span>
+          </button>
+
           {isNewOrBacklog ? (
             <>
               <button

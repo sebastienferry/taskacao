@@ -37,6 +37,17 @@ export interface TaskActivity {
   duration?: string
 }
 
+export interface TaskMessage {
+  id: string
+  taskId: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  activityId?: string
+  skillId?: string
+  steps?: string[]
+  createdAt: string
+}
+
 export interface ActivityStats {
   total: number
   queued: number

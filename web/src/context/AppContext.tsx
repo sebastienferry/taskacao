@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult, GitStatusInfo, GitBranchesInfo } from '../types'
+import type { Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult, GitStatusInfo, GitBranchesInfo, TaskMessage } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 
 interface AppContextType {
@@ -51,6 +51,17 @@ interface AppContextType {
   setSidebarCollapsed: (collapsed: boolean | ((prev: boolean) => boolean)) => void
   selectedTask: Task | null
   setSelectedTask: (task: Task | null) => void
+  chatTask: Task | null
+  setChatTask: (task: Task | null) => void
+  getTaskMessages: (taskId: string) => Promise<TaskMessage[]>
+  sendTaskMessageStream: (
+    taskId: string,
+    message: string,
+    skillId?: string,
+    onChunk?: (chunk: string) => void,
+    onStep?: (step: string) => void
+  ) => Promise<TaskMessage | null>
+  clearTaskMessages: (taskId: string) => Promise<void>
   hideDone: boolean
   setHideDone: (hide: boolean | ((prev: boolean) => boolean)) => void
   toggleHideDone: () => void
@@ -161,6 +172,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [sourceFilter, setSourceFilter] = useState<'all' | TaskSource>('all')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+  const [chatTask, setChatTask] = useState<Task | null>(null)
   const [diffTask, setDiffTask] = useState<Task | null>(null)
   const [hideDone, setHideDoneState] = useState<boolean>(() => {
     try {
@@ -324,19 +336,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const projectList = data || []
         setProjects(projectList)
 
-        // Ensure a valid project is actively selected for strict segregation
+        // Ensure a valid project is actively selected, preserving 'all' or active project with tasks
         setSelectedProjectIdState(prev => {
-          if (prev && prev !== 'all' && projectList.some(p => p.id === prev || p.slug === prev)) {
+          if (prev === 'all') {
+            return 'all'
+          }
+          if (prev && projectList.some(p => p.id === prev || p.slug === prev)) {
             return prev
           }
-          const defaultProj = projectList.find(p => p.isDefault) || projectList[0]
-          if (defaultProj) {
+          try {
+            const stored = localStorage.getItem('fretzee_selected_project_id')
+            if (stored === 'all') return 'all'
+            if (stored && projectList.some(p => p.id === stored || p.slug === stored)) {
+              return stored
+            }
+          } catch {}
+
+          // Prioritize project with tasks (e.g. fretzee-studio) or 'all'
+          const projWithTasks = projectList.find(p => (p.taskCount || 0) > 0)
+          if (projWithTasks) {
             try {
-              localStorage.setItem('fretzee_selected_project_id', defaultProj.id)
+              localStorage.setItem('fretzee_selected_project_id', projWithTasks.id)
             } catch {}
-            return defaultProj.id
+            return projWithTasks.id
           }
-          return prev
+          return 'all'
         })
       }
     } catch (err) {
@@ -1143,6 +1167,118 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [addToast, fetchTasks])
 
+  const getTaskMessages = useCallback(async (taskId: string): Promise<TaskMessage[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/messages`)
+      if (!res.ok) return []
+      const data = await res.json()
+      return data || []
+    } catch {
+      return []
+    }
+  }, [])
+
+  const clearTaskMessages = useCallback(async (taskId: string): Promise<void> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/messages`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) throw new Error('Clear messages failed')
+      addToast({
+        type: 'info',
+        title: t.chat.clearedSuccess,
+      })
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+    }
+  }, [addToast, t.chat.clearedSuccess, t.toasts.error])
+
+  const sendTaskMessageStream = useCallback(async (
+    taskId: string,
+    message: string,
+    skillId?: string,
+    onChunk?: (chunk: string) => void,
+    onStep?: (step: string) => void
+  ): Promise<TaskMessage | null> => {
+    try {
+      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, skillId }),
+      })
+
+      if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.error || 'Chat request failed')
+      }
+
+      if (!response.body) {
+        throw new Error('ReadableStream not supported in response')
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+      let finalMessage: TaskMessage | null = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let currentEvent = 'message'
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed) {
+            currentEvent = 'message'
+            continue
+          }
+          if (trimmed.startsWith('event:')) {
+            currentEvent = trimmed.slice(6).trim()
+            continue
+          }
+          if (trimmed.startsWith('data:')) {
+            const dataStr = trimmed.slice(5).trim()
+            try {
+              const parsed = JSON.parse(dataStr)
+              if (currentEvent === 'chunk') {
+                onChunk?.(parsed.text || '')
+              } else if (currentEvent === 'step') {
+                onStep?.(parsed)
+              } else if (currentEvent === 'done') {
+                finalMessage = parsed as TaskMessage
+              } else if (currentEvent === 'error') {
+                throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed))
+              }
+            } catch {
+              // ignore JSON parse error for partial chunks
+            }
+          }
+        }
+      }
+
+      // Refresh task activities and stats in the background
+      fetchActivities()
+      fetchActivityStats()
+
+      return finalMessage
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+      return null
+    }
+  }, [addToast, fetchActivities, fetchActivityStats, t.toasts.error])
+
   const fetchGitBranches = useCallback(async (projectIdOrPath?: string): Promise<GitBranchesInfo | null> => {
     try {
       const target = projectIdOrPath || selectedProjectId || ''
@@ -1298,6 +1434,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setSidebarCollapsed,
         selectedTask,
         setSelectedTask,
+        chatTask,
+        setChatTask,
+        getTaskMessages,
+        sendTaskMessageStream,
+        clearTaskMessages,
         diffTask,
         setDiffTask,
         fetchGitDiff,

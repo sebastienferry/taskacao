@@ -142,6 +142,27 @@ export interface TranslationSchema {
     stepsTitle: string
     skillSuccess: string
   }
+  chat: {
+    title: string
+    subtitle: string
+    discussWithAgent: string
+    viewChat: string
+    viewTerminal: string
+    sendPlaceholder: string
+    send: string
+    cancelStream: string
+    clearHistory: string
+    clearedSuccess: string
+    agentTyping: string
+    emptyHistory: string
+    quickActionsTitle: string
+    clarifyPrompt: string
+    specifyPrompt: string
+    implementPrompt: string
+    testPrompt: string
+    prPrompt: string
+    diffPrompt: string
+  }
   taskModal: {
     createTitle: string
     editTitle: string
@@ -511,6 +532,27 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       stepsTitle: 'Étapes exécutées',
       skillSuccess: 'Skill exécutée avec succès !',
     },
+    chat: {
+      title: 'Discussion Agent Copilot',
+      subtitle: 'Échange interactif & Streaming CLI en direct',
+      discussWithAgent: 'Discuter avec l\'agent',
+      viewChat: 'Discussion',
+      viewTerminal: 'Console Terminal',
+      sendPlaceholder: 'Posez une question, demandez des modifications ou donnez une consigne... (Cmd+Entrée pour envoyer)',
+      send: 'Envoyer',
+      cancelStream: 'Arrêter',
+      clearHistory: 'Effacer l\'historique',
+      clearedSuccess: 'Historique de discussion réinitialisé',
+      agentTyping: 'L\'agent réfléchit et génère la réponse...',
+      emptyHistory: 'Aucun message pour le moment. Démarrez la discussion avec l\'agent Copilot sur cette tâche !',
+      quickActionsTitle: 'Actions rapides & Compétences',
+      clarifyPrompt: '🔍 Clarifier les ambiguïtés et contraintes',
+      specifyPrompt: '📝 Rédiger la spécification technique Speckit',
+      implementPrompt: '💻 Coder la fonctionnalité et modifier les fichiers',
+      testPrompt: '🧪 Lancer les tests et valider le build',
+      prPrompt: '🚀 Créer la Pull Request / Commiter',
+      diffPrompt: '👁️ Analyser le diff Git de la branche',
+    },
     taskModal: {
       createTitle: 'Nouvelle Tâche',
       editTitle: 'Détails & Agent Copilot',
@@ -877,6 +919,27 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       output: 'Report & Generated Artifact',
       stepsTitle: 'Executed Steps',
       skillSuccess: 'Skill executed successfully!',
+    },
+    chat: {
+      title: 'Agent Copilot Discussion',
+      subtitle: 'Interactive Chat & Live CLI Streaming',
+      discussWithAgent: 'Discuss with Agent',
+      viewChat: 'Discussion',
+      viewTerminal: 'Terminal Console',
+      sendPlaceholder: 'Ask a question, request code changes or give instructions... (Cmd+Enter to send)',
+      send: 'Send',
+      cancelStream: 'Stop',
+      clearHistory: 'Clear History',
+      clearedSuccess: 'Discussion history reset',
+      agentTyping: 'Agent is thinking and generating response...',
+      emptyHistory: 'No messages yet. Start a discussion with the Copilot agent on this task!',
+      quickActionsTitle: 'Quick Actions & Skills',
+      clarifyPrompt: '🔍 Clarify ambiguities and constraints',
+      specifyPrompt: '📝 Write Speckit technical specification',
+      implementPrompt: '💻 Code the feature and modify files',
+      testPrompt: '🧪 Run test suite and validate build',
+      prPrompt: '🚀 Create Pull Request / Commit changes',
+      diffPrompt: '👁️ Inspect Git diff of this branch',
     },
     taskModal: {
       createTitle: 'New Task',

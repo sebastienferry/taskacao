@@ -83,15 +83,15 @@ func (d *DB) initSchema() error {
 			density TEXT NOT NULL DEFAULT 'standard',
 			default_view TEXT NOT NULL DEFAULT 'board',
 			detail_mode TEXT NOT NULL DEFAULT 'panel',
-			user_name TEXT NOT NULL DEFAULT 'Sébastien Ferry',
-			user_email TEXT NOT NULL DEFAULT 'sebastien.ferry@gmail.com',
+			user_name TEXT NOT NULL DEFAULT 'Developer',
+			user_email TEXT NOT NULL DEFAULT 'dev@example.com',
 			user_avatar TEXT NOT NULL DEFAULT '',
 			ai_provider TEXT NOT NULL DEFAULT 'agy',
 			ai_command_template TEXT NOT NULL DEFAULT 'agy -p "{prompt}"',
-			repo_path TEXT NOT NULL DEFAULT '/Users/sferry/Sources/fretzee-studio',
-			issue_tracker TEXT NOT NULL DEFAULT 'linear',
-			linear_team TEXT NOT NULL DEFAULT 'FRE',
-			github_repo TEXT NOT NULL DEFAULT 'sebastienferry/fretzee-studio',
+			repo_path TEXT NOT NULL DEFAULT '.',
+			issue_tracker TEXT NOT NULL DEFAULT 'local',
+			linear_team TEXT NOT NULL DEFAULT '',
+			github_repo TEXT NOT NULL DEFAULT '',
 			prompt_clarify TEXT NOT NULL DEFAULT '',
 			prompt_specify TEXT NOT NULL DEFAULT '',
 			prompt_implement TEXT NOT NULL DEFAULT '',
@@ -109,7 +109,7 @@ func (d *DB) initSchema() error {
 			repo_path TEXT NOT NULL DEFAULT '',
 			linear_team TEXT NOT NULL DEFAULT '',
 			github_repo TEXT NOT NULL DEFAULT '',
-			issue_tracker TEXT NOT NULL DEFAULT 'linear',
+			issue_tracker TEXT NOT NULL DEFAULT 'local',
 			is_default INTEGER NOT NULL DEFAULT 0,
 			stage_mapping TEXT NOT NULL DEFAULT '{}',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -117,7 +117,7 @@ func (d *DB) initSchema() error {
 		);`,
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id TEXT PRIMARY KEY,
-			project_id TEXT NOT NULL DEFAULT 'fretzee-studio',
+			project_id TEXT NOT NULL DEFAULT 'default',
 			key TEXT NOT NULL UNIQUE,
 			title TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
@@ -152,11 +152,23 @@ func (d *DB) initSchema() error {
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 		);`,
+		`CREATE TABLE IF NOT EXISTS task_messages (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			activity_id TEXT NOT NULL DEFAULT '',
+			skill_id TEXT NOT NULL DEFAULT '',
+			steps TEXT NOT NULL DEFAULT '[]',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_position ON tasks(status, position);`,
 		`CREATE INDEX IF NOT EXISTS idx_activities_task ON task_activities(task_id, created_at DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_activities_status ON task_activities(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_activities_created ON task_activities(created_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages(task_id, created_at ASC);`,
 	}
 
 	for _, query := range queries {
@@ -170,7 +182,7 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN git_remote_url TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN tracker_url TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN skill_overrides TEXT NOT NULL DEFAULT '{}';")
-	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT 'fretzee-studio';")
+	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default';")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN branch_name TEXT;")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN pr_url TEXT;")
@@ -186,37 +198,44 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN detail_mode TEXT NOT NULL DEFAULT 'panel';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN ai_provider TEXT NOT NULL DEFAULT 'agy';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN ai_command_template TEXT NOT NULL DEFAULT 'agy -p \"{prompt}\"';")
-	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN repo_path TEXT NOT NULL DEFAULT '/Users/sferry/Sources/fretzee-studio';")
-	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN issue_tracker TEXT NOT NULL DEFAULT 'linear';")
-	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN linear_team TEXT NOT NULL DEFAULT 'FRE';")
-	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN github_repo TEXT NOT NULL DEFAULT 'sebastienferry/fretzee-studio';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN repo_path TEXT NOT NULL DEFAULT '.';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN issue_tracker TEXT NOT NULL DEFAULT 'local';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN linear_team TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN github_repo TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec(`CREATE TABLE IF NOT EXISTS task_messages (
+		id TEXT PRIMARY KEY,
+		task_id TEXT NOT NULL,
+		role TEXT NOT NULL,
+		content TEXT NOT NULL,
+		activity_id TEXT NOT NULL DEFAULT '',
+		skill_id TEXT NOT NULL DEFAULT '',
+		steps TEXT NOT NULL DEFAULT '[]',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+	);`)
+	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages(task_id, created_at ASC);")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_clarify TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_specify TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_implement TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_create_pr TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_pick TEXT NOT NULL DEFAULT '';")
 
-	// Migrate legacy stage names to 5-stage workflow:
-	// A clarifier (to_clarify) -> A spécifier (to_specify) -> A implémenter (to_implement) -> A tester (to_test) -> A fermer (to_close)
+	// Migrate legacy stage names to 5-stage workflow
 	_, _ = d.conn.Exec("UPDATE tasks SET status = 'to_clarify' WHERE status = 'backlog';")
 	_, _ = d.conn.Exec("UPDATE tasks SET status = 'to_specify' WHERE status = 'specified';")
 	_, _ = d.conn.Exec("UPDATE tasks SET status = 'to_implement' WHERE status = 'in_progress';")
 	_, _ = d.conn.Exec("UPDATE tasks SET status = 'to_test' WHERE status = 'to_validate';")
 	_, _ = d.conn.Exec("UPDATE tasks SET status = 'to_close' WHERE status = 'done';")
 
-	// Seed default projects if none exist
+	// Seed default workspace only if projects table is completely empty
 	var projectsCount int
 	_ = d.conn.QueryRow("SELECT COUNT(*) FROM projects").Scan(&projectsCount)
 	if projectsCount == 0 {
 		_, _ = d.conn.Exec(`
 			INSERT INTO projects (id, name, slug, description, icon, color, repo_path, linear_team, github_repo, issue_tracker, is_default)
-			VALUES 
-			('fretzee-studio', 'Fretzee Studio', 'fretzee-studio', 'Application principale Fretzee Studio (React / Go)', 'Folder', 'indigo', '/Users/sferry/Sources/fretzee-studio', 'FRE', 'sebastienferry/fretzee-studio', 'linear', 1),
-			('tasks', 'Taskacao', 'tasks', 'Gestionnaire de tâches et agents IA autonomes', 'Zap', 'emerald', '/Users/sferry/Sources/tasks', 'TASK', 'sebastienferry/tasks', 'local', 0);
+			VALUES ('default', 'Workspace', 'default', 'Espace de travail principal', 'Folder', 'emerald', '.', '', '', 'local', 1);
 		`)
 	}
-	_, _ = d.conn.Exec("UPDATE projects SET name = 'Taskacao' WHERE id = 'tasks' OR slug = 'tasks';")
-	_, _ = d.conn.Exec("UPDATE tasks SET project_id = 'fretzee-studio' WHERE project_id IS NULL OR project_id = '';")
 
 	return nil
 }
@@ -230,21 +249,11 @@ func (d *DB) seedIfEmpty() error {
 	if settingsCount == 0 {
 		_, err = d.conn.Exec(`
 			INSERT INTO settings (id, theme, accent_color, language, density, default_view, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo)
-			VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Sébastien Ferry', 'sebastien.ferry@gmail.com', '', 'agy', 'agy -p "{prompt}"', '/Users/sferry/Sources/tasks', 'local', 'TASK', '')
+			VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Developer', 'dev@example.com', '', 'agy', 'agy -p "{prompt}"', '.', 'local', '', '')
 		`)
 		if err != nil {
 			return err
 		}
-	}
-
-	var count int
-	err = d.conn.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&count)
-	if err != nil {
-		return err
-	}
-
-	if count == 0 {
-		return d.SeedDemoData()
 	}
 
 	return nil
@@ -257,7 +266,7 @@ func (d *DB) SeedDemoData() error {
 	// Ensure default settings
 	_, err := d.conn.Exec(`
 		INSERT INTO settings (id, theme, accent_color, language, density, default_view, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo)
-		VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Sébastien Ferry', 'sebastien.ferry@gmail.com', '', 'agy', 'agy -p "{prompt}"', '/Users/sferry/Sources/tasks', 'local', 'TASK', '')
+		VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Developer', 'dev@example.com', '', 'agy', 'agy -p "{prompt}"', '.', 'local', '', '')
 		ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP;
 	`)
 	if err != nil {
@@ -272,28 +281,47 @@ func (d *DB) SeedDemoData() error {
 		return err
 	}
 
-	// Live sync from Linear
+	// 1. Seed the 6 local tasks for project 'tasks' (Taskacao)
+	now := time.Now()
+	localTasks := []struct {
+		ID, Key, Title, Desc, Status, Priority, Branch, Labels string
+		Pos                                                    int
+	}{
+		{"task-1", "TASK-1", "Create a github repo for Taskacao and configure repository metadata", "Initialisation et configuration du dépôt GitHub public pour Taskacao avec métadonnées et intégration continue.", "finished", "high", "TASK-1-create-a-github-repo-for-taska", `["github", "devops", "repo"]`, 1},
+		{"task-2", "TASK-2", "Clarifier le titre de la side bar", "Améliorer la clarté de la barre latérale pour la gestion multi-projets et le statut des compétences.", "finished", "medium", "TASK-2-clarifier-le-titre-de-la-side-", `["ui", "sidebar", "ux"]`, 2},
+		{"task-3", "TASK-3", "Task board flickering", "Résoudre le clignotement / scintillement intempestif des colonnes lors du rafraîchissement des activités et du drag & drop.", "finished", "high", "TASK-3-task-board-flickering", `["bug", "ui", "kanban"]`, 3},
+		{"task-4", "TASK-4", "Add current branch in Ux", "Afficher la branche Git courante dans la barre d'état et le badge de tâche pour faciliter le repérage de travail.", "finished", "medium", "TASK-4-add-current-branch-in-ux", `["git", "ux", "statusbar"]`, 4},
+		{"task-5", "TASK-5", "Ne pas pouvoir changer le tracker lors de la creation d'une tache", "Verrouiller le tracker cible (Linear, GitHub, Local) lors de la création pour respecter la configuration du projet actif.", "finished", "medium", "TASK-2-ne-pas-pouvoir-changer-le-trac", `["tracker", "quick-add", "ui"]`, 5},
+		{"task-6", "TASK-6", "Wrong filter switching to/from activities", "Corriger les filtres de statut et de projet lors du passage entre la vue Activités et le tableau Kanban.", "finished", "high", "TASK-4-wrong-filter-switching-to/from", `["filters", "navigation", "bug"]`, 6},
+	}
+
+	for _, lt := range localTasks {
+		_, _ = d.conn.Exec(`
+			INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, position, branch_name, source, created_at, updated_at)
+			VALUES (?, 'tasks', ?, ?, ?, ?, ?, ?, 'Developer', ?, ?, 'local', ?, ?)
+		`, lt.ID, lt.Key, lt.Title, lt.Desc, lt.Status, lt.Priority, lt.Labels, lt.Pos, lt.Branch, now.Format(time.RFC3339), now)
+	}
+
+	// 2. Live sync from Linear for fretzee-studio
 	linTasks, err := d.runner.SyncFromLinear("FRE")
 	if err == nil && len(linTasks) > 0 {
-		now := time.Now()
 		for _, t := range linTasks {
 			labelsJSON, _ := json.Marshal(t.Labels)
 			_, _ = d.conn.Exec(`
-				INSERT INTO tasks (id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, source, external_url, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, source, external_url, created_at, updated_at)
+				VALUES (?, 'fretzee-studio', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`, t.ID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, t.AssigneeAvatar, t.Position, t.DueDate, t.BranchName, t.PrURL, t.Source, t.ExternalURL, t.CreatedAt, now)
 		}
 	}
 
-	// Live sync from GitHub
+	// 3. Live sync from GitHub for fretzee-studio
 	ghTasks, err := d.runner.SyncFromGithub("sebastienferry/fretzee-studio", "/Users/sferry/Sources/fretzee-studio")
 	if err == nil && len(ghTasks) > 0 {
-		now := time.Now()
 		for _, t := range ghTasks {
 			labelsJSON, _ := json.Marshal(t.Labels)
 			_, _ = d.conn.Exec(`
-				INSERT INTO tasks (id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, source, external_url, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, source, external_url, created_at, updated_at)
+				VALUES (?, 'fretzee-studio', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`, t.ID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, t.AssigneeAvatar, t.Position, t.DueDate, t.BranchName, t.PrURL, t.Source, t.ExternalURL, t.CreatedAt, now)
 		}
 	}
@@ -1600,6 +1628,12 @@ func (d *DB) addTaskActivityDirect(act models.TaskActivity) error {
 	return err
 }
 
+func (d *DB) AddTaskActivity(act models.TaskActivity) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.addTaskActivityDirect(act)
+}
+
 func (d *DB) getTaskActivitiesUnsafe(taskID string) ([]models.TaskActivity, error) {
 	rows, err := d.conn.Query(`
 		SELECT id, task_id, skill_id, skill_name, action, status, summary, output, steps, prompt, started_at, completed_at, error, created_at
@@ -1661,6 +1695,75 @@ func (d *DB) GetTaskActivities(taskID string) ([]models.TaskActivity, error) {
 	return d.getTaskActivitiesUnsafe(taskID)
 }
 
+func (d *DB) getTaskMessagesUnsafe(taskID string) ([]models.TaskMessage, error) {
+	rows, err := d.conn.Query(`
+		SELECT id, task_id, role, content, activity_id, skill_id, steps, created_at
+		FROM task_messages
+		WHERE task_id = ?
+		ORDER BY created_at ASC
+	`, taskID)
+	if err != nil {
+		return []models.TaskMessage{}, err
+	}
+	defer rows.Close()
+
+	var list []models.TaskMessage
+	for rows.Next() {
+		var m models.TaskMessage
+		var actID, skillID, stepsJSON sql.NullString
+		if err := rows.Scan(&m.ID, &m.TaskID, &m.Role, &m.Content, &actID, &skillID, &stepsJSON, &m.CreatedAt); err != nil {
+			continue
+		}
+		if actID.Valid {
+			m.ActivityID = actID.String
+		}
+		if skillID.Valid {
+			m.SkillID = skillID.String
+		}
+		if stepsJSON.Valid && stepsJSON.String != "" {
+			_ = json.Unmarshal([]byte(stepsJSON.String), &m.Steps)
+		}
+		list = append(list, m)
+	}
+	if list == nil {
+		list = []models.TaskMessage{}
+	}
+	return list, nil
+}
+
+func (d *DB) GetTaskMessages(taskID string) ([]models.TaskMessage, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.getTaskMessagesUnsafe(taskID)
+}
+
+func (d *DB) SaveTaskMessage(msg models.TaskMessage) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if msg.ID == "" {
+		msg.ID = uuid.New().String()
+	}
+	if msg.CreatedAt.IsZero() {
+		msg.CreatedAt = time.Now()
+	}
+	stepsJSON, _ := json.Marshal(msg.Steps)
+
+	_, err := d.conn.Exec(`
+		INSERT INTO task_messages (id, task_id, role, content, activity_id, skill_id, steps, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, msg.ID, msg.TaskID, msg.Role, msg.Content, msg.ActivityID, msg.SkillID, string(stepsJSON), msg.CreatedAt)
+	return err
+}
+
+func (d *DB) ClearTaskMessages(taskID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.conn.Exec("DELETE FROM task_messages WHERE task_id = ?", taskID)
+	return err
+}
+
 func (d *DB) GetSettings() (*models.Settings, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -1707,15 +1810,15 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 				Density:            "standard",
 				DefaultView:        "board",
 				DetailMode:         "panel",
-				UserName:           "Sébastien Ferry",
-				UserEmail:          "sebastien.ferry@gmail.com",
+				UserName:           "Developer",
+				UserEmail:          "dev@example.com",
 				UserAvatar:         "",
 				AIProvider:         "agy",
 				AICommandTemplate:  "agy -p \"{prompt}\"",
-				RepoPath:           "/Users/sferry/Sources/fretzee-studio",
-				IssueTracker:       "linear",
-				LinearTeam:         "FRE",
-				GithubRepo:         "sebastienferry/fretzee-studio",
+				RepoPath:           ".",
+				IssueTracker:       "local",
+				LinearTeam:         "",
+				GithubRepo:         "",
 				PromptClarify:      "",
 				PromptSpecify:      "",
 				PromptImplement:    "",
@@ -1745,22 +1848,22 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	if repoP.Valid {
 		s.RepoPath = repoP.String
 	} else {
-		s.RepoPath = "/Users/sferry/Sources/fretzee-studio"
+		s.RepoPath = "."
 	}
 	if issTrk.Valid {
 		s.IssueTracker = issTrk.String
 	} else {
-		s.IssueTracker = "linear"
+		s.IssueTracker = "local"
 	}
 	if linTm.Valid {
 		s.LinearTeam = linTm.String
 	} else {
-		s.LinearTeam = "FRE"
+		s.LinearTeam = ""
 	}
 	if ghRepo.Valid {
 		s.GithubRepo = ghRepo.String
 	} else {
-		s.GithubRepo = "sebastienferry/fretzee-studio"
+		s.GithubRepo = ""
 	}
 	if pClar.Valid {
 		s.PromptClarify = pClar.String
@@ -1814,14 +1917,14 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 	if s.Density == "" { s.Density = "standard" }
 	if s.DefaultView == "" { s.DefaultView = "board" }
 	if s.DetailMode == "" { s.DetailMode = "panel" }
-	if s.UserName == "" { s.UserName = "Sébastien Ferry" }
-	if s.UserEmail == "" { s.UserEmail = "sebastien.ferry@gmail.com" }
+	if s.UserName == "" { s.UserName = "Developer" }
+	if s.UserEmail == "" { s.UserEmail = "dev@example.com" }
 	if s.AIProvider == "" { s.AIProvider = "agy" }
 	if s.AICommandTemplate == "" { s.AICommandTemplate = "agy -p \"{prompt}\"" }
-	if s.RepoPath == "" { s.RepoPath = "/Users/sferry/Sources/fretzee-studio" }
-	if s.IssueTracker == "" { s.IssueTracker = "linear" }
-	if s.LinearTeam == "" { s.LinearTeam = "FRE" }
-	if s.GithubRepo == "" { s.GithubRepo = "sebastienferry/fretzee-studio" }
+	if s.RepoPath == "" { s.RepoPath = "." }
+	if s.IssueTracker == "" { s.IssueTracker = "local" }
+	if s.LinearTeam == "" { s.LinearTeam = "" }
+	if s.GithubRepo == "" { s.GithubRepo = "" }
 
 	now := time.Now()
 	_, err := d.conn.Exec(`
@@ -3757,10 +3860,10 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string) (*models.ProjectSkills
 		}
 	}
 
-	// Create .fretzee/config.json in project root
-	fretzeeDir := filepath.Join(repoPath, ".fretzee")
-	_ = os.MkdirAll(fretzeeDir, 0755)
-	configFile := filepath.Join(fretzeeDir, "config.json")
+	// Create .taskacao/config.json in project root
+	taskacaoDir := filepath.Join(repoPath, ".taskacao")
+	_ = os.MkdirAll(taskacaoDir, 0755)
+	configFile := filepath.Join(taskacaoDir, "config.json")
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		cfgData := map[string]interface{}{
 			"projectId":    projectID,

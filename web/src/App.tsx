@@ -8,6 +8,7 @@ import { ActivitiesView } from './components/ActivitiesView'
 import { SyncView } from './components/SyncView'
 import { QuickAddModal } from './components/QuickAddModal'
 import { TaskDetailModal } from './components/TaskDetailModal'
+import { TaskChatDrawer } from './components/TaskChatDrawer'
 import { CommandPalette } from './components/CommandPalette'
 import { ProfileModal } from './components/ProfileModal'
 import { ProjectModal } from './components/ProjectModal'
@@ -61,6 +62,7 @@ const MainContent: React.FC = () => {
       {/* Global Modals & Overlays */}
       <QuickAddModal />
       <TaskDetailModal />
+      <TaskChatDrawer />
       <ProjectModal />
       <GitDiffModal />
       <BranchSwitcherModal />

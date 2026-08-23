@@ -17,6 +17,7 @@ import {
   Flame,
   ShieldCheck,
   Layers,
+  MessageSquare,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 
@@ -33,6 +34,7 @@ export const CommandPalette: React.FC = () => {
     setIsQuickAddOpen,
     setIsProfileOpen,
     setSelectedTask,
+    setChatTask,
     settings,
     updateSettings,
     reseedDemo,
@@ -416,7 +418,22 @@ export const CommandPalette: React.FC = () => {
                             </span>
                             <span className="truncate font-medium">{task.title}</span>
                           </div>
-                          <ArrowRight size={14} className="opacity-60 shrink-0 ml-2" />
+                          <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setIsCommandPaletteOpen(false)
+                                setChatTask(task)
+                              }}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/20 hover:bg-white/30 text-white flex items-center gap-1 transition-colors"
+                              title="💬 Discuter avec l'agent"
+                            >
+                              <MessageSquare size={10} />
+                              <span>Discuter</span>
+                            </button>
+                            <ArrowRight size={14} className="opacity-60" />
+                          </div>
                         </div>
                       )
                     })}

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,34 @@ func NewRunner() *Runner {
 	return &Runner{}
 }
 
+func getDynamicCustomPath() string {
+	homeDir, _ := os.UserHomeDir()
+	var parts []string
+	if homeDir != "" {
+		parts = append(parts, filepath.Join(homeDir, ".local", "bin"))
+	}
+	parts = append(parts, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+	return strings.Join(parts, ":")
+}
+
+func findCliTool(tool string) (string, error) {
+	if p, err := exec.LookPath(tool); err == nil {
+		return p, nil
+	}
+	homeDir, _ := os.UserHomeDir()
+	var candidates []string
+	if homeDir != "" {
+		candidates = append(candidates, filepath.Join(homeDir, ".local", "bin", tool))
+	}
+	candidates = append(candidates, "/opt/homebrew/bin/"+tool, "/usr/local/bin/"+tool, "/usr/bin/"+tool)
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
+		}
+	}
+	return tool, fmt.Errorf("tool %s not found", tool)
+}
+
 // Helper to execute command with timeout and full environment
 func (r *Runner) runCommand(ctx context.Context, dir string, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -31,9 +60,9 @@ func (r *Runner) runCommand(ctx context.Context, dir string, name string, args .
 		cmd.Dir = dir
 	}
 
-	// Inherit and extend PATH to include ~/.local/bin and Homebrew paths
+	// Inherit and extend PATH dynamically to include ~/.local/bin and Homebrew paths
 	env := os.Environ()
-	customPath := "/Users/sferry/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+	customPath := getDynamicCustomPath()
 	foundPath := false
 	for i, e := range env {
 		if strings.HasPrefix(e, "PATH=") {
@@ -77,22 +106,7 @@ func (r *Runner) CheckCliTools(repoPath string) []models.CliStatus {
 	defer cancel()
 
 	for _, tool := range tools {
-		path, err := exec.LookPath(tool)
-		if err != nil {
-			fallbackPaths := []string{
-				"/Users/sferry/.local/bin/" + tool,
-				"/opt/homebrew/bin/" + tool,
-				"/usr/local/bin/" + tool,
-				"/usr/bin/" + tool,
-			}
-			for _, fb := range fallbackPaths {
-				if _, statErr := os.Stat(fb); statErr == nil {
-					path = fb
-					err = nil
-					break
-				}
-			}
-		}
+		path, err := findCliTool(tool)
 
 		status := models.CliStatus{
 			Tool:      tool,
@@ -990,26 +1004,17 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 
 	switch provider {
 	case "agy":
-		agyPath, err := exec.LookPath("agy")
-		if err != nil {
-			agyPath = "/Users/sferry/.local/bin/agy"
-		}
+		agyPath, _ := findCliTool("agy")
 		steps = append(steps, fmt.Sprintf("Exécution de : agy -p \"...\" dans %s", filepath.Base(repoDir)))
 		output, execErr = r.runCommand(ctx, repoDir, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
 
 	case "vibe":
-		vibePath, err := exec.LookPath("vibe")
-		if err != nil {
-			vibePath = "/Users/sferry/.local/bin/vibe"
-		}
+		vibePath, _ := findCliTool("vibe")
 		steps = append(steps, fmt.Sprintf("Exécution de : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
 		output, execErr = r.runCommand(ctx, repoDir, vibePath, "-p", finalPrompt, "--auto-approve")
 
 	case "claude":
-		claudePath, err := exec.LookPath("claude")
-		if err != nil {
-			claudePath = "claude"
-		}
+		claudePath, _ := findCliTool("claude")
 		steps = append(steps, fmt.Sprintf("Exécution de : claude -p \"...\" dans %s", filepath.Base(repoDir)))
 		output, execErr = r.runCommand(ctx, repoDir, claudePath, "-p", finalPrompt)
 
@@ -1030,6 +1035,223 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 
 	steps = append(steps, "✅ Réponse générée par le modèle IA avec succès")
 	return output, steps, nil
+}
+
+// RunAIChatStream executes the configured AI CLI with live streaming of output chunks and steps
+func (r *Runner) RunAIChatStream(
+	ctx context.Context,
+	settings *models.Settings,
+	task *models.Task,
+	skillID string,
+	userPrompt string,
+	history []models.TaskMessage,
+	onChunk func(chunk string),
+	onStep func(step string),
+) (string, []string, error) {
+	repoDir := ""
+	if settings != nil && settings.RepoPath != "" {
+		repoDir = strings.TrimSpace(settings.RepoPath)
+	}
+	if repoDir == "" {
+		cwd, _ := os.Getwd()
+		repoDir = cwd
+	}
+	repoDir = filepath.Clean(repoDir)
+	if abs, err := filepath.Abs(repoDir); err == nil {
+		repoDir = abs
+	}
+
+	var steps []string
+	addStep := func(step string) {
+		steps = append(steps, step)
+		if onStep != nil {
+			onStep(step)
+		}
+	}
+
+	if stat, err := os.Stat(repoDir); err != nil || !stat.IsDir() {
+		cwd, _ := os.Getwd()
+		addStep(fmt.Sprintf("⚠️ Répertoire projet '%s' introuvable, repli sur : %s", repoDir, cwd))
+		repoDir = cwd
+	} else {
+		addStep(fmt.Sprintf("📁 Dossier de travail actif (CWD) : %s", repoDir))
+	}
+
+	branchName := ""
+	if task.BranchName != nil && *task.BranchName != "" {
+		branchName = *task.BranchName
+	} else {
+		cleanTitle := strings.ToLower(task.Title)
+		cleanTitle = strings.ReplaceAll(cleanTitle, " ", "-")
+		cleanTitle = strings.ReplaceAll(cleanTitle, "'", "-")
+		if len(cleanTitle) > 30 {
+			cleanTitle = cleanTitle[:30]
+		}
+		branchName = fmt.Sprintf("%s-%s", task.Key, cleanTitle)
+	}
+
+	var promptBuilder strings.Builder
+	promptBuilder.WriteString(fmt.Sprintf("Tu es l'agent Copilot autonome pour Taskacao. Tu es en discussion directe avec le développeur concernant la tâche suivante :\n"))
+	promptBuilder.WriteString(fmt.Sprintf("- Clé : %s\n- Titre : %s\n- Description : %s\n- Branche Git : %s\n- Dossier du projet (CWD) : %s\n\n", task.Key, task.Title, task.Description, branchName, repoDir))
+
+	if skillID != "" {
+		switch skillID {
+		case "clarify":
+			promptBuilder.WriteString("Objectif de l'action : Analyse les ambiguïtés techniques et pose des questions précises de cadrage.\n\n")
+		case "specify":
+			promptBuilder.WriteString("Objectif de l'action : Rédige ou affine la spécification technique (Speckit) et les critères d'acceptation.\n\n")
+		case "implement":
+			promptBuilder.WriteString("Objectif de l'action : Implémente et écris directement les modifications de code dans le projet, puis teste le build.\n\n")
+		case "create_pr":
+			promptBuilder.WriteString("Objectif de l'action : Vérifie l'état Git, commite les changements et prépare/crée la PR.\n\n")
+		}
+	}
+
+	// Include recent conversation history (up to last 10 messages)
+	if len(history) > 0 {
+		promptBuilder.WriteString("--- Historique récent des échanges ---\n")
+		startIdx := 0
+		if len(history) > 10 {
+			startIdx = len(history) - 10
+		}
+		for _, msg := range history[startIdx:] {
+			roleLabel := "Développeur"
+			if msg.Role == "assistant" {
+				roleLabel = "Agent Copilot"
+			} else if msg.Role == "system" {
+				roleLabel = "Système"
+			}
+			promptBuilder.WriteString(fmt.Sprintf("%s : %s\n\n", roleLabel, msg.Content))
+		}
+		promptBuilder.WriteString("--- Fin de l'historique ---\n\n")
+	}
+
+	promptBuilder.WriteString(fmt.Sprintf("Dernier message / consigne du développeur :\n%s\n\n", userPrompt))
+	promptBuilder.WriteString("Consignes de réponse :\n1. Réponds de manière concise, structurée (en Markdown) et actionnable.\n2. Si une action de code ou de commande est demandée, réalise-la directement dans le CWD et résume ce qui a été fait.\n")
+
+	finalPrompt := promptBuilder.String()
+
+	provider := strings.ToLower(settings.AIProvider)
+	if provider == "" {
+		provider = "agy"
+	}
+	addStep(fmt.Sprintf("🤖 Moteur IA : %s", strings.ToUpper(provider)))
+
+	var cmd *exec.Cmd
+	switch provider {
+	case "agy":
+		agyPath, _ := findCliTool("agy")
+		addStep(fmt.Sprintf("Exécution en direct : agy -p \"...\" dans %s", filepath.Base(repoDir)))
+		cmd = exec.CommandContext(ctx, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
+	case "vibe":
+		vibePath, _ := findCliTool("vibe")
+		addStep(fmt.Sprintf("Exécution en direct : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
+		cmd = exec.CommandContext(ctx, vibePath, "-p", finalPrompt, "--auto-approve")
+	case "claude":
+		claudePath, _ := findCliTool("claude")
+		addStep(fmt.Sprintf("Exécution en direct : claude -p \"...\" dans %s", filepath.Base(repoDir)))
+		cmd = exec.CommandContext(ctx, claudePath, "-p", finalPrompt)
+	default:
+		cmdStr := settings.AICommandTemplate
+		if cmdStr == "" {
+			cmdStr = "agy -p \"{prompt}\""
+		}
+		cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", finalPrompt)
+		addStep(fmt.Sprintf("Exécution de la commande personnalisée dans %s", filepath.Base(repoDir)))
+		cmd = exec.CommandContext(ctx, "sh", "-c", cmdToRun)
+	}
+
+	cmd.Dir = repoDir
+
+	// Inherit and extend PATH
+	env := os.Environ()
+	customPath := getDynamicCustomPath()
+	foundPath := false
+	for i, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			env[i] = "PATH=" + customPath + ":" + strings.TrimPrefix(e, "PATH=")
+			foundPath = true
+			break
+		}
+	}
+	if !foundPath {
+		env = append(env, "PATH="+customPath)
+	}
+	cmd.Env = env
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", steps, fmt.Errorf("failed to open stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return "", steps, fmt.Errorf("failed to open stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		addStep(fmt.Sprintf("⚠️ Échec du démarrage : %v", err))
+		return "", steps, fmt.Errorf("failed to start command: %w", err)
+	}
+
+	var totalOutput bytes.Buffer
+	var outMu sync.Mutex
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Stream Stdout
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 512)
+		for {
+			n, readErr := stdoutPipe.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				outMu.Lock()
+				totalOutput.Write(buf[:n])
+				outMu.Unlock()
+				if onChunk != nil {
+					onChunk(chunk)
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+	}()
+
+	// Stream Stderr
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 512)
+		for {
+			n, readErr := stderrPipe.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				outMu.Lock()
+				totalOutput.Write(buf[:n])
+				outMu.Unlock()
+				if onChunk != nil {
+					onChunk(chunk)
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+	}()
+
+	wg.Wait()
+	cmdErr := cmd.Wait()
+
+	result := totalOutput.String()
+	if cmdErr != nil {
+		addStep(fmt.Sprintf("⚠️ Fin avec avertissement/code retour : %v", cmdErr))
+	} else {
+		addStep("✅ Réponse générée et transmise en direct avec succès")
+	}
+
+	return result, steps, nil
 }
 
 // GetGitDiff computes git diff for a task branch or working directory

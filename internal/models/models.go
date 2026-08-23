@@ -257,10 +257,10 @@ type Settings struct {
 	UserAvatar         string    `json:"userAvatar"`
 	AIProvider         string    `json:"aiProvider"`        // "agy", "vibe", "claude", "custom"
 	AICommandTemplate  string    `json:"aiCommandTemplate"` // e.g. 'agy -p "{prompt}"'
-	RepoPath           string    `json:"repoPath"`          // e.g. '/Users/sferry/Sources/fretzee-studio'
+	RepoPath           string    `json:"repoPath"`          // e.g. '/path/to/project'
 	IssueTracker       string    `json:"issueTracker"`      // "linear", "github", "local"
-	LinearTeam         string    `json:"linearTeam"`        // "FRE"
-	GithubRepo         string    `json:"githubRepo"`        // "fretzee/studio"
+	LinearTeam         string    `json:"linearTeam"`        // e.g. "ENG"
+	GithubRepo         string    `json:"githubRepo"`        // e.g. "owner/repo"
 	PromptClarify      string    `json:"promptClarify"`
 	PromptSpecify      string    `json:"promptSpecify"`
 	PromptImplement    string    `json:"promptImplement"`
@@ -338,5 +338,21 @@ type CliStatus struct {
 
 type ConvertTaskRequest struct {
 	Target string `json:"target"` // "linear" or "github"
+}
+
+type TaskMessage struct {
+	ID         string    `json:"id"`
+	TaskID     string    `json:"taskId"`
+	Role       string    `json:"role"` // "user", "assistant", "system"
+	Content    string    `json:"content"`
+	ActivityID string    `json:"activityId,omitempty"`
+	SkillID    string    `json:"skillId,omitempty"`
+	Steps      []string  `json:"steps,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type TaskChatRequest struct {
+	Message string `json:"message"`
+	SkillID string `json:"skillId,omitempty"`
 }
 
