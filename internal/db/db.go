@@ -1180,8 +1180,10 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 		}
 	}
 
-	// The project automatically dictates the issue tracker / source
-	req.Source = tracker
+	// Issue tracker / source defaults to project tracker, but respects requested source if specified
+	if req.Source == "" {
+		req.Source = tracker
+	}
 
 	// Action Create -> Status: to_clarify, Label: New
 	if req.Status == "" {
