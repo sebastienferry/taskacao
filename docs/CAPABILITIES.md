@@ -11,9 +11,7 @@ Taskacao supports multiple concurrent software repositories and projects from a 
 - **Isolated Project Configurations**:
   - `repo_path`: Local filesystem path to the project repository.
   - `git_remote_url`: Remote Git repository URL.
-  - `issue_tracker`: Tracker provider (`linear`, `github`, or `local`).
-  - `linear_team`: Linear team identifier (e.g. `TASK`, `FRE`).
-  - `github_repo`: Target GitHub repository (e.g. `owner/repo`).
+  - `issue_tracker`: Tracker provider (`linear`, `github`, `jira`, or `local`).
   - `stage_mapping`: Custom mapping between Taskacao workflow stages and external tracker states.
   - `skill_overrides`: Project-specific prompt template overrides.
 
@@ -25,13 +23,12 @@ Taskacao supports multiple concurrent software repositories and projects from a 
 
 ## 2. Issue Tracker Abstraction Layer
 
-Taskacao provides a unified domain model over three issue sources:
+Taskacao provides a unified domain model over four issue sources
 
-| Tracker Type | Protocol / Mechanism | Capabilities |
-| :--- | :--- | :--- |
-| **Linear** | GraphQL API & Webhooks | Real-time bi-directional sync, team-scoped issue fetching, comments publishing, state transitions. |
-| **GitHub Issues** | GitHub REST API (`gh` CLI / Token) | Issue import, label mapping, branch linking, PR creation. |
-| **Local (SQLite)** | Native SQLite Storage | Full offline support, custom issue keys (`<TEAM>-<ID>`), local branching. |
+- Local (SQLite) : Native SQLite Storage for full offline support.
+- Linear : through linear CLI (https://github.com/schpet/linear-cli)
+- Jira : through `acli`
+- Github : through `gh`
 
 ---
 
@@ -76,7 +73,7 @@ For hands-on pair programming and manual debugging:
 - Features Xterm.js emulation with full ANSI colors, cursor control, and keyboard navigation.
 - Injects task context variables (`$TASKACAO_TASK_KEY`, `$TASKACAO_TASK_WORKTREE`).
 - Action toolbar provides one-click triggers:
-  - **`⚡ Lancer agy`**: Starts interactive conversation with Antigravity agent.
+  - **`⚡ Run agent`**: Starts interactive conversation with the chosen agent.
   - **`/clarify`**, **`/specify`**, **`/code`**, **`/create-pr`**: Executes prompt skills natively in shell.
   - **`Ctrl+C`**: Sends interrupt signal to running processes.
   - **`Reset`**: Gracefully terminates and respawns a fresh shell.

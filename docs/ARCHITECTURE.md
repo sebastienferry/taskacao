@@ -11,7 +11,7 @@ Taskacao is designed as a lightweight, single-binary capable full-stack applicat
 2. **Frontend React SPA (`web/`)**: Modern TypeScript Single Page Application featuring Kanban drag-and-drop, interactive list views, Git diff inspection, chat drawer, and embedded Xterm.js terminal emulator.
 3. **Embedded SQLite Database (`tasks.db`)**: Zero-configuration, ACID-compliant local database storing projects, tasks, activities, comments, and settings.
 4. **Git Worktree Isolation Engine**: Dedicates a clean, branch-isolated physical filesystem directory (`.tasks/worktrees/<taskKey>`) per task, ensuring concurrent task development without dirtying the main working tree.
-5. **Agent CLI Orchestration Engine**: Integrates natively with AI coding agents (Antigravity `agy`, Claude Code, Gemini CLI, Mistral Vibe) via subprocess execution and interactive PTY sessions.
+5. **Agent CLI Orchestration Engine**: Integrates natively with AI coding agents via subprocess execution and interactive PTY sessions.
 
 ```mermaid
 graph TD
@@ -78,7 +78,7 @@ Taskacao does **not** hardcode user home directories or fixed binary paths. `int
 When a task requires execution (via AI skill or Interactive Terminal), `EnsureTaskWorktree` is called:
 1. Validates that the project `repo_path` is a valid Git repository.
 2. Ensures that `.tasks/` is appended to `.gitignore` so temporary worktrees are never committed.
-3. Computes the target Git branch name (e.g. `TASK-1-create-github-repo`).
+3. Computes the target Git branch name (e.g. `TASK-1-implement-some-feature`).
 4. Checks if `.tasks/worktrees/<taskKey>` already exists:
    - If valid, checks out the target branch.
    - If corrupted or mismatched, removes and prunes the worktree.
@@ -87,10 +87,9 @@ When a task requires execution (via AI skill or Interactive Terminal), `EnsureTa
 ### 3.2 Automatic Symlink & Skill Injection
 
 To make the worktree fully functional immediately without re-downloading dependencies or losing project configurations, the engine automatically symlinks:
-- `node_modules/` and `web/node_modules/` (instant builds and test execution).
-- `.env` and `.env.local` (developer secrets and configurations).
-- `.gemini/`, `.agents/`, `.agy/`, `.taskacao/` (agent configurations, skills, and memory).
-- Automatically writes default skill files (`clarify-issue`, `specify-issue`, `code-issue`, `create-pr`, `pick-issue`) into `.gemini/skills/`, `.agy/skills/`, and `.agents/skills/` within the worktree.
+- `.env*` (execution environement).
+- `.agents/` (agent configurations, skills, and memory).
+- Automatically writes default skill files (`clarify-issue`, `specify-issue`, `code-issue`, `create-pr`, `pick-issue`) `.agents/skills/` within the worktree.
 
 ---
 
