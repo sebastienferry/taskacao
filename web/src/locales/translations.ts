@@ -176,6 +176,7 @@ export interface TranslationSchema {
     hint: string
     status: string
     priority: string
+    tracker: string
   }
   commandPalette: {
     searchPlaceholder: string
@@ -539,6 +540,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       hint: 'Appuyez sur Entrée pour créer immédiatement',
       status: 'Statut initial',
       priority: 'Priorité',
+      tracker: 'Destination / Tracker',
     },
     commandPalette: {
       searchPlaceholder: 'Tapez une commande, skill ou tâche...',
@@ -900,6 +902,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       hint: 'Press Enter to create immediately',
       status: 'Initial status',
       priority: 'Priority',
+      tracker: 'Destination / Tracker',
     },
     commandPalette: {
       searchPlaceholder: 'Type a command, skill or task...',
