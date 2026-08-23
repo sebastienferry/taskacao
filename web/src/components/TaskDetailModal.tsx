@@ -203,7 +203,7 @@ export const TaskDetailModal: React.FC = () => {
     if (!clarificationInput.trim() || !selectedTask) return
     setIsPostingComment(true)
     try {
-      const commentBody = `### 💬 [Fretzee Tasks] Réponses aux questions de cadrage (Inputs)\n\n${clarificationInput.trim()}`
+      const commentBody = `### 💬 [Taskacao] Réponses aux questions de cadrage (Inputs)\n\n${clarificationInput.trim()}`
       const res = await fetch(`/api/tasks/${encodeURIComponent(selectedTask.id)}/comment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -243,7 +243,7 @@ export const TaskDetailModal: React.FC = () => {
           await fetch(`/api/tasks/${encodeURIComponent(selectedTask.id)}/comment`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ body: `### 💬 [Fretzee Tasks] Réponses aux questions de cadrage\n\n${userAnswers}` }),
+            body: JSON.stringify({ body: `### 💬 [Taskacao] Réponses aux questions de cadrage\n\n${userAnswers}` }),
           })
         } catch (e) {
           console.error('Failed to post comment', e)
@@ -267,16 +267,24 @@ export const TaskDetailModal: React.FC = () => {
     }
   }
 
-  const handleAddLabel = () => {
+  const handleAddLabel = async () => {
     const clean = newLabelInput.replace(/^#/, '').trim()
     if (clean && !labels.includes(clean)) {
-      setLabels([...labels, clean])
+      const nextLabels = [...labels, clean]
+      setLabels(nextLabels)
       setNewLabelInput('')
+      if (selectedTask) {
+        await updateTask(selectedTask.id, { labels: nextLabels })
+      }
     }
   }
 
-  const handleRemoveLabel = (tagToRemove: string) => {
-    setLabels(labels.filter(l => l !== tagToRemove))
+  const handleRemoveLabel = async (tagToRemove: string) => {
+    const nextLabels = labels.filter(l => l !== tagToRemove)
+    setLabels(nextLabels)
+    if (selectedTask) {
+      await updateTask(selectedTask.id, { labels: nextLabels })
+    }
   }
 
   const handleToggleDetailMode = async () => {
@@ -577,11 +585,12 @@ export const TaskDetailModal: React.FC = () => {
             onChange={e => handleStatusChange(e.target.value as Status)}
             className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
           >
-            <option value="to_clarify">{t.status.to_clarify} (New)</option>
-            <option value="to_specify">{t.status.to_specify} (Clarified)</option>
-            <option value="to_implement">{t.status.to_implement} (Specified)</option>
-            <option value="to_test">{t.status.to_test} (Implemented)</option>
-            <option value="to_close">{t.status.to_close} (Reviewed)</option>
+            <option value="to_clarify">{t.status.to_clarify} (#new)</option>
+            <option value="to_specify">{t.status.to_specify} (#clarified)</option>
+            <option value="to_implement">{t.status.to_implement} (#specified)</option>
+            <option value="to_test">{t.status.to_test} (#implemented)</option>
+            <option value="to_close">{t.status.to_close} (#reviewed)</option>
+            <option value="finished">{t.status.finished} (#finished)</option>
           </select>
         </div>
 

@@ -99,16 +99,21 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     await runSkill(task.id, nextSkill.id)
   }
 
+  const isNewOrBacklog =
+    task.status === 'to_clarify' ||
+    task.status === 'backlog' ||
+    (task.labels && (task.labels.includes('new') || task.labels.includes('untouched')))
+
   return (
     <div
       draggable
       onDragStart={handleDragStartInternal}
       onClick={() => setSelectedTask(task)}
-      className={`group relative rounded-xl border bg-[var(--bg-secondary)] border-[var(--border-color)] p-3 hover:border-[var(--accent-color)]/60 hover:shadow-lg transition-colors transition-shadow duration-150 cursor-grab active:cursor-grabbing select-none ${
+      className={`group relative rounded-2xl border bg-[var(--bg-secondary)] border-[var(--border-color)] p-3.5 hover:border-[var(--accent-color)]/60 hover:shadow-lg transition-all duration-150 cursor-grab active:cursor-grabbing select-none ${
         isDragging ? 'opacity-40 scale-95 ring-2 ring-[var(--accent-color)] ring-dashed' : ''
       }`}
     >
-      {/* Top row: Key & Clickable Tracker Link, Priority, Quick Skill Trigger */}
+      {/* Top row: Key & Clickable Tracker Link (Left), Priority Badge (Right) */}
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5 min-w-0">
           {/* Direct Clickable Tracker Badge / Link */}
@@ -118,7 +123,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
               target="_blank"
               rel="noreferrer"
               onClick={e => e.stopPropagation()}
-              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all shadow-2xs hover:scale-105 ${
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-bold transition-all shadow-2xs hover:scale-105 shrink-0 ${
                 task.source === 'linear'
                   ? 'bg-indigo-500/15 text-indigo-400 hover:bg-indigo-500/25 border border-indigo-500/30'
                   : task.source === 'github'
@@ -128,58 +133,26 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
               title={task.source === 'linear' ? `Ouvrir ${task.key} sur Linear` : `Ouvrir ${task.key} sur GitHub`}
             >
               {task.source === 'linear' && <span className="text-indigo-400">◆</span>}
-              {task.source === 'github' && <FolderGit2 size={11} className="text-purple-400" />}
-              <span>{task.key}</span>
+              {task.source === 'github' && <FolderGit2 size={12} className="text-purple-400" />}
+              <span className="truncate max-w-[120px]">{task.key}</span>
               <ExternalLink size={9} className="opacity-70 group-hover:opacity-100" />
             </a>
           ) : (
-            <span className="font-mono text-[11px] font-bold text-[var(--text-muted)] group-hover:text-[var(--accent-color)] transition-colors inline-flex items-center gap-1">
+            <span className="font-mono text-[11px] font-bold text-[var(--text-muted)] group-hover:text-[var(--accent-color)] transition-colors inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[var(--bg-primary)] border border-[var(--border-color)] shrink-0">
               <Folder size={11} className="text-emerald-400" />
-              {task.key}
+              <span>{task.key}</span>
             </span>
           )}
 
           {task.branchName && (
-            <span title={`Branche: ${task.branchName}`} className="text-indigo-400 hidden sm:inline">
+            <span title={`Branche: ${task.branchName}`} className="text-indigo-400 hidden sm:inline shrink-0">
               <GitBranch size={11} />
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
-          {(task.status === 'to_clarify' || task.status === 'backlog') && (
-            <button
-              onClick={async (e) => {
-                e.stopPropagation()
-                if (isSkillRunning) return
-                await runSkill(task.id, 'implement')
-              }}
-              disabled={isSkillRunning}
-              className="opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold text-white bg-linear-to-r from-blue-600 to-indigo-600 shadow-xs hover:opacity-90 transition-opacity duration-150 active:scale-95"
-              title="Passer directement au code (Implémentation)"
-            >
-              <Flame size={10} className="text-amber-300" />
-              <span>Code</span>
-            </button>
-          )}
-
-          {nextSkill && (
-            <button
-              onClick={handleQuickSkillClick}
-              disabled={isSkillRunning}
-              className="opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold text-white accent-bg shadow-xs hover:opacity-90 transition-opacity duration-150 active:scale-95"
-              title={`Lancer skill: ${nextSkill.label}`}
-            >
-              {isSkillRunning && runningSkillId === nextSkill.id ? (
-                <Loader2 size={10} className="animate-spin" />
-              ) : (
-                <>
-                  <Sparkles size={10} className="text-amber-300" />
-                  <span>{nextSkill.label}</span>
-                </>
-              )}
-            </button>
-          )}
+        {/* Priority Badge */}
+        <div className="flex items-center gap-1 shrink-0">
           {getPriorityBadge(task.priority)}
         </div>
       </div>
@@ -255,8 +228,69 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
         </div>
       )}
 
+      {/* Quick AI Skill Actions Bar (Visible only on card hover or when running) */}
+      <div
+        className={`pt-2 pb-0.5 flex items-center justify-between gap-1.5 transition-all duration-150 min-h-[30px] ${
+          isSkillRunning
+            ? 'opacity-100'
+            : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+        }`}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {isNewOrBacklog ? (
+            <>
+              <button
+                type="button"
+                onClick={handleQuickSkillClick}
+                disabled={isSkillRunning}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-[var(--accent-light)] accent-text border border-[var(--accent-color)]/30 hover:opacity-90 transition-all cursor-pointer shadow-2xs active:scale-95 disabled:opacity-50"
+                title="Lancer le cadrage initial (Clarify)"
+              >
+                {isSkillRunning && runningSkillId === 'clarify' ? (
+                  <Loader2 size={10} className="animate-spin" />
+                ) : (
+                  <Sparkles size={10} className="text-amber-400" />
+                )}
+                <span>Clarifier</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  if (isSkillRunning) return
+                  await runSkill(task.id, 'implement')
+                }}
+                disabled={isSkillRunning}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold text-white bg-linear-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 transition-all cursor-pointer shadow-2xs active:scale-95 disabled:opacity-50"
+                title="Passer directement au code sans étape préalable"
+              >
+                <Flame size={10} className="text-amber-300" />
+                <span>Coder</span>
+              </button>
+            </>
+          ) : nextSkill ? (
+            <button
+              type="button"
+              onClick={handleQuickSkillClick}
+              disabled={isSkillRunning}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold text-white accent-bg shadow-xs hover:opacity-90 transition-all cursor-pointer active:scale-95 disabled:opacity-50"
+              title={`Lancer skill: ${nextSkill.label}`}
+            >
+              {isSkillRunning && runningSkillId === nextSkill.id ? (
+                <Loader2 size={10} className="animate-spin" />
+              ) : (
+                <Sparkles size={10} className="text-amber-300" />
+              )}
+              <span>{nextSkill.label}</span>
+            </button>
+          ) : null}
+        </div>
+      </div>
+
       {/* Footer: Due date & Assignee */}
-      <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] pt-1.5 border-t border-[var(--border-color)]/60">
+      <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] pt-2 border-t border-[var(--border-color)]/60">
         <div className="flex items-center gap-1.5">
           {task.dueDate ? (
             <span className="flex items-center gap-1 text-[10px] text-amber-400/90 font-medium">
@@ -264,7 +298,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
               {formatDueDate(task.dueDate)}
             </span>
           ) : (
-            <span className="text-[10px] text-[var(--text-muted)] opacity-60">
+            <span className="text-[10px] text-[var(--text-muted)] opacity-60 font-mono">
               {new Date(task.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
             </span>
           )}

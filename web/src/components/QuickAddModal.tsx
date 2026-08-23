@@ -170,7 +170,7 @@ export const QuickAddModal: React.FC = () => {
                     {activeProject.issueTracker === 'linear' ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
                         <span>◆</span>
-                        <span>Linear ({activeProject.linearTeam || 'FRE'})</span>
+                        <span>Linear{activeProject.linearTeam ? ` (${activeProject.linearTeam})` : ''}</span>
                       </span>
                     ) : activeProject.issueTracker === 'github' ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
@@ -180,7 +180,7 @@ export const QuickAddModal: React.FC = () => {
                     ) : (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                         <Folder size={11} />
-                        <span>Local SQLite ({activeProject.linearTeam || activeProject.slug?.toUpperCase() || 'TASK'})</span>
+                        <span>Local SQLite ({activeProject.linearTeam || activeProject.slug?.toUpperCase() || 'LOCAL'})</span>
                       </span>
                     )}
                   </div>
@@ -200,11 +200,12 @@ export const QuickAddModal: React.FC = () => {
                 onChange={e => setStatus(e.target.value as Status)}
                 className="w-full px-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
               >
-                <option value="to_clarify">{t.status.to_clarify} (New)</option>
-                <option value="to_specify">{t.status.to_specify} (Clarified)</option>
-                <option value="to_implement">{t.status.to_implement} (Specified)</option>
-                <option value="to_test">{t.status.to_test} (Implemented)</option>
-                <option value="to_close">{t.status.to_close} (Reviewed)</option>
+                <option value="to_clarify">{t.status.to_clarify} (#new)</option>
+                <option value="to_specify">{t.status.to_specify} (#clarified)</option>
+                <option value="to_implement">{t.status.to_implement} (#specified)</option>
+                <option value="to_test">{t.status.to_test} (#implemented)</option>
+                <option value="to_close">{t.status.to_close} (#reviewed)</option>
+                <option value="finished">{t.status.finished} (#finished)</option>
               </select>
             </div>
 

@@ -28,6 +28,7 @@ import type { ActivityStatus } from '../types'
 
 export const ActivitiesView: React.FC = () => {
   const {
+    currentProject,
     activities,
     activityStats,
     selectedActivity,
@@ -198,8 +199,13 @@ export const ActivitiesView: React.FC = () => {
               <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-md accent-bg shrink-0">
                 <Activity size={18} />
               </div>
-              <h1 className="text-lg sm:text-xl font-bold tracking-tight text-[var(--text-primary)]">
-                {t.activities.title}
+              <h1 className="text-lg sm:text-xl font-bold tracking-tight text-[var(--text-primary)] flex items-center gap-2">
+                <span>{t.activities.title}</span>
+                {currentProject && (
+                  <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-[var(--accent-light)] accent-text border border-[var(--accent-color)]/30">
+                    {currentProject.name}
+                  </span>
+                )}
               </h1>
               {activityStats.running > 0 && (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/40 animate-pulse font-mono">

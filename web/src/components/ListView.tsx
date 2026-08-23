@@ -69,18 +69,19 @@ export const ListView: React.FC = () => {
     return sortAsc ? result : -result
   })
 
-  const doneTasksCount = tasks.filter(t => t.status === 'to_close' || t.status === 'done').length
+  const doneTasksCount = tasks.filter(t => t.status === 'finished' || t.status === 'done').length
 
   const visibleTasks = hideDone
-    ? sortedTasks.filter(t => t.status !== 'to_close' && t.status !== 'done')
+    ? sortedTasks.filter(t => t.status !== 'finished' && t.status !== 'done')
     : sortedTasks
 
   const statusList: { id: Status; label: string; stageLabel: string; stageColor: string; icon: React.ReactNode; color: string }[] = [
-    { id: 'to_clarify', label: t.status.to_clarify, stageLabel: 'New', stageColor: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30', icon: <HelpCircle size={14} />, color: 'text-cyan-400' },
-    { id: 'to_specify', label: t.status.to_specify, stageLabel: 'Clarified', stageColor: 'bg-amber-500/15 text-amber-400 border-amber-500/30', icon: <FileCode size={14} />, color: 'text-amber-400' },
-    { id: 'to_implement', label: t.status.to_implement, stageLabel: 'Specified', stageColor: 'bg-blue-500/15 text-blue-400 border-blue-500/30', icon: <Flame size={14} />, color: 'text-blue-400' },
-    { id: 'to_test', label: t.status.to_test, stageLabel: 'Implemented', stageColor: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30', icon: <ShieldCheck size={14} />, color: 'text-indigo-400' },
-    { id: 'to_close', label: t.status.to_close, stageLabel: 'Reviewed', stageColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', icon: <CheckCircle2 size={14} />, color: 'text-emerald-400' },
+    { id: 'to_clarify', label: t.status.to_clarify, stageLabel: '#new', stageColor: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30', icon: <Sparkles size={14} />, color: 'text-cyan-400' },
+    { id: 'to_specify', label: t.status.to_specify, stageLabel: '#clarified', stageColor: 'bg-amber-500/15 text-amber-400 border-amber-500/30', icon: <HelpCircle size={14} />, color: 'text-amber-400' },
+    { id: 'to_implement', label: t.status.to_implement, stageLabel: '#specified', stageColor: 'bg-blue-500/15 text-blue-400 border-blue-500/30', icon: <FileCode size={14} />, color: 'text-blue-400' },
+    { id: 'to_test', label: t.status.to_test, stageLabel: '#implemented', stageColor: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30', icon: <Flame size={14} />, color: 'text-indigo-400' },
+    { id: 'to_close', label: t.status.to_close, stageLabel: '#reviewed', stageColor: 'bg-purple-500/15 text-purple-400 border-purple-500/30', icon: <ShieldCheck size={14} />, color: 'text-purple-400' },
+    { id: 'finished', label: t.status.finished, stageLabel: '#finished', stageColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', icon: <CheckCircle2 size={14} />, color: 'text-emerald-400' },
   ]
 
   const getPriorityBadge = (priority: Priority) => {
@@ -404,14 +405,14 @@ export const ListView: React.FC = () => {
         ) : groupByStatus ? (
           <div className="space-y-6">
             {statusList.map(st => {
-              if ((st.id === 'to_close' || st.id === 'done') && hideDone) return null
+              if ((st.id === 'finished' || st.id === 'done') && hideDone) return null
               const groupTasks = sortedTasks.filter(t => 
                 t.status === st.id ||
                 (st.id === 'to_clarify' && t.status === 'backlog') ||
                 (st.id === 'to_specify' && t.status === 'specified') ||
                 (st.id === 'to_implement' && t.status === 'in_progress') ||
                 (st.id === 'to_test' && t.status === 'to_validate') ||
-                (st.id === 'to_close' && t.status === 'done')
+                (st.id === 'finished' && t.status === 'done')
               )
               if (groupTasks.length === 0) return null
 
@@ -432,10 +433,10 @@ export const ListView: React.FC = () => {
                       </span>
                     </div>
 
-                    {(st.id === 'to_close' || st.id === 'done') && (
+                    {(st.id === 'finished' || st.id === 'done') && (
                       <button
                         onClick={toggleHideDone}
-                        className="text-[11px] text-[var(--text-muted)] hover:text-emerald-400 flex items-center gap-1"
+                        className="text-[11px] text-[var(--text-muted)] hover:text-emerald-400 flex items-center gap-1 cursor-pointer"
                         title={t.header.hideDone}
                       >
                         <EyeOff size={13} />

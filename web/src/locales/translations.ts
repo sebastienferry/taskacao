@@ -108,6 +108,7 @@ export interface TranslationSchema {
     to_implement: string
     to_test: string
     to_close: string
+    finished: string
     backlog: string
     specified: string
     in_progress: string
@@ -241,6 +242,10 @@ export interface TranslationSchema {
       cyan: string
       blue: string
       orange: string
+      'neon-cyan': string
+      'neon-purple': string
+      'neon-green': string
+      'neon-amber': string
     }
     ai: {
       title: string
@@ -470,12 +475,13 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       to_specify: 'À spécifier',
       to_implement: 'À implémenter',
       to_test: 'À tester',
-      to_close: 'À fermer',
+      to_close: 'En revue / PR',
+      finished: 'Terminé',
       backlog: 'À clarifier',
       specified: 'À spécifier',
       in_progress: 'À implémenter',
       to_validate: 'À tester',
-      done: 'À fermer',
+      done: 'Terminé',
     },
     priority: {
       urgent: 'Urgent',
@@ -535,7 +541,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
     },
     quickAdd: {
       title: 'Ajout rapide',
-      placeholder: 'Titre de la tâche (ex: FRE-110 Créer endpoint GraphQL...)',
+      placeholder: 'Titre de la tâche (ex: Créer endpoint GraphQL, Corriger auth...)',
       hint: 'Appuyez sur Entrée pour créer immédiatement',
       status: 'Statut initial',
       priority: 'Priorité',
@@ -597,13 +603,17 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       },
       accents: {
         indigo: 'Indigo Royal',
-        violet: 'Violet Electrique',
+        violet: 'Violet Électrique',
         emerald: 'Émeraude Vif',
         amber: 'Ambre Chaud',
         rose: 'Rose Bonbon',
-        cyan: 'Cyan Néon',
+        cyan: 'Cyan Tech',
         blue: 'Bleu Océan',
         orange: 'Orange Sunset',
+        'neon-cyan': '⚡ Cyber Cyan Néon',
+        'neon-purple': '🔮 Synthwave Magenta',
+        'neon-green': '🟢 Matrix Green Néon',
+        'neon-amber': '✨ Laser Gold Néon',
       },
       ai: {
         title: 'Moteur IA & Exécution Shell',
@@ -831,12 +841,13 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       to_specify: 'To Specify',
       to_implement: 'To Implement',
       to_test: 'To Test',
-      to_close: 'To Close',
+      to_close: 'In Review / PR',
+      finished: 'Finished',
       backlog: 'To Clarify',
       specified: 'To Specify',
       in_progress: 'To Implement',
       to_validate: 'To Test',
-      done: 'To Close',
+      done: 'Finished',
     },
     priority: {
       urgent: 'Urgent',
@@ -896,7 +907,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
     },
     quickAdd: {
       title: 'Quick Add Task',
-      placeholder: 'Task title (e.g. FRE-110 Create GraphQL endpoint...)',
+      placeholder: 'Task title (e.g. Create GraphQL endpoint, Fix auth...)',
       hint: 'Press Enter to create immediately',
       status: 'Initial status',
       priority: 'Priority',
@@ -962,9 +973,13 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
         emerald: 'Vivid Emerald',
         amber: 'Warm Amber',
         rose: 'Candy Rose',
-        cyan: 'Neon Cyan',
+        cyan: 'Tech Cyan',
         blue: 'Ocean Blue',
         orange: 'Sunset Orange',
+        'neon-cyan': '⚡ Cyber Neon Cyan',
+        'neon-purple': '🔮 Synthwave Magenta',
+        'neon-green': '🟢 Matrix Neon Green',
+        'neon-amber': '✨ Laser Gold Neon',
       },
       ai: {
         title: 'AI Engine & Shell Execution',

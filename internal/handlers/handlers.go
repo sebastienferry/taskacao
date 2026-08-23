@@ -147,7 +147,12 @@ func (h *Handler) HandleSyncAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activity, err := h.db.EnqueueSync("all", "")
+	var req struct {
+		ProjectID string `json:"projectId"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	activity, err := h.db.EnqueueSync("all", "", req.ProjectID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -166,11 +171,12 @@ func (h *Handler) HandleSyncLinear(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Team string `json:"team"`
+		Team      string `json:"team"`
+		ProjectID string `json:"projectId"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	activity, err := h.db.EnqueueSync("linear", req.Team)
+	activity, err := h.db.EnqueueSync("linear", req.Team, req.ProjectID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -189,11 +195,12 @@ func (h *Handler) HandleSyncGithub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Repo string `json:"repo"`
+		Repo      string `json:"repo"`
+		ProjectID string `json:"projectId"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	activity, err := h.db.EnqueueSync("github", req.Repo)
+	activity, err := h.db.EnqueueSync("github", req.Repo, req.ProjectID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -261,8 +268,8 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		id = parts[0]
 	}
 
-	// Sub-action: /api/projects/{id}/skills-status or /api/projects/skills-status?repoPath=...
-	if (len(parts) >= 2 && parts[1] == "skills-status") || id == "skills-status" {
+	// Sub-action: /api/projects/{id}/skills-status, /api/projects/{id}/skills, or query repoPath
+	if (len(parts) >= 2 && (parts[1] == "skills-status" || parts[1] == "skills")) || id == "skills-status" || id == "skills" {
 		target := id
 		if len(parts) >= 2 {
 			target = id
@@ -758,9 +765,11 @@ func (h *Handler) HandleSeed(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleActivities(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		projectID := r.URL.Query().Get("projectId")
+
 		// Check for /api/activities/stats or general query
 		if strings.HasSuffix(r.URL.Path, "/stats") {
-			stats, err := h.db.GetActivityStats()
+			stats, err := h.db.GetActivityStats(projectID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -780,7 +789,7 @@ func (h *Handler) HandleActivities(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		activities, err := h.db.GetActivities(status, skillID, taskID, q, limit)
+		activities, err := h.db.GetActivities(projectID, status, skillID, taskID, q, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -813,7 +822,8 @@ func (h *Handler) HandleActivityDetail(w http.ResponseWriter, r *http.Request) {
 
 	// Sub-action: /api/activities/stats
 	if parts[0] == "stats" && r.Method == http.MethodGet {
-		stats, err := h.db.GetActivityStats()
+		projectID := r.URL.Query().Get("projectId")
+		stats, err := h.db.GetActivityStats(projectID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

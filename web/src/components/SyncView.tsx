@@ -20,6 +20,10 @@ import type { IssueTracker, TaskActivity } from '../types'
 
 export const SyncView: React.FC = () => {
   const {
+    currentProject,
+    updateProject,
+    setIsProjectModalOpen,
+    setEditingProject,
     tasks,
     activities,
     setSelectedActivity,
@@ -34,19 +38,39 @@ export const SyncView: React.FC = () => {
     t,
   } = useApp()
 
-  // Local form state for sync options
-  const [linearTeam, setLinearTeam] = useState(settings.linearTeam || 'FRE')
-  const [githubRepo, setGithubRepo] = useState(settings.githubRepo || 'sebastienferry/fretzee-studio')
-  const [repoPath, setRepoPath] = useState(settings.repoPath || '/Users/sferry/Sources/fretzee-studio')
-  const [issueTracker, setIssueTracker] = useState<IssueTracker>(settings.issueTracker || 'linear')
+  // Local form state initialized from active project or fallback to global settings
+  const [linearTeam, setLinearTeam] = useState(currentProject?.linearTeam || settings.linearTeam || '')
+  const [githubRepo, setGithubRepo] = useState(currentProject?.githubRepo || settings.githubRepo || '')
+  const [repoPath, setRepoPath] = useState(currentProject?.repoPath || settings.repoPath || '')
+  const [issueTracker, setIssueTracker] = useState<IssueTracker>(currentProject?.issueTracker || settings.issueTracker || 'linear')
   const [isSaved, setIsSaved] = useState(false)
 
   // Custom parameters for manual triggers
-  const [customLinearTeam, setCustomLinearTeam] = useState(settings.linearTeam || 'FRE')
-  const [customGithubRepo, setCustomGithubRepo] = useState(settings.githubRepo || 'sebastienferry/fretzee-studio')
+  const [customLinearTeam, setCustomLinearTeam] = useState(currentProject?.linearTeam || settings.linearTeam || '')
+  const [customGithubRepo, setCustomGithubRepo] = useState(currentProject?.githubRepo || settings.githubRepo || '')
+
+  // Keep form updated when currentProject changes
+  React.useEffect(() => {
+    if (currentProject) {
+      setLinearTeam(currentProject.linearTeam || '')
+      setGithubRepo(currentProject.githubRepo || '')
+      setRepoPath(currentProject.repoPath || '')
+      setIssueTracker(currentProject.issueTracker || 'linear')
+      setCustomLinearTeam(currentProject.linearTeam || '')
+      setCustomGithubRepo(currentProject.githubRepo || '')
+    }
+  }, [currentProject])
 
   const handleSaveOptions = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (currentProject) {
+      await updateProject(currentProject.id, {
+        linearTeam: linearTeam.trim().toUpperCase(),
+        githubRepo: githubRepo.trim(),
+        repoPath: repoPath.trim(),
+        issueTracker,
+      })
+    }
     await updateSettings({
       linearTeam: linearTeam.trim().toUpperCase(),
       githubRepo: githubRepo.trim(),
@@ -158,6 +182,44 @@ export const SyncView: React.FC = () => {
 
       {/* Main Content */}
       <div className="flex-1 max-w-6xl w-full mx-auto p-6 space-y-6">
+        {/* Active Project Segregation Scope Banner */}
+        {currentProject && (
+          <div className="rounded-xl border border-[var(--sidebar-border)] bg-[var(--accent-light)]/20 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-[var(--accent-light)] border border-[var(--accent-color)]/30 flex items-center justify-center accent-text font-bold text-base shadow-[0_0_12px_var(--accent-glow)] shrink-0">
+                ⚡
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-[var(--accent-color)]">Espace Projet Cible</span>
+                  <span className="text-[10px] px-2 py-0.2 rounded-full font-mono bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
+                    {tasks.length} tâches
+                  </span>
+                </div>
+                <h3 className="text-sm font-bold text-[var(--text-primary)]">
+                  {currentProject.name}
+                </h3>
+                <p className="text-xs text-[var(--text-muted)] font-mono truncate max-w-lg">
+                  {currentProject.repoPath || 'Aucun chemin local configuré'}
+                  {currentProject.linearTeam ? ` · Team Linear: ${currentProject.linearTeam}` : ''}
+                  {currentProject.githubRepo ? ` · GitHub: ${currentProject.githubRepo}` : ''}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setEditingProject(currentProject)
+                setIsProjectModalOpen(true)
+              }}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-color)] transition-all cursor-pointer shrink-0"
+            >
+              ⚙️ Configurer ce projet
+            </button>
+          </div>
+        )}
+
         {/* Tracker Action Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           {/* Card 1: Linear */}
@@ -368,7 +430,7 @@ export const SyncView: React.FC = () => {
                     setLinearTeam(e.target.value)
                     setCustomLinearTeam(e.target.value)
                   }}
-                  placeholder="FRE"
+                  placeholder="Ex: ENG"
                   className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] uppercase"
                 />
               </div>
@@ -385,7 +447,7 @@ export const SyncView: React.FC = () => {
                     setGithubRepo(e.target.value)
                     setCustomGithubRepo(e.target.value)
                   }}
-                  placeholder="sebastienferry/fretzee-studio"
+                  placeholder="Ex: owner/repo"
                   className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
                 />
               </div>
@@ -399,7 +461,7 @@ export const SyncView: React.FC = () => {
                   type="text"
                   value={repoPath}
                   onChange={e => setRepoPath(e.target.value)}
-                  placeholder="/Users/sferry/Sources/fretzee-studio"
+                  placeholder="Ex: /Users/username/Sources/my-project"
                   className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
                 />
               </div>

@@ -21,10 +21,11 @@ import (
 )
 
 type SkillJob struct {
-	ActivityID string
-	TaskID     string
-	SkillID    string
-	Prompt     string
+	ActivityID    string
+	TaskID        string
+	SkillID       string
+	Prompt        string
+	RemovedLabels []string
 }
 
 type DB struct {
@@ -82,8 +83,8 @@ func (d *DB) initSchema() error {
 			density TEXT NOT NULL DEFAULT 'standard',
 			default_view TEXT NOT NULL DEFAULT 'board',
 			detail_mode TEXT NOT NULL DEFAULT 'panel',
-			user_name TEXT NOT NULL DEFAULT 'Sylvain Ferry',
-			user_email TEXT NOT NULL DEFAULT 'sylvain@fretzee.com',
+			user_name TEXT NOT NULL DEFAULT 'Sébastien Ferry',
+			user_email TEXT NOT NULL DEFAULT 'sebastien.ferry@gmail.com',
 			user_avatar TEXT NOT NULL DEFAULT '',
 			ai_provider TEXT NOT NULL DEFAULT 'agy',
 			ai_command_template TEXT NOT NULL DEFAULT 'agy -p "{prompt}"',
@@ -166,6 +167,9 @@ func (d *DB) initSchema() error {
 
 	// Migrations for existing database instances
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN stage_mapping TEXT NOT NULL DEFAULT '{}';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN git_remote_url TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN tracker_url TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN skill_overrides TEXT NOT NULL DEFAULT '{}';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT 'fretzee-studio';")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN branch_name TEXT;")
@@ -226,7 +230,7 @@ func (d *DB) seedIfEmpty() error {
 	if settingsCount == 0 {
 		_, err = d.conn.Exec(`
 			INSERT INTO settings (id, theme, accent_color, language, density, default_view, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo)
-			VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Sylvain Ferry', 'sylvain@fretzee.com', '', 'agy', 'agy -p "{prompt}"', '/Users/sferry/Sources/fretzee-studio', 'linear', 'FRE', 'sebastienferry/fretzee-studio')
+			VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Sébastien Ferry', 'sebastien.ferry@gmail.com', '', 'agy', 'agy -p "{prompt}"', '/Users/sferry/Sources/tasks', 'local', 'TASK', '')
 		`)
 		if err != nil {
 			return err
@@ -253,7 +257,7 @@ func (d *DB) SeedDemoData() error {
 	// Ensure default settings
 	_, err := d.conn.Exec(`
 		INSERT INTO settings (id, theme, accent_color, language, density, default_view, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo)
-		VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Sylvain Ferry', 'sylvain@fretzee.com', '', 'agy', 'agy -p "{prompt}"', '/Users/sferry/Sources/fretzee-studio', 'linear', 'FRE', 'sebastienferry/fretzee-studio')
+		VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Sébastien Ferry', 'sebastien.ferry@gmail.com', '', 'agy', 'agy -p "{prompt}"', '/Users/sferry/Sources/tasks', 'local', 'TASK', '')
 		ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP;
 	`)
 	if err != nil {
@@ -311,7 +315,7 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 		if src == "" {
 			if strings.HasPrefix(t.Key, "FRE-") {
 				src = "linear"
-			} else if strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
+			} else if strings.HasPrefix(t.Key, "#") || strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
 				src = "github"
 			} else {
 				src = "local"
@@ -353,8 +357,8 @@ func (d *DB) GetTasks(query, status, priority, label, projectID string) ([]model
 	var args []interface{}
 
 	if projectID != "" && projectID != "all" {
-		conditions = append(conditions, "project_id = ?")
-		args = append(args, projectID)
+		conditions = append(conditions, "(project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))")
+		args = append(args, projectID, projectID, projectID)
 	}
 
 	if query != "" {
@@ -436,7 +440,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID string) ([]model
 			t.Source = source.String
 		} else if strings.HasPrefix(t.Key, "FRE-") {
 			t.Source = "linear"
-		} else if strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
+		} else if strings.HasPrefix(t.Key, "#") || strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
 			t.Source = "github"
 		} else {
 			t.Source = "local"
@@ -448,8 +452,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID string) ([]model
 			url := fmt.Sprintf("https://linear.app/fretzee/issue/%s", t.Key)
 			t.ExternalURL = &url
 		} else if t.Source == "github" {
-			cleanNum := strings.TrimPrefix(t.Key, "GH-#")
-			cleanNum = strings.TrimPrefix(cleanNum, "gh-")
+			cleanNum := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(t.Key, "GH-#"), "gh-"), "#")
 			url := fmt.Sprintf("https://github.com/sebastienferry/fretzee-studio/issues/%s", cleanNum)
 			t.ExternalURL = &url
 		}
@@ -523,7 +526,7 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 		t.Source = source.String
 	} else if strings.HasPrefix(t.Key, "FRE-") {
 		t.Source = "linear"
-	} else if strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
+	} else if strings.HasPrefix(t.Key, "#") || strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
 		t.Source = "github"
 	} else {
 		t.Source = "local"
@@ -535,8 +538,7 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 		url := fmt.Sprintf("https://linear.app/fretzee/issue/%s", t.Key)
 		t.ExternalURL = &url
 	} else if t.Source == "github" {
-		cleanNum := strings.TrimPrefix(t.Key, "GH-#")
-		cleanNum = strings.TrimPrefix(cleanNum, "gh-")
+		cleanNum := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(t.Key, "GH-#"), "gh-"), "#")
 		url := fmt.Sprintf("https://github.com/sebastienferry/fretzee-studio/issues/%s", cleanNum)
 		t.ExternalURL = &url
 	}
@@ -985,6 +987,14 @@ func (d *DB) SwitchGitBranch(projectIDOrPath, targetBranch string, create bool) 
 		return nil, fmt.Errorf("nom de branche cible obligatoire")
 	}
 
+	// Clean stale index.lock if present
+	lockPath := filepath.Join(repoPath, ".git", "index.lock")
+	if info, err := os.Stat(lockPath); err == nil {
+		if time.Since(info.ModTime()) > 3*time.Second {
+			_ = os.Remove(lockPath)
+		}
+	}
+
 	// 1. Get current branch
 	curCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 	curOut, _ := curCmd.Output()
@@ -1067,23 +1077,25 @@ func (d *DB) getNextTaskKey(prefix string) (string, error) {
 }
 
 // Workflow labels following the AI lifecycle:
-// untouched -> clarified -> specified -> implemented -> reviewed -> finished
-var WorkflowLabels = []string{"untouched", "clarified", "specified", "implemented", "reviewed", "finished", "New", "Clarified", "Specified", "Implemented", "Reviewed", "Finished"}
+// new -> clarified -> specified -> implemented -> reviewed -> finished
+var WorkflowLabels = []string{"new", "clarified", "specified", "implemented", "reviewed", "finished", "untouched", "New", "Clarified", "Specified", "Implemented", "Reviewed", "Finished", "Untouched"}
 
 func GetStageLabelForStatus(status models.Status) string {
 	switch status {
 	case models.StatusToClarify, models.StatusBacklog:
-		return "untouched"
+		return "new"
 	case models.StatusToSpecify, models.StatusSpecified:
 		return "clarified"
 	case models.StatusToImplement, models.StatusInProgress:
 		return "specified"
 	case models.StatusToTest, models.StatusToValidate:
 		return "implemented"
-	case models.StatusToClose, models.StatusDone:
+	case models.StatusToClose:
 		return "reviewed"
+	case models.StatusFinished, models.StatusDone:
+		return "finished"
 	default:
-		return "untouched"
+		return "new"
 	}
 }
 
@@ -1268,6 +1280,9 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 		return nil, fmt.Errorf("task not found")
 	}
 
+	oldLabels := existing.Labels
+	var removedLabels []string
+
 	if req.ProjectID != nil && *req.ProjectID != "" {
 		existing.ProjectID = *req.ProjectID
 	}
@@ -1278,15 +1293,30 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 		existing.Description = *req.Description
 	}
 	if req.Status != nil {
+		oldStage := GetStageLabelForStatus(existing.Status)
 		existing.Status = *req.Status
 		if req.Labels == nil {
-			existing.Labels = SetWorkflowLabel(existing.Labels, GetStageLabelForStatus(*req.Status))
+			newStage := GetStageLabelForStatus(*req.Status)
+			if oldStage != newStage {
+				removedLabels = append(removedLabels, oldStage)
+			}
+			existing.Labels = SetWorkflowLabel(existing.Labels, newStage)
 		}
 	}
 	if req.Priority != nil {
 		existing.Priority = *req.Priority
 	}
 	if req.Labels != nil {
+		newMap := make(map[string]bool)
+		for _, l := range *req.Labels {
+			newMap[strings.ToLower(strings.TrimPrefix(l, "#"))] = true
+		}
+		for _, ol := range oldLabels {
+			cleanOl := strings.ToLower(strings.TrimPrefix(ol, "#"))
+			if !newMap[cleanOl] {
+				removedLabels = append(removedLabels, ol)
+			}
+		}
 		existing.Labels = *req.Labels
 	}
 	if req.Assignee != nil {
@@ -1327,29 +1357,9 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 		return nil, err
 	}
 
-	// Background issue update via Linear / GitHub CLI
-	settings, _ := d.getSettingsUnsafe()
-	isLinear := existing.Source == "linear"
-	isGithub := existing.Source == "github"
-
-	if isLinear {
-		go func(key string, t, desc *string, p *models.Priority, st *models.Status, lbls []string) {
-			err := d.runner.UpdateLinearIssue(key, t, desc, p, st, lbls)
-			if err != nil {
-				log.Printf("[SYNC] Failed to update Linear issue %s: %v", key, err)
-			} else {
-				log.Printf("[SYNC] Successfully updated Linear issue %s via CLI", key)
-			}
-		}(existing.Key, req.Title, req.Description, req.Priority, req.Status, existing.Labels)
-	} else if isGithub && settings != nil {
-		go func(repo, rPath, key string, t, desc *string, st *models.Status, lbls []string) {
-			err := d.runner.UpdateGithubIssue(repo, rPath, key, t, desc, st, lbls)
-			if err != nil {
-				log.Printf("[SYNC] Failed to update GitHub issue %s: %v", key, err)
-			} else {
-				log.Printf("[SYNC] Successfully updated GitHub issue %s via CLI", key)
-			}
-		}(settings.GithubRepo, settings.RepoPath, existing.Key, req.Title, req.Description, req.Status, existing.Labels)
+	// Enqueue async CLI tracker sync in task activities queue whenever task is modified
+	if req.Status != nil || req.Labels != nil || req.Title != nil || req.Description != nil || req.Priority != nil {
+		d.enqueueTrackerUpdateUnsafe(existing, req.Status, existing.Labels, removedLabels)
 	}
 
 	acts, _ := d.getTaskActivitiesUnsafe(existing.ID)
@@ -1454,9 +1464,16 @@ func (d *DB) MoveTask(id string, newStatus models.Status, newPosition int) (*mod
 		WHERE status = ? AND position >= ? AND id != ?
 	`, string(newStatus), newPosition, id)
 
+	oldStage := GetStageLabelForStatus(existing.Status)
+	newStage := GetStageLabelForStatus(newStatus)
+	var removedLabels []string
+	if oldStage != newStage {
+		removedLabels = append(removedLabels, oldStage)
+	}
+
 	existing.Status = newStatus
 	existing.Position = newPosition
-	existing.Labels = SetWorkflowLabel(existing.Labels, GetStageLabelForStatus(newStatus))
+	existing.Labels = SetWorkflowLabel(existing.Labels, newStage)
 	existing.UpdatedAt = now
 
 	labelsJSON, _ := json.Marshal(existing.Labels)
@@ -1469,22 +1486,8 @@ func (d *DB) MoveTask(id string, newStatus models.Status, newPosition int) (*mod
 		return nil, err
 	}
 
-	// Background state and label sync with Linear / GitHub CLI
-	settings, _ := d.getSettingsUnsafe()
-	isLinear := existing.Source == "linear"
-	isGithub := existing.Source == "github"
-
-	if isLinear {
-		go func(key string, st models.Status, lbls []string) {
-			_ = d.runner.UpdateLinearIssueState(key, st)
-			_ = d.runner.UpdateLinearIssue(key, nil, nil, nil, &st, lbls)
-		}(existing.Key, newStatus, existing.Labels)
-	} else if isGithub && settings != nil {
-		go func(repo, rPath, key string, st models.Status, lbls []string) {
-			_ = d.runner.UpdateGithubIssueState(repo, rPath, key, st)
-			_ = d.runner.UpdateGithubIssue(repo, rPath, key, nil, nil, &st, lbls)
-		}(settings.GithubRepo, settings.RepoPath, existing.Key, newStatus, existing.Labels)
-	}
+	// Enqueue async CLI tracker sync in task activities queue
+	d.enqueueTrackerUpdateUnsafe(existing, &newStatus, existing.Labels, removedLabels)
 
 	acts, _ := d.getTaskActivitiesUnsafe(existing.ID)
 	existing.Activities = acts
@@ -1559,7 +1562,7 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 		t.Source = source.String
 	} else if strings.HasPrefix(t.Key, "FRE-") {
 		t.Source = "linear"
-	} else if strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
+	} else if strings.HasPrefix(t.Key, "#") || strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
 		t.Source = "github"
 	} else {
 		t.Source = "local"
@@ -1571,8 +1574,7 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 		url := fmt.Sprintf("https://linear.app/fretzee/issue/%s", t.Key)
 		t.ExternalURL = &url
 	} else if t.Source == "github" {
-		cleanNum := strings.TrimPrefix(t.Key, "GH-#")
-		cleanNum = strings.TrimPrefix(cleanNum, "gh-")
+		cleanNum := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(t.Key, "GH-#"), "gh-"), "#")
 		url := fmt.Sprintf("https://github.com/sebastienferry/fretzee-studio/issues/%s", cleanNum)
 		t.ExternalURL = &url
 	}
@@ -1703,8 +1705,8 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 				Density:            "standard",
 				DefaultView:        "board",
 				DetailMode:         "panel",
-				UserName:           "Sylvain Ferry",
-				UserEmail:          "sylvain@fretzee.com",
+				UserName:           "Sébastien Ferry",
+				UserEmail:          "sebastien.ferry@gmail.com",
 				UserAvatar:         "",
 				AIProvider:         "agy",
 				AICommandTemplate:  "agy -p \"{prompt}\"",
@@ -1810,8 +1812,8 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 	if s.Density == "" { s.Density = "standard" }
 	if s.DefaultView == "" { s.DefaultView = "board" }
 	if s.DetailMode == "" { s.DetailMode = "panel" }
-	if s.UserName == "" { s.UserName = "Sylvain Ferry" }
-	if s.UserEmail == "" { s.UserEmail = "sylvain@fretzee.com" }
+	if s.UserName == "" { s.UserName = "Sébastien Ferry" }
+	if s.UserEmail == "" { s.UserEmail = "sebastien.ferry@gmail.com" }
 	if s.AIProvider == "" { s.AIProvider = "agy" }
 	if s.AICommandTemplate == "" { s.AICommandTemplate = "agy -p \"{prompt}\"" }
 	if s.RepoPath == "" { s.RepoPath = "/Users/sferry/Sources/fretzee-studio" }
@@ -1993,6 +1995,12 @@ func (d *DB) processSkillJob(job SkillJob) {
 			}
 		}
 		d.processSyncJob(ctx, job, settings)
+		return
+	}
+
+	// 3b. Special handling for background Tracker update jobs
+	if job.SkillID == "tracker_update" {
+		d.processTrackerUpdateJob(ctx, job)
 		return
 	}
 
@@ -2239,19 +2247,19 @@ func (d *DB) processSkillJob(job SkillJob) {
 	d.mu.Unlock()
 
 	// Background state, label, and report comment sync with Linear / GitHub CLI
-	if task.Source == "linear" || task.Source == "github" || strings.HasPrefix(task.Key, "FRE-") || strings.HasPrefix(task.Key, "gh-") || strings.HasPrefix(task.Key, "GH-#") {
+	if task.Source == "linear" || task.Source == "github" || strings.HasPrefix(task.Key, "FRE-") || strings.HasPrefix(task.Key, "#") || strings.HasPrefix(task.Key, "gh-") || strings.HasPrefix(task.Key, "GH-#") {
 		var commentHeader string
 		switch skill.ID {
 		case "clarify":
-			commentHeader = "### 💬 [Fretzee Tasks] Rapport de Clarification\n\n"
+			commentHeader = "### 💬 [Taskacao] Rapport de Clarification\n\n"
 		case "specify":
-			commentHeader = "### 📋 [Fretzee Tasks] Spécification Technique & Plan d'Implémentation\n\n"
+			commentHeader = "### 📋 [Taskacao] Spécification Technique & Plan d'Implémentation\n\n"
 		case "implement":
-			commentHeader = "### ⚡ [Fretzee Tasks] Rapport d'Implémentation\n\n"
+			commentHeader = "### ⚡ [Taskacao] Rapport d'Implémentation\n\n"
 		case "create_pr", "review":
-			commentHeader = "### 🚀 [Fretzee Tasks] Revue de Code & Préparation PR\n\n"
+			commentHeader = "### 🚀 [Taskacao] Revue de Code & Préparation PR\n\n"
 		default:
-			commentHeader = fmt.Sprintf("### 🤖 [Fretzee Tasks] Rapport d'exécution : %s\n\n", skill.Name)
+			commentHeader = fmt.Sprintf("### 🤖 [Taskacao] Rapport d'exécution : %s\n\n", skill.Name)
 		}
 
 		commentBody := commentHeader + realAIOutput
@@ -2263,9 +2271,9 @@ func (d *DB) processSkillJob(job SkillJob) {
 				if strings.TrimSpace(body) != "" {
 					_ = d.runner.AddIssueComment(src, repo, rPath, key, body)
 				}
-			} else if src == "github" || strings.HasPrefix(key, "gh-") || strings.HasPrefix(key, "GH-#") {
+			} else if src == "github" || strings.HasPrefix(key, "#") || strings.HasPrefix(key, "gh-") || strings.HasPrefix(key, "GH-#") {
 				_ = d.runner.UpdateGithubIssueState(repo, rPath, key, st)
-				_ = d.runner.UpdateGithubIssue(repo, rPath, key, nil, nil, &st, lbls)
+				_ = d.runner.UpdateGithubIssue(repo, rPath, key, nil, nil, &st, lbls, nil)
 				if strings.TrimSpace(body) != "" {
 					_ = d.runner.AddIssueComment(src, repo, rPath, key, body)
 				}
@@ -2415,17 +2423,230 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 	d.mu.Unlock()
 }
 
-func (d *DB) EnqueueSync(syncType string, param string) (*models.TaskActivity, error) {
+func (d *DB) enqueueTrackerUpdateUnsafe(task *models.Task, status *models.Status, labels []string, removedLabels []string) {
+	if task == nil {
+		return
+	}
+
+	proj, _ := d.getProjectByIDUnsafe(task.ProjectID)
+	tracker := task.Source
+	if proj != nil && proj.IssueTracker != "" && tracker == "" {
+		tracker = proj.IssueTracker
+	}
+
+	isLinear := tracker == "linear" || task.Source == "linear" || strings.HasPrefix(task.Key, "FRE-")
+	isGithub := tracker == "github" || task.Source == "github" || strings.HasPrefix(task.Key, "#") || strings.HasPrefix(task.Key, "gh-") || strings.HasPrefix(task.Key, "GH-")
+
+	if !isLinear && !isGithub {
+		return
+	}
+
+	activityID := uuid.New().String()
+	now := time.Now()
+
+	var trackerName string
+	var initialSteps []string
+	stStr := string(task.Status)
+	if status != nil {
+		stStr = string(*status)
+	}
+
+	var activeStage string
+	for _, l := range labels {
+		cleanL := strings.TrimPrefix(strings.ToLower(l), "#")
+		if cleanL == "new" || cleanL == "clarified" || cleanL == "specified" || cleanL == "implemented" || cleanL == "reviewed" || cleanL == "finished" {
+			activeStage = "#" + cleanL
+			break
+		}
+	}
+
+	var changesSummary []string
+	if status != nil {
+		changesSummary = append(changesSummary, fmt.Sprintf("Statut ➔ %s", *status))
+	}
+	if len(labels) > 0 {
+		changesSummary = append(changesSummary, fmt.Sprintf("Labels : %s", strings.Join(labels, ", ")))
+	}
+	if len(removedLabels) > 0 {
+		changesSummary = append(changesSummary, fmt.Sprintf("Labels retirés : -%s", strings.Join(removedLabels, ", -")))
+	}
+
+	if isLinear {
+		trackerName = "Linear"
+		initialSteps = []string{
+			fmt.Sprintf("Mise à jour issue Linear [%s] %s", task.Key, task.Title),
+			fmt.Sprintf("Statut cible : %s | Étape IA : %s", stStr, activeStage),
+		}
+		if len(changesSummary) > 0 {
+			initialSteps = append(initialSteps, strings.Join(changesSummary, " | "))
+		}
+		initialSteps = append(initialSteps, "Poussée dans la file d'attente d'exécution...")
+	} else {
+		trackerName = "GitHub"
+		repo := ""
+		if proj != nil && proj.GithubRepo != "" {
+			repo = proj.GithubRepo
+		}
+		initialSteps = []string{
+			fmt.Sprintf("Mise à jour issue GitHub [%s] (%s)", task.Key, repo),
+			fmt.Sprintf("Statut cible : %s | Étape IA : %s", stStr, activeStage),
+		}
+		if len(changesSummary) > 0 {
+			initialSteps = append(initialSteps, strings.Join(changesSummary, " | "))
+		}
+		initialSteps = append(initialSteps, "Poussée dans la file d'attente d'exécution...")
+	}
+
+	actionTitle := fmt.Sprintf("Sync %s : %s", trackerName, task.Key)
+	if activeStage != "" {
+		actionTitle = fmt.Sprintf("Sync %s : %s (%s)", trackerName, task.Key, activeStage)
+	}
+
+	summaryText := fmt.Sprintf("Mise à jour asynchrone sur %s (%s)", trackerName, stStr)
+	if len(changesSummary) > 0 {
+		summaryText = fmt.Sprintf("Mise à jour sur %s : %s", trackerName, strings.Join(changesSummary, " | "))
+	}
+
+	act := models.TaskActivity{
+		ID:        activityID,
+		TaskID:    task.ID,
+		TaskKey:   task.Key,
+		TaskTitle: task.Title,
+		SkillID:   "tracker_update",
+		SkillName: fmt.Sprintf("Sync %s CLI", trackerName),
+		Action:    actionTitle,
+		Status:    "queued",
+		Summary:   summaryText,
+		Output:    "",
+		Steps:     initialSteps,
+		Prompt:    "",
+		CreatedAt: now,
+	}
+
+	_ = d.addTaskActivityDirect(act)
+
+	job := SkillJob{
+		ActivityID:    activityID,
+		TaskID:        task.ID,
+		SkillID:       "tracker_update",
+		Prompt:        stStr,
+		RemovedLabels: removedLabels,
+	}
+
+	select {
+	case d.jobQueue <- job:
+	default:
+		go func() {
+			d.jobQueue <- job
+		}()
+	}
+}
+
+func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 	d.mu.RLock()
+	task, err := d.getTaskByIDUnsafe(job.TaskID)
 	settings, _ := d.getSettingsUnsafe()
 	d.mu.RUnlock()
 
-	if settings == nil {
-		settings = &models.Settings{
-			LinearTeam: "FRE",
-			GithubRepo: "sebastienferry/fretzee-studio",
-			RepoPath:   "/Users/sferry/Sources/fretzee-studio",
+	if err != nil || task == nil {
+		d.mu.Lock()
+		_, _ = d.conn.Exec(`
+			UPDATE task_activities
+			SET status = 'failed', error = 'Tâche introuvable pour la synchronisation tracker', completed_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, job.ActivityID)
+		d.mu.Unlock()
+		return
+	}
+
+	proj, _ := d.getProjectByIDUnsafe(task.ProjectID)
+	repo := ""
+	repoPath := ""
+	tracker := task.Source
+	if proj != nil {
+		if proj.GithubRepo != "" { repo = proj.GithubRepo }
+		if proj.RepoPath != "" { repoPath = proj.RepoPath }
+		if proj.IssueTracker != "" && tracker == "" { tracker = proj.IssueTracker }
+	}
+	if repo == "" && settings != nil { repo = settings.GithubRepo }
+	if repoPath == "" && settings != nil { repoPath = settings.RepoPath }
+
+	isLinear := tracker == "linear" || task.Source == "linear" || strings.HasPrefix(task.Key, "FRE-")
+	isGithub := tracker == "github" || task.Source == "github" || strings.HasPrefix(task.Key, "#") || strings.HasPrefix(task.Key, "gh-") || strings.HasPrefix(task.Key, "GH-")
+
+	steps := []string{
+		fmt.Sprintf("Démarrage de la mise à jour CLI pour [%s] %s", task.Key, task.Title),
+	}
+	var outputText string
+	var hasError bool
+
+	if isLinear {
+		steps = append(steps, fmt.Sprintf("Exécution: linear issue update %s (statut: %s, labels: %v)", task.Key, task.Status, task.Labels))
+		err := d.runner.UpdateLinearIssue(task.Key, &task.Title, &task.Description, &task.Priority, &task.Status, task.Labels)
+		if err != nil {
+			hasError = true
+			outputText = fmt.Sprintf("Erreur Linear CLI : %v", err)
+			steps = append(steps, fmt.Sprintf("❌ Échec : %v", err))
+		} else {
+			outputText = fmt.Sprintf("Issue Linear %s synchronisée avec succès (Titre: %s, Statut: %s, Labels: %v)", task.Key, task.Title, task.Status, task.Labels)
+			steps = append(steps, fmt.Sprintf("✅ Issue Linear %s mise à jour avec succès via la CLI", task.Key))
 		}
+	} else if isGithub {
+		steps = append(steps, fmt.Sprintf("Exécution: gh issue edit %s (Dépôt: %s, Statut: %s, Labels: %v, Supprimés: %v)", task.Key, repo, task.Status, task.Labels, job.RemovedLabels))
+		err := d.runner.UpdateGithubIssue(repo, repoPath, task.Key, &task.Title, &task.Description, &task.Status, task.Labels, job.RemovedLabels)
+		if err != nil {
+			hasError = true
+			outputText = fmt.Sprintf("Erreur GitHub CLI : %v", err)
+			steps = append(steps, fmt.Sprintf("❌ Échec : %v", err))
+		} else {
+			outputText = fmt.Sprintf("Issue GitHub %s synchronisée avec succès dans %s (Titre: %s, Statut: %s, Labels: %v)", task.Key, repo, task.Title, task.Status, task.Labels)
+			steps = append(steps, fmt.Sprintf("✅ Issue GitHub %s synchronisée avec succès via la CLI", task.Key))
+		}
+	} else {
+		outputText = "Aucun tracker distant configuré pour cette tâche"
+		steps = append(steps, "ℹ️ Tâche locale uniquement, aucune commande distante requise")
+	}
+
+	completedTime := time.Now()
+	status := string(models.ActivityStatusCompleted)
+	errText := ""
+	summary := outputText
+	if hasError {
+		status = string(models.ActivityStatusFailed)
+		errText = outputText
+		summary = "Échec de la synchronisation tracker"
+	}
+
+	stepsJSON, _ := json.Marshal(steps)
+	d.mu.Lock()
+	_, _ = d.conn.Exec(`
+		UPDATE task_activities
+		SET status = ?, summary = ?, output = ?, steps = ?, error = ?, completed_at = ?
+		WHERE id = ?
+	`, status, summary, outputText, string(stepsJSON), errText, completedTime, job.ActivityID)
+	d.mu.Unlock()
+}
+
+func (d *DB) EnqueueSync(syncType string, param string, projectID string) (*models.TaskActivity, error) {
+	d.mu.RLock()
+	settings, _ := d.getSettingsUnsafe()
+	var proj *models.Project
+	if projectID != "" && projectID != "all" {
+		proj, _ = d.getProjectByIDUnsafe(projectID)
+	}
+	d.mu.RUnlock()
+
+	linearTeam := ""
+	githubRepo := ""
+	if proj != nil {
+		linearTeam = proj.LinearTeam
+		githubRepo = proj.GithubRepo
+	}
+	if linearTeam == "" && settings != nil {
+		linearTeam = settings.LinearTeam
+	}
+	if githubRepo == "" && settings != nil {
+		githubRepo = settings.GithubRepo
 	}
 
 	activityID := uuid.New().String()
@@ -2434,16 +2655,17 @@ func (d *DB) EnqueueSync(syncType string, param string) (*models.TaskActivity, e
 	var skillName string
 	var summary string
 	var steps []string
+	targetTaskID := "sync-" + syncType
+	if proj != nil {
+		targetTaskID = "sync-" + proj.ID
+	}
 
 	switch syncType {
 	case "linear", "sync_linear":
 		syncType = "sync_linear"
-		team := settings.LinearTeam
+		team := linearTeam
 		if param != "" {
 			team = param
-		}
-		if team == "" {
-			team = "FRE"
 		}
 		skillName = "Sync Linear"
 		summary = fmt.Sprintf("Synchronisation Linear (Équipe %s) en file d'attente", team)
@@ -2453,12 +2675,9 @@ func (d *DB) EnqueueSync(syncType string, param string) (*models.TaskActivity, e
 		}
 	case "github", "sync_github":
 		syncType = "sync_github"
-		repo := settings.GithubRepo
+		repo := githubRepo
 		if param != "" {
 			repo = param
-		}
-		if repo == "" {
-			repo = "sebastienferry/fretzee-studio"
 		}
 		skillName = "Sync GitHub"
 		summary = fmt.Sprintf("Synchronisation GitHub (%s) en file d'attente", repo)
@@ -2471,14 +2690,14 @@ func (d *DB) EnqueueSync(syncType string, param string) (*models.TaskActivity, e
 		skillName = "Sync Globale"
 		summary = "Synchronisation globale (Linear + GitHub) en file d'attente"
 		steps = []string{
-			fmt.Sprintf("Cibles : Linear (Team: %s) & GitHub (%s)", settings.LinearTeam, settings.GithubRepo),
+			fmt.Sprintf("Cibles : Linear (Team: %s) & GitHub (%s)", linearTeam, githubRepo),
 			"Poussée dans la file d'attente d'exécution...",
 		}
 	}
 
 	act := models.TaskActivity{
 		ID:        activityID,
-		TaskID:    "sync-" + syncType,
+		TaskID:    targetTaskID,
 		SkillID:   syncType,
 		SkillName: skillName,
 		Action:    "Synchronisation des tickets distants",
@@ -2497,7 +2716,7 @@ func (d *DB) EnqueueSync(syncType string, param string) (*models.TaskActivity, e
 	// Push job to worker queue
 	d.jobQueue <- SkillJob{
 		ActivityID: activityID,
-		TaskID:     "sync-" + syncType,
+		TaskID:     targetTaskID,
 		SkillID:    syncType,
 		Prompt:     param,
 	}
@@ -2509,44 +2728,38 @@ func (d *DB) EnqueueSkillOnTask(taskID string, skillID string, prompt string) (*
 	d.mu.RLock()
 	task, err := d.getTaskByIDUnsafe(taskID)
 	d.mu.RUnlock()
-	if err != nil {
-		return nil, nil, err
-	}
-	if task == nil {
-		return nil, nil, fmt.Errorf("task not found")
+	if err != nil || task == nil {
+		return nil, nil, fmt.Errorf("task not found: %s", taskID)
 	}
 
-	var skill models.Skill
-	for _, s := range d.GetAvailableSkills() {
-		if s.ID == skillID || (skillID == "review" && s.ID == "create_pr") {
-			skill = s
+	skills := d.GetAvailableSkills()
+	var targetSkill *models.Skill
+	for _, s := range skills {
+		if s.ID == skillID {
+			targetSkill = &s
 			break
 		}
 	}
-	if skill.ID == "" {
-		return nil, nil, fmt.Errorf("unknown skill: %s", skillID)
+	if targetSkill == nil {
+		return nil, nil, fmt.Errorf("skill not found: %s", skillID)
 	}
 
-	now := time.Now()
 	activityID := uuid.New().String()
-	initialSteps := []string{
-		fmt.Sprintf("Tâche ciblée : [%s] %s", task.Key, task.Title),
-		fmt.Sprintf("Skill sélectionnée : %s (%s)", skill.Name, skill.Command),
-		"Poussée dans la file d'attente d'exécution...",
-	}
+	now := time.Now()
 
 	act := models.TaskActivity{
 		ID:        activityID,
 		TaskID:    task.ID,
-		TaskKey:   task.Key,
-		TaskTitle: task.Title,
-		SkillID:   skill.ID,
-		SkillName: skill.Name,
-		Action:    fmt.Sprintf("Skill %s en file d'attente", skill.Name),
-		Status:    "queued",
-		Summary:   fmt.Sprintf("En attente dans la file d'exécution (%s)", skill.Command),
+		SkillID:   targetSkill.ID,
+		SkillName: targetSkill.Name,
+		Action:    fmt.Sprintf("Exécution de la compétence %s", targetSkill.Name),
+		Status:    string(models.ActivityStatusQueued),
+		Summary:   fmt.Sprintf("Compétence %s en file d'attente pour la tâche %s", targetSkill.Name, task.Key),
 		Output:    "",
-		Steps:     initialSteps,
+		Steps: []string{
+			fmt.Sprintf("Tâche ciblée : %s - %s", task.Key, task.Title),
+			"Poussée dans la file d'attente du worker...",
+		},
 		Prompt:    prompt,
 		CreatedAt: now,
 	}
@@ -2555,11 +2768,11 @@ func (d *DB) EnqueueSkillOnTask(taskID string, skillID string, prompt string) (*
 	_ = d.addTaskActivityDirect(act)
 	d.mu.Unlock()
 
-	// Push job to channel
+	// Push to background channel worker
 	d.jobQueue <- SkillJob{
 		ActivityID: activityID,
 		TaskID:     task.ID,
-		SkillID:    skill.ID,
+		SkillID:    targetSkill.ID,
 		Prompt:     prompt,
 	}
 
@@ -2570,12 +2783,17 @@ func (d *DB) RunSkillOnTask(taskID string, skillID string, prompt string) (*mode
 	return d.EnqueueSkillOnTask(taskID, skillID, prompt)
 }
 
-func (d *DB) GetActivities(status, skillID, taskID, search string, limit int) ([]models.TaskActivity, error) {
+func (d *DB) GetActivities(projectID, status, skillID, taskID, search string, limit int) ([]models.TaskActivity, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	var conditions []string
 	var args []interface{}
+
+	if projectID != "" && projectID != "all" {
+		conditions = append(conditions, "((t.project_id = ? OR t.project_id = (SELECT slug FROM projects WHERE id = ?) OR t.project_id = (SELECT id FROM projects WHERE slug = ?)) OR a.task_id LIKE ? OR a.prompt LIKE ?)")
+		args = append(args, projectID, projectID, projectID, "%"+projectID+"%", "%"+projectID+"%")
+	}
 
 	if status != "" && status != "all" {
 		if status == "queued" || status == "pending" {
@@ -2757,12 +2975,28 @@ func (d *DB) GetActivityByID(id string) (*models.TaskActivity, error) {
 	return &a, nil
 }
 
-func (d *DB) GetActivityStats() (*models.ActivityStats, error) {
+func (d *DB) GetActivityStats(projectID string) (*models.ActivityStats, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	var stats models.ActivityStats
-	rows, err := d.conn.Query("SELECT status, COUNT(*) FROM task_activities GROUP BY status")
+	var query string
+	var args []interface{}
+
+	if projectID != "" && projectID != "all" {
+		query = `
+			SELECT a.status, COUNT(*) 
+			FROM task_activities a
+			LEFT JOIN tasks t ON a.task_id = t.id
+			WHERE ((t.project_id = ? OR t.project_id = (SELECT slug FROM projects WHERE id = ?) OR t.project_id = (SELECT id FROM projects WHERE slug = ?)) OR a.task_id LIKE ? OR a.prompt LIKE ?)
+			GROUP BY a.status
+		`
+		args = append(args, projectID, projectID, projectID, "%"+projectID+"%", "%"+projectID+"%")
+	} else {
+		query = "SELECT status, COUNT(*) FROM task_activities GROUP BY status"
+	}
+
+	rows, err := d.conn.Query(query, args...)
 	if err != nil {
 		return &stats, err
 	}
@@ -2923,7 +3157,7 @@ func (d *DB) ConvertTaskToRemote(taskID string, target string) (*models.Task, er
 
 		// Sync status if done
 		if task.Status == models.StatusDone {
-			_ = d.runner.UpdateGithubIssue(repo, repoPath, newKey, nil, nil, &task.Status, task.Labels)
+			_ = d.runner.UpdateGithubIssue(repo, repoPath, newKey, nil, nil, &task.Status, task.Labels, nil)
 		}
 
 	default:
@@ -2978,6 +3212,7 @@ func (d *DB) ConvertTaskToRemote(taskID string, target string) (*models.Task, er
 
 func defaultStageMapping() map[string]string {
 	return map[string]string{
+		"new":         "to_clarify",
 		"untouched":   "to_clarify",
 		"clarified":   "to_specify",
 		"specified":   "to_implement",
@@ -2987,12 +3222,30 @@ func defaultStageMapping() map[string]string {
 	}
 }
 
+func ParseGitRepoFromURL(rawURL string) string {
+	raw := strings.TrimSpace(rawURL)
+	raw = strings.TrimSuffix(raw, ".git")
+	if strings.HasPrefix(raw, "git@github.com:") {
+		return strings.TrimPrefix(raw, "git@github.com:")
+	}
+	if strings.HasPrefix(raw, "https://github.com/") {
+		return strings.TrimPrefix(raw, "https://github.com/")
+	}
+	if strings.HasPrefix(raw, "http://github.com/") {
+		return strings.TrimPrefix(raw, "http://github.com/")
+	}
+	if strings.HasPrefix(raw, "ssh://git@github.com/") {
+		return strings.TrimPrefix(raw, "ssh://git@github.com/")
+	}
+	return raw
+}
+
 func (d *DB) GetProjects() ([]models.Project, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	rows, err := d.conn.Query(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.linear_team, p.github_repo, p.issue_tracker, p.is_default, p.stage_mapping, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.git_remote_url, p.linear_team, p.github_repo, p.issue_tracker, p.tracker_url, p.is_default, p.stage_mapping, p.skill_overrides, p.created_at, p.updated_at,
 		       COUNT(t.id) as task_count
 		FROM projects p
 		LEFT JOIN tasks t ON t.project_id = p.id
@@ -3008,9 +3261,9 @@ func (d *DB) GetProjects() ([]models.Project, error) {
 	for rows.Next() {
 		var p models.Project
 		var isDefault int
-		var stageMappingJSON string
+		var stageMappingJSON, skillOverridesJSON string
 		err := rows.Scan(
-			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &isDefault, &stageMappingJSON, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &p.TrackerUrl, &isDefault, &stageMappingJSON, &skillOverridesJSON, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 		)
 		if err != nil {
 			return nil, err
@@ -3019,6 +3272,10 @@ func (d *DB) GetProjects() ([]models.Project, error) {
 		p.StageMapping = defaultStageMapping()
 		if stageMappingJSON != "" && stageMappingJSON != "{}" {
 			_ = json.Unmarshal([]byte(stageMappingJSON), &p.StageMapping)
+		}
+		p.SkillOverrides = map[string]string{}
+		if skillOverridesJSON != "" && skillOverridesJSON != "{}" {
+			_ = json.Unmarshal([]byte(skillOverridesJSON), &p.SkillOverrides)
 		}
 		projects = append(projects, p)
 	}
@@ -3037,14 +3294,14 @@ func (d *DB) GetProjectByID(id string) (*models.Project, error) {
 func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	var p models.Project
 	var isDefault int
-	var stageMappingJSON string
+	var stageMappingJSON, skillOverridesJSON string
 	err := d.conn.QueryRow(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.linear_team, p.github_repo, p.issue_tracker, p.is_default, p.stage_mapping, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.git_remote_url, p.linear_team, p.github_repo, p.issue_tracker, p.tracker_url, p.is_default, p.stage_mapping, p.skill_overrides, p.created_at, p.updated_at,
 		       (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count
 		FROM projects p
 		WHERE p.id = ? OR p.slug = ?
 	`, id, id).Scan(
-		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &isDefault, &stageMappingJSON, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &p.TrackerUrl, &isDefault, &stageMappingJSON, &skillOverridesJSON, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -3056,6 +3313,10 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	p.StageMapping = defaultStageMapping()
 	if stageMappingJSON != "" && stageMappingJSON != "{}" {
 		_ = json.Unmarshal([]byte(stageMappingJSON), &p.StageMapping)
+	}
+	p.SkillOverrides = map[string]string{}
+	if skillOverridesJSON != "" && skillOverridesJSON != "{}" {
+		_ = json.Unmarshal([]byte(skillOverridesJSON), &p.SkillOverrides)
 	}
 	return &p, nil
 }
@@ -3090,6 +3351,13 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 	if issueTracker == "" {
 		issueTracker = "linear"
 	}
+
+	gitRemote := strings.TrimSpace(req.GitRemoteUrl)
+	githubRepo := strings.TrimSpace(req.GithubRepo)
+	if githubRepo == "" && gitRemote != "" {
+		githubRepo = ParseGitRepoFromURL(gitRemote)
+	}
+
 	now := time.Now()
 	isDefInt := 0
 	if req.IsDefault {
@@ -3103,10 +3371,16 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 	}
 	stageMappingBytes, _ := json.Marshal(stageMapping)
 
+	skillOverrides := req.SkillOverrides
+	if skillOverrides == nil {
+		skillOverrides = map[string]string{}
+	}
+	skillOverridesBytes, _ := json.Marshal(skillOverrides)
+
 	_, err := d.conn.Exec(`
-		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, linear_team, github_repo, issue_tracker, is_default, stage_mapping, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, name, slug, req.Description, icon, color, req.RepoPath, req.LinearTeam, req.GithubRepo, issueTracker, isDefInt, string(stageMappingBytes), now, now)
+		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, git_remote_url, linear_team, github_repo, issue_tracker, tracker_url, is_default, stage_mapping, skill_overrides, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, name, slug, req.Description, icon, color, req.RepoPath, gitRemote, req.LinearTeam, githubRepo, issueTracker, req.TrackerUrl, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -3144,6 +3418,12 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if req.RepoPath != nil {
 		p.RepoPath = *req.RepoPath
 	}
+	if req.GitRemoteUrl != nil {
+		p.GitRemoteUrl = strings.TrimSpace(*req.GitRemoteUrl)
+		if p.GithubRepo == "" && p.GitRemoteUrl != "" {
+			p.GithubRepo = ParseGitRepoFromURL(p.GitRemoteUrl)
+		}
+	}
 	if req.LinearTeam != nil {
 		p.LinearTeam = *req.LinearTeam
 	}
@@ -3153,8 +3433,14 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if req.IssueTracker != nil {
 		p.IssueTracker = *req.IssueTracker
 	}
+	if req.TrackerUrl != nil {
+		p.TrackerUrl = *req.TrackerUrl
+	}
 	if req.StageMapping != nil {
 		p.StageMapping = *req.StageMapping
+	}
+	if req.SkillOverrides != nil {
+		p.SkillOverrides = *req.SkillOverrides
 	}
 	if req.IsDefault != nil {
 		p.IsDefault = *req.IsDefault
@@ -3173,11 +3459,16 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	}
 	stageMappingBytes, _ := json.Marshal(p.StageMapping)
 
+	if p.SkillOverrides == nil {
+		p.SkillOverrides = map[string]string{}
+	}
+	skillOverridesBytes, _ := json.Marshal(p.SkillOverrides)
+
 	_, err = d.conn.Exec(`
 		UPDATE projects
-		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, linear_team = ?, github_repo = ?, issue_tracker = ?, is_default = ?, stage_mapping = ?, updated_at = ?
+		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, issue_tracker = ?, tracker_url = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, updated_at = ?
 		WHERE id = ?
-	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, p.LinearTeam, p.GithubRepo, p.IssueTracker, isDefInt, string(stageMappingBytes), p.UpdatedAt, p.ID)
+	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.IssueTracker, p.TrackerUrl, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.UpdatedAt, p.ID)
 	if err != nil {
 		return nil, err
 	}

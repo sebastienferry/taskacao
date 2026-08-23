@@ -108,15 +108,15 @@ const defaultSettings: UserSettings = {
   density: 'standard',
   defaultView: 'board',
   detailMode: 'panel',
-  userName: 'Sylvain Ferry',
-  userEmail: 'sylvain@fretzee.com',
+  userName: 'Sébastien Ferry',
+  userEmail: 'sebastien.ferry@gmail.com',
   userAvatar: '',
   aiProvider: 'agy',
   aiCommandTemplate: 'agy -p "{prompt}"',
-  repoPath: '/Users/sferry/Sources/fretzee-studio',
+  repoPath: '',
   issueTracker: 'linear',
-  linearTeam: 'FRE',
-  githubRepo: 'sebastienferry/fretzee-studio',
+  linearTeam: '',
+  githubRepo: '',
   promptClarify: '',
   promptSpecify: '',
   promptImplement: '',
@@ -258,7 +258,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     body.setAttribute('data-accent', settings.accentColor || 'indigo')
-    body.setAttribute('data-density', settings.density || 'standard')
+    root.setAttribute('data-accent', settings.accentColor || 'indigo')
+
+    const density = settings.density || 'standard'
+    root.classList.remove('density-compact', 'density-standard', 'density-comfortable')
+    body.classList.remove('density-compact', 'density-standard', 'density-comfortable')
+
+    root.classList.add(`density-${density}`)
+    body.classList.add(`density-${density}`)
+
+    root.setAttribute('data-density', density)
+    body.setAttribute('data-density', density)
+
+    // Direct root font-size scaling for instantaneous global rem scaling
+    if (density === 'compact') {
+      root.style.fontSize = '12.5px'
+    } else if (density === 'comfortable') {
+      root.style.fontSize = '15.5px'
+    } else {
+      root.style.fontSize = '14px'
+    }
   }, [settings.theme, settings.accentColor, settings.density])
 
   const fetchSettings = useCallback(async () => {
@@ -302,7 +321,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const res = await fetch(`${API_BASE}/projects`)
       if (res.ok) {
         const data: Project[] = await res.json()
-        setProjects(data || [])
+        const projectList = data || []
+        setProjects(projectList)
+
+        // Ensure a valid project is actively selected for strict segregation
+        setSelectedProjectIdState(prev => {
+          if (prev && prev !== 'all' && projectList.some(p => p.id === prev || p.slug === prev)) {
+            return prev
+          }
+          const defaultProj = projectList.find(p => p.isDefault) || projectList[0]
+          if (defaultProj) {
+            try {
+              localStorage.setItem('fretzee_selected_project_id', defaultProj.id)
+            } catch {}
+            return defaultProj.id
+          }
+          return prev
+        })
       }
     } catch (err) {
       console.warn('Failed to load projects', err)
@@ -311,7 +346,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const fetchActivities = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/activities`)
+      const params = new URLSearchParams()
+      if (selectedProjectId && selectedProjectId !== 'all') {
+        params.append('projectId', selectedProjectId)
+      }
+      const res = await fetch(`${API_BASE}/activities?${params.toString()}`)
       if (res.ok) {
         const data: TaskActivity[] = await res.json()
         setActivities(data)
@@ -319,11 +358,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch (err) {
       console.warn('Failed to load activities', err)
     }
-  }, [])
+  }, [selectedProjectId])
 
   const fetchActivityStats = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/activities/stats`)
+      const params = new URLSearchParams()
+      if (selectedProjectId && selectedProjectId !== 'all') {
+        params.append('projectId', selectedProjectId)
+      }
+      const res = await fetch(`${API_BASE}/activities/stats?${params.toString()}`)
       if (res.ok) {
         const data: ActivityStats = await res.json()
         setActivityStats(data)
@@ -331,7 +374,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch (err) {
       console.warn('Failed to load activity stats', err)
     }
-  }, [])
+  }, [selectedProjectId])
 
   const fetchGitStatus = useCallback(async (targetPathOrProject?: string): Promise<GitStatusInfo | null> => {
     try {
@@ -389,14 +432,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     fetchSkills()
     fetchCliStatus()
     fetchProjects()
-    fetchActivities()
-    fetchActivityStats()
-    fetchGitStatus()
-  }, [fetchSettings, fetchSkills, fetchCliStatus, fetchProjects, fetchActivities, fetchActivityStats, fetchGitStatus])
+  }, [fetchSettings, fetchSkills, fetchCliStatus, fetchProjects])
 
   useEffect(() => {
     fetchTasks()
-  }, [fetchTasks])
+    fetchActivities()
+    fetchActivityStats()
+    fetchGitStatus()
+  }, [fetchTasks, fetchActivities, fetchActivityStats, fetchGitStatus])
 
   // Active Job Count (queued or running)
   const activeJobCount = activities.filter(
@@ -409,9 +452,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const interval = setInterval(async () => {
       try {
+        const params = new URLSearchParams()
+        if (selectedProjectId && selectedProjectId !== 'all') {
+          params.append('projectId', selectedProjectId)
+        }
         const [actRes, statsRes] = await Promise.all([
-          fetch(`${API_BASE}/activities`),
-          fetch(`${API_BASE}/activities/stats`),
+          fetch(`${API_BASE}/activities?${params.toString()}`),
+          fetch(`${API_BASE}/activities/stats?${params.toString()}`),
         ])
 
         if (actRes.ok) {
@@ -503,7 +550,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const syncAll = async () => {
     setIsSyncing(true)
     try {
-      const res = await fetch(`${API_BASE}/sync/all`, { method: 'POST' })
+      const activeProj = selectedProjectId !== 'all' ? projects.find(p => p.id === selectedProjectId) : (projects.find(p => p.isDefault) || projects[0])
+      const res = await fetch(`${API_BASE}/sync/all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: activeProj?.id }),
+      })
       if (!res.ok) {
         const errData = await res.json()
         throw new Error(errData.error || 'Global sync failed')
@@ -516,7 +568,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addToast({
         type: 'info',
         title: 'Synchronisation globale lancée',
-        description: 'La tâche a été ajoutée à la file d\'attente (consultable dans Activités).',
+        description: activeProj ? `Projet ${activeProj.name} — Suivi dans Activités.` : 'La tâche a été ajoutée à la file d\'attente.',
       })
     } catch (err: any) {
       addToast({
@@ -532,10 +584,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const syncLinear = async (team?: string) => {
     setIsSyncing(true)
     try {
+      const activeProj = selectedProjectId !== 'all' ? projects.find(p => p.id === selectedProjectId) : (projects.find(p => p.isDefault) || projects[0])
+      const targetTeam = team || activeProj?.linearTeam || settings.linearTeam || ''
       const res = await fetch(`${API_BASE}/sync/linear`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team: team || settings.linearTeam || 'FRE' }),
+        body: JSON.stringify({ team: targetTeam, projectId: activeProj?.id }),
       })
       if (!res.ok) {
         const errData = await res.json()
@@ -549,7 +603,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addToast({
         type: 'info',
         title: 'Synchronisation Linear lancée',
-        description: `Équipe ${team || settings.linearTeam || 'FRE'} — Suivi en direct dans Activités.`,
+        description: targetTeam ? `Équipe ${targetTeam} (${activeProj?.name || ''}) — Suivi en direct dans Activités.` : 'Synchronisation Linear en cours...',
       })
     } catch (err: any) {
       addToast({
@@ -565,10 +619,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const syncGithub = async (repo?: string) => {
     setIsSyncing(true)
     try {
+      const activeProj = selectedProjectId !== 'all' ? projects.find(p => p.id === selectedProjectId) : (projects.find(p => p.isDefault) || projects[0])
+      const targetRepo = repo || activeProj?.githubRepo || settings.githubRepo || ''
       const res = await fetch(`${API_BASE}/sync/github`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo: repo || settings.githubRepo || 'sebastienferry/fretzee-studio' }),
+        body: JSON.stringify({ repo: targetRepo, projectId: activeProj?.id }),
       })
       if (!res.ok) {
         const errData = await res.json()
@@ -582,7 +638,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addToast({
         type: 'info',
         title: 'Synchronisation GitHub lancée',
-        description: `Repo ${repo || settings.githubRepo || 'sebastienferry/fretzee-studio'} — Suivi dans Activités.`,
+        description: targetRepo ? `Dépôt ${targetRepo} (${activeProj?.name || ''}) — Suivi dans Activités.` : 'Synchronisation GitHub en cours...',
       })
     } catch (err: any) {
       addToast({
@@ -771,10 +827,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (selectedTask && selectedTask.id === id) {
         setSelectedTask(updated)
       }
+      const activeProj = selectedProjectId !== 'all' ? projects.find(p => p.id === selectedProjectId) : projects[0]
+      const teamLabel = activeProj?.linearTeam || settings.linearTeam || 'Linear'
+      const repoLabel = activeProj?.githubRepo || settings.githubRepo || 'GitHub'
       addToast({
         type: 'success',
         title: target === 'linear' ? 'Exporté vers Linear' : 'Exporté vers GitHub',
-        description: `${updated.key} (${target === 'linear' ? 'Linear ' + (settings.linearTeam || 'FRE') : 'GitHub ' + (settings.githubRepo || '')}) créé avec succès !`,
+        description: `${updated.key} (${target === 'linear' ? teamLabel : repoLabel}) créé avec succès !`,
       })
       return updated
     } catch (err: any) {
@@ -838,12 +897,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (proj?.stageMapping && proj.stageMapping[targetStage]) {
       mappedStatus = proj.stageMapping[targetStage] as Status
     } else {
-      if (targetStage === 'untouched') mappedStatus = 'to_clarify'
+      if (targetStage === 'new' || (targetStage as any) === 'untouched') mappedStatus = 'to_clarify'
       else if (targetStage === 'clarified') mappedStatus = 'to_specify'
       else if (targetStage === 'specified') mappedStatus = 'to_implement'
       else if (targetStage === 'implemented') mappedStatus = 'to_test'
-      else if (targetStage === 'reviewed') mappedStatus = 'to_test'
-      else if (targetStage === 'finished') mappedStatus = 'to_close'
+      else if (targetStage === 'reviewed') mappedStatus = 'to_close'
+      else if (targetStage === 'finished') mappedStatus = 'finished'
     }
 
     const updated = await updateTask(task.id, {

@@ -1,11 +1,12 @@
 export type Priority = 'urgent' | 'high' | 'medium' | 'low'
 
 export type Status = 
-  | 'to_clarify'    // A clarifier (Label: New)
-  | 'to_specify'    // A spécifier (Label: Clarified)
-  | 'to_implement'  // A implémenter (Label: Specified)
-  | 'to_test'       // A tester (Label: Implemented)
-  | 'to_close'      // A fermer (Label: Reviewed)
+  | 'to_clarify'    // A clarifier (Label: #new)
+  | 'to_specify'    // A spécifier (Label: #clarified)
+  | 'to_implement'  // A implémenter (Label: #specified)
+  | 'to_test'       // A tester (Label: #implemented)
+  | 'to_close'      // En revue / PR (Label: #reviewed)
+  | 'finished'      // Terminé (Label: #finished)
   | 'backlog'
   | 'specified'
   | 'in_progress'
@@ -53,12 +54,15 @@ export interface Project {
   icon: string
   color: AccentColor | string
   repoPath: string
+  gitRemoteUrl?: string
   linearTeam: string
   githubRepo: string
   issueTracker: IssueTracker
+  trackerUrl?: string
   isDefault: boolean
   taskCount?: number
   stageMapping?: Record<WorkflowStage, string>
+  skillOverrides?: Record<string, string>
   createdAt: string
   updatedAt: string
 }
@@ -163,6 +167,10 @@ export type AccentColor =
   | 'cyan'
   | 'blue'
   | 'orange'
+  | 'neon-cyan'
+  | 'neon-purple'
+  | 'neon-green'
+  | 'neon-amber'
 
 export type Theme = 'dark' | 'light' | 'system'
 
@@ -174,7 +182,7 @@ export type ViewMode = 'board' | 'list' | 'activities' | 'sync'
 
 export type BoardGroupingMode = 'workflow' | 'status'
 
-export type WorkflowStage = 'untouched' | 'clarified' | 'specified' | 'implemented' | 'reviewed' | 'finished'
+export type WorkflowStage = 'new' | 'clarified' | 'specified' | 'implemented' | 'reviewed' | 'finished'
 
 export type DetailMode = 'modal' | 'panel'
 

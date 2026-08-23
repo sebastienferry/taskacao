@@ -47,14 +47,15 @@ export const getTaskWorkflowStage = (task: Task): WorkflowStage => {
   if (labels.includes('implemented')) return 'implemented'
   if (labels.includes('specified')) return 'specified'
   if (labels.includes('clarified')) return 'clarified'
-  if (labels.includes('untouched') || labels.includes('new')) return 'untouched'
+  if (labels.includes('new') || labels.includes('untouched')) return 'new'
 
   // Fallback from status if no workflow label is present
-  if (task.status === 'to_close' || task.status === 'done') return 'finished'
+  if (task.status === 'finished' || task.status === 'done') return 'finished'
+  if (task.status === 'to_close') return 'reviewed'
   if (task.status === 'to_test' || task.status === 'to_validate') return 'implemented'
   if (task.status === 'to_implement' || task.status === 'in_progress') return 'specified'
   if (task.status === 'to_specify' || task.status === 'specified') return 'clarified'
-  return 'untouched'
+  return 'new'
 }
 
 export const BoardView: React.FC = () => {
@@ -76,19 +77,19 @@ export const BoardView: React.FC = () => {
 
   // -------------------------------------------------------------
   // MODE 1: Workflow Labels Columns (Pipeline IA)
-  // untouched -> clarified -> specified -> implemented -> reviewed -> finished
+  // new -> clarified -> specified -> implemented -> reviewed -> finished
   // -------------------------------------------------------------
   const workflowColumns: WorkflowColumnConfig[] = [
     {
-      id: 'untouched',
-      title: 'Untouched',
-      stageLabel: '#untouched',
+      id: 'new',
+      title: 'New',
+      stageLabel: '#new',
       stageColor: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
-      icon: <HelpCircle size={16} className="text-cyan-400" />,
+      icon: <Sparkles size={16} className="text-cyan-400" />,
       color: 'text-cyan-400',
       borderColor: 'border-cyan-500/30',
       badgeBg: 'bg-cyan-500/20 text-cyan-300',
-      description: 'Tickets bruts à cadrer',
+      description: 'Nouveaux tickets non encore traités par IA',
     },
     {
       id: 'clarified',
@@ -159,10 +160,10 @@ export const BoardView: React.FC = () => {
       return taskStatus === 'in_progress' || taskStatus === 'to_specify' || taskStatus === 'to_implement' || taskStatus === 'specified'
     }
     if (colId === 'to_test') {
-      return taskStatus === 'to_test' || taskStatus === 'to_validate'
+      return taskStatus === 'to_test' || taskStatus === 'to_validate' || taskStatus === 'to_close'
     }
-    if (colId === 'to_close') {
-      return taskStatus === 'to_close' || taskStatus === 'done'
+    if (colId === 'to_close' || colId === 'finished') {
+      return taskStatus === 'finished' || taskStatus === 'done'
     }
     return taskStatus === colId
   }
@@ -202,7 +203,7 @@ export const BoardView: React.FC = () => {
       description: 'Prêt pour test & merge',
     },
     {
-      id: 'to_close',
+      id: 'finished',
       title: 'Done',
       stageLabel: 'Terminé',
       stageColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
@@ -296,7 +297,7 @@ export const BoardView: React.FC = () => {
                   ? 'bg-[var(--accent-color)] text-white shadow-xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]'
               }`}
-              title="Grouper par étape du cycle de vie IA (Labels : untouched ➔ clarified ➔ specified ➔ implemented ➔ reviewed ➔ finished)"
+              title="Grouper par étape du cycle de vie IA (Labels : new ➔ clarified ➔ specified ➔ implemented ➔ reviewed ➔ finished)"
             >
               <Sparkles size={13} className={boardGrouping === 'workflow' ? 'text-amber-300' : 'text-amber-400'} />
               <span>Pipeline IA (Labels)</span>
@@ -350,49 +351,13 @@ export const BoardView: React.FC = () => {
               const colTasks = tasks.filter(t => getTaskWorkflowStage(t) === col.id)
               const isOver = dragOverColumn === col.id
 
-              // Collapsed Finished Column
-              if (col.id === 'finished' && hideDone) {
-                return (
-                  <div
-                    key={col.id}
-                    onDragOver={e => handleDragOver(e, col.id)}
-                    onDragLeave={e => handleDragLeave(e, col.id)}
-                    onDrop={e => handleDropWorkflow(e, col.id)}
-                    onClick={toggleHideDone}
-                    className={`w-14 shrink-0 flex flex-col items-center justify-between py-4 rounded-2xl bg-[var(--bg-secondary)]/60 border transition-all duration-200 cursor-pointer group hover:bg-[var(--bg-secondary)] select-none ${
-                      isOver
-                        ? 'border-emerald-500 ring-2 ring-emerald-500/30 bg-emerald-500/15'
-                        : 'border-[var(--border-color)] hover:border-emerald-500/40'
-                    }`}
-                    title="Colonne Finished masquée - Glissez une tâche ici pour la terminer, ou cliquez pour l'afficher"
-                  >
-                    <div className="flex flex-col items-center gap-1.5">
-                      <CheckCircle2 size={18} className="text-emerald-400" />
-                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300">
-                        {colTasks.length}
-                      </span>
-                    </div>
-
-                    <div className="flex-1 flex items-center justify-center my-4">
-                      <span className="[writing-mode:vertical-lr] rotate-180 text-xs font-bold text-[var(--text-secondary)] group-hover:text-emerald-400 tracking-wider transition-colors">
-                        {col.title} ({colTasks.length})
-                      </span>
-                    </div>
-
-                    <div className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-muted)] group-hover:text-emerald-400 transition-colors">
-                      <Eye size={14} />
-                    </div>
-                  </div>
-                )
-              }
-
               return (
                 <div
                   key={col.id}
                   onDragOver={e => handleDragOver(e, col.id)}
                   onDragLeave={e => handleDragLeave(e, col.id)}
                   onDrop={e => handleDropWorkflow(e, col.id)}
-                  className={`kanban-column shrink-0 flex flex-col rounded-2xl bg-[var(--bg-secondary)]/70 border transition-all duration-200 ${
+                  className={`kanban-column w-[320px] min-w-[290px] shrink-0 flex flex-col rounded-2xl bg-[var(--bg-secondary)]/70 border column-neon-${col.id} transition-all duration-200 ${
                     isOver
                       ? 'border-[var(--accent-color)] ring-2 ring-[var(--accent-glow)] bg-[var(--accent-light)]/20'
                       : 'border-[var(--border-color)]'
@@ -506,7 +471,7 @@ export const BoardView: React.FC = () => {
                   onDragOver={e => handleDragOver(e, col.id)}
                   onDragLeave={e => handleDragLeave(e, col.id)}
                   onDrop={e => handleDropStatus(e, col.id)}
-                  className={`kanban-column shrink-0 flex flex-col rounded-2xl bg-[var(--bg-secondary)]/70 border transition-all duration-200 ${
+                  className={`kanban-column w-[320px] min-w-[290px] shrink-0 flex flex-col rounded-2xl bg-[var(--bg-secondary)]/70 border transition-all duration-200 ${
                     isOver
                       ? 'border-[var(--accent-color)] ring-2 ring-[var(--accent-glow)] bg-[var(--accent-light)]/20'
                       : 'border-[var(--border-color)]'

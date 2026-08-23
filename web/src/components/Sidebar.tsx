@@ -18,7 +18,6 @@ import {
   Layers,
   RotateCcw,
   RefreshCw,
-  Bot,
   Folder,
   Terminal,
   Zap,
@@ -99,16 +98,18 @@ export const Sidebar: React.FC = () => {
     to_specify: tasks.filter(t => t.status === 'to_specify' || t.status === 'specified').length,
     to_implement: tasks.filter(t => t.status === 'to_implement' || t.status === 'in_progress').length,
     to_test: tasks.filter(t => t.status === 'to_test' || t.status === 'to_validate').length,
-    to_close: tasks.filter(t => t.status === 'to_close' || t.status === 'done').length,
+    to_close: tasks.filter(t => t.status === 'to_close').length,
+    finished: tasks.filter(t => t.status === 'finished' || t.status === 'done').length,
   }
 
   const workflowItems: { status: Status | null; label: string; stageLabel: string; stageColor: string; icon: React.ReactNode; count: number; color: string }[] = [
     { status: null, label: t.nav.allTasks, stageLabel: '', stageColor: '', icon: <Inbox size={16} />, count: counts.all, color: 'text-slate-400' },
-    { status: 'to_clarify', label: t.status.to_clarify, stageLabel: 'New', stageColor: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30', icon: <HelpCircle size={16} />, count: counts.to_clarify, color: 'text-cyan-400' },
-    { status: 'to_specify', label: t.status.to_specify, stageLabel: 'Clarified', stageColor: 'bg-amber-500/15 text-amber-400 border-amber-500/30', icon: <FileCode size={16} />, count: counts.to_specify, color: 'text-amber-400' },
-    { status: 'to_implement', label: t.status.to_implement, stageLabel: 'Specified', stageColor: 'bg-blue-500/15 text-blue-400 border-blue-500/30', icon: <Flame size={16} />, count: counts.to_implement, color: 'text-blue-400' },
-    { status: 'to_test', label: t.status.to_test, stageLabel: 'Implemented', stageColor: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30', icon: <ShieldCheck size={16} />, count: counts.to_test, color: 'text-indigo-400' },
-    { status: 'to_close', label: t.status.to_close, stageLabel: 'Reviewed', stageColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', icon: <CheckCircle2 size={16} />, count: counts.to_close, color: 'text-emerald-400' },
+    { status: 'to_clarify', label: t.status.to_clarify, stageLabel: '#new', stageColor: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30', icon: <Sparkles size={16} />, count: counts.to_clarify, color: 'text-cyan-400' },
+    { status: 'to_specify', label: t.status.to_specify, stageLabel: '#clarified', stageColor: 'bg-amber-500/15 text-amber-400 border-amber-500/30', icon: <HelpCircle size={16} />, count: counts.to_specify, color: 'text-amber-400' },
+    { status: 'to_implement', label: t.status.to_implement, stageLabel: '#specified', stageColor: 'bg-blue-500/15 text-blue-400 border-blue-500/30', icon: <FileCode size={16} />, count: counts.to_implement, color: 'text-blue-400' },
+    { status: 'to_test', label: t.status.to_test, stageLabel: '#implemented', stageColor: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30', icon: <Flame size={16} />, count: counts.to_test, color: 'text-indigo-400' },
+    { status: 'to_close', label: t.status.to_close, stageLabel: '#reviewed', stageColor: 'bg-purple-500/15 text-purple-400 border-purple-500/30', icon: <ShieldCheck size={16} />, count: counts.to_close, color: 'text-purple-400' },
+    { status: 'finished', label: t.status.finished, stageLabel: '#finished', stageColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', icon: <CheckCircle2 size={16} />, count: counts.finished, color: 'text-emerald-400' },
   ]
 
   const isMyTasksActive = assigneeFilter === settings.userName
@@ -116,16 +117,21 @@ export const Sidebar: React.FC = () => {
 
   return (
     <aside
-      className={`relative flex flex-col border-r transition-all duration-300 ease-in-out select-none bg-[var(--bg-secondary)] border-[var(--border-color)] ${
+      className={`relative flex flex-col border-r transition-all duration-300 ease-in-out select-none ${
         sidebarCollapsed ? 'w-16' : 'w-64'
-      } h-screen z-20 shrink-0`}
+      } h-screen z-20 shrink-0 border-[var(--sidebar-border)] shadow-xs`}
+      style={{
+        background: 'linear-gradient(180deg, var(--sidebar-accent-tint) 0%, var(--bg-secondary) 85%)',
+      }}
     >
-      {/* Brand Header */}
-      <div className="flex items-center justify-between h-14 px-3 border-b border-[var(--border-color)]">
+      {/* Brand Header with Accent Glow */}
+      <div className="flex items-center justify-between h-14 px-3 border-b border-[var(--sidebar-border)] bg-[var(--accent-light)]/25 backdrop-blur-xs">
         {!sidebarCollapsed ? (
           <>
             <div className="flex items-center gap-2.5 min-w-0 overflow-hidden">
-              <TaskacaoLogo size={32} className="shrink-0 drop-shadow-sm" />
+              <div className="p-0.5 rounded-xl bg-[var(--accent-light)] border border-[var(--accent-color)]/30 shadow-[0_0_12px_var(--accent-glow)]">
+                <TaskacaoLogo size={28} className="shrink-0" />
+              </div>
               <span className="font-bold tracking-tight text-base text-[var(--text-primary)] truncate">
                 {t.app.title}
               </span>
@@ -134,7 +140,7 @@ export const Sidebar: React.FC = () => {
             <button
               type="button"
               onClick={() => setSidebarCollapsed(true)}
-              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors shrink-0"
+              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors shrink-0 cursor-pointer"
               title={t.nav.toggleSidebar || 'Replier'}
             >
               <ChevronLeft size={16} />
@@ -145,11 +151,13 @@ export const Sidebar: React.FC = () => {
             <button
               type="button"
               onClick={() => setSidebarCollapsed(false)}
-              className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-[var(--bg-tertiary)] transition-all relative group"
+              className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-[var(--bg-tertiary)] transition-all relative group cursor-pointer"
               title={`${t.app.title} - ${t.nav.toggleSidebar || 'Déplier'}`}
             >
-              <TaskacaoLogo size={32} className="shrink-0 drop-shadow-sm" />
-              <span className="absolute -bottom-0.5 -right-0.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-full p-0.5 text-[var(--text-muted)] group-hover:text-[var(--text-primary)] opacity-0 group-hover:opacity-100 transition-opacity shadow-xs">
+              <div className="p-0.5 rounded-lg bg-[var(--accent-light)] border border-[var(--accent-color)]/30 shadow-[0_0_8px_var(--accent-glow)]">
+                <TaskacaoLogo size={24} className="shrink-0" />
+              </div>
+              <span className="absolute -bottom-0.5 -right-0.5 bg-[var(--bg-secondary)] border border-[var(--sidebar-border)] rounded-full p-0.5 text-[var(--text-muted)] group-hover:text-[var(--text-primary)] opacity-0 group-hover:opacity-100 transition-opacity shadow-xs">
                 <ChevronRight size={10} />
               </span>
             </button>
@@ -164,13 +172,13 @@ export const Sidebar: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsProjectDropdownOpen(prev => !prev)}
-              className="w-full flex items-center justify-between p-2 rounded-xl bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] border border-[var(--border-color)] transition-all text-left group shadow-xs"
+              className="w-full flex items-center justify-between p-2 rounded-xl bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] border border-[var(--sidebar-border)] hover:border-[var(--accent-color)]/50 transition-all text-left group shadow-xs cursor-pointer"
             >
               <div className="flex items-center gap-2 min-w-0">
                 <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
                   currentProject
                     ? `bg-${currentProject.color || 'indigo'}-500/20 text-${currentProject.color || 'indigo'}-400 border border-${currentProject.color || 'indigo'}-500/30`
-                    : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                    : 'bg-[var(--accent-light)] accent-text border border-[var(--accent-color)]/30'
                 }`}>
                   {currentProject ? renderProjectIcon(currentProject.icon, 13) : <Layers size={13} />}
                 </div>
@@ -179,7 +187,7 @@ export const Sidebar: React.FC = () => {
                     {currentProject ? currentProject.name : 'Tous les projets'}
                   </span>
                   <span className="text-[10px] text-[var(--text-muted)] font-mono truncate">
-                    {currentProject ? `${currentProject.linearTeam || 'FRE'} · ${currentProject.taskCount || 0} tâches` : `${projects.length} projets`}
+                    {currentProject ? `${currentProject.linearTeam ? currentProject.linearTeam + ' · ' : ''}${currentProject.taskCount || 0} tâches` : `${projects.length} projets`}
                   </span>
                 </div>
               </div>
@@ -189,7 +197,7 @@ export const Sidebar: React.FC = () => {
 
             {/* Dropdown Menu */}
             {isProjectDropdownOpen && (
-              <div className="absolute left-0 top-full mt-1.5 w-72 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+              <div className="absolute left-0 top-full mt-1.5 w-72 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--sidebar-border)] shadow-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
                 <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center justify-between">
                   <span>Espaces Projets</span>
                   <span className="font-mono text-[9px]">{projects.length} projets</span>
@@ -202,9 +210,9 @@ export const Sidebar: React.FC = () => {
                     setSelectedProjectId('all')
                     setIsProjectDropdownOpen(false)
                   }}
-                  className={`w-full flex items-center justify-between p-2 rounded-xl text-xs transition-all ${
+                  className={`w-full flex items-center justify-between p-2 rounded-xl text-xs transition-all cursor-pointer ${
                     selectedProjectId === 'all'
-                      ? 'bg-[var(--accent-light)] accent-text font-bold'
+                      ? 'bg-[var(--accent-light)] accent-text font-bold border border-[var(--accent-color)]/30'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                   }`}
                 >
@@ -232,7 +240,7 @@ export const Sidebar: React.FC = () => {
                         }}
                         className={`group/item w-full flex items-center justify-between p-2 rounded-xl text-xs cursor-pointer transition-all ${
                           isSel
-                            ? 'bg-[var(--accent-light)] accent-text font-bold'
+                            ? 'bg-[var(--accent-light)] accent-text font-bold border border-[var(--accent-color)]/30'
                             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                         }`}
                       >
@@ -243,7 +251,7 @@ export const Sidebar: React.FC = () => {
                           <div className="flex flex-col min-w-0">
                             <span className="truncate">{p.name}</span>
                             <span className="text-[9px] text-[var(--text-muted)] font-mono truncate max-w-[120px]">
-                              {p.linearTeam || 'FRE'} · {p.repoPath ? p.repoPath.split('/').pop() : ''}
+                              {p.linearTeam ? p.linearTeam + ' · ' : ''}{p.repoPath ? p.repoPath.split('/').pop() : ''}
                             </span>
                           </div>
                         </div>
@@ -260,7 +268,7 @@ export const Sidebar: React.FC = () => {
                               setIsProjectModalOpen(true)
                               setIsProjectDropdownOpen(false)
                             }}
-                            className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-primary)] opacity-0 group-hover/item:opacity-100 transition-opacity"
+                            className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-primary)] opacity-0 group-hover/item:opacity-100 transition-opacity cursor-pointer"
                             title="Configurer ce projet"
                           >
                             <Settings2 size={12} />
@@ -281,7 +289,7 @@ export const Sidebar: React.FC = () => {
                     setIsProjectModalOpen(true)
                     setIsProjectDropdownOpen(false)
                   }}
-                  className="w-full flex items-center gap-2 p-2 rounded-xl text-xs font-semibold text-[var(--accent-color)] hover:bg-[var(--accent-light)] transition-colors"
+                  className="w-full flex items-center gap-2 p-2 rounded-xl text-xs font-semibold text-[var(--accent-color)] hover:bg-[var(--accent-light)] transition-colors cursor-pointer"
                 >
                   <Plus size={14} />
                   <span>Nouveau projet...</span>
@@ -293,7 +301,7 @@ export const Sidebar: React.FC = () => {
           <button
             type="button"
             onClick={() => setIsProjectModalOpen(true)}
-            className="w-full flex items-center justify-center p-2 rounded-xl bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] text-[var(--accent-color)] transition-colors"
+            className="w-full flex items-center justify-center p-2 rounded-xl bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] text-[var(--accent-color)] border border-[var(--sidebar-border)] transition-colors cursor-pointer"
             title={currentProject ? currentProject.name : 'Changer de projet'}
           >
             {currentProject ? renderProjectIcon(currentProject.icon, 16) : <Layers size={16} />}
@@ -313,9 +321,9 @@ export const Sidebar: React.FC = () => {
           <div className="space-y-0.5">
             <button
               onClick={() => setActiveView('board')}
-              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'board'
-                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.board}
@@ -325,9 +333,9 @@ export const Sidebar: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveView('list')}
-              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'list'
-                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.list}
@@ -337,9 +345,9 @@ export const Sidebar: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveView('activities')}
-              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'activities'
-                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.activities}
@@ -362,9 +370,9 @@ export const Sidebar: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveView('sync')}
-              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'sync'
-                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.sync || "Synchronisation"}
@@ -396,9 +404,9 @@ export const Sidebar: React.FC = () => {
                     setPriorityFilter(null)
                     setLabelFilter(null)
                   }}
-                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                     isActive
-                      ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                      ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                   }`}
                   title={item.label}
@@ -418,9 +426,9 @@ export const Sidebar: React.FC = () => {
                   </div>
                   {!sidebarCollapsed && (
                     <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
                         isActive
-                          ? 'bg-[var(--accent-color)] text-white font-bold'
+                          ? 'bg-[var(--accent-color)] text-white shadow-xs'
                           : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
                       }`}
                     >
@@ -443,9 +451,9 @@ export const Sidebar: React.FC = () => {
           <div className="space-y-0.5">
             <button
               onClick={() => setAssigneeFilter(isMyTasksActive ? null : settings.userName)}
-              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 isMyTasksActive
-                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.myTasks}
@@ -457,9 +465,9 @@ export const Sidebar: React.FC = () => {
             </button>
             <button
               onClick={() => setPriorityFilter(isUrgentActive ? null : 'urgent')}
-              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 isUrgentActive
-                  ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                  ? 'bg-rose-500/20 text-rose-300 font-bold shadow-xs border-l-2 border-rose-500 pl-2'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.urgentHigh}
@@ -487,9 +495,9 @@ export const Sidebar: React.FC = () => {
                   <button
                     key={lbl}
                     onClick={() => setLabelFilter(isSelected ? null : lbl)}
-                    className={`w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-xs transition-all ${
+                    className={`w-full flex items-center gap-2 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer ${
                       isSelected
-                        ? 'bg-[var(--accent-light)] accent-text font-semibold'
+                        ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                     }`}
                     title={lbl}
@@ -505,13 +513,13 @@ export const Sidebar: React.FC = () => {
       </div>
 
       {/* Footer Profile & Settings */}
-      <div className="p-2 border-t border-[var(--border-color)] space-y-1">
+      <div className="p-2 border-t border-[var(--sidebar-border)] bg-[var(--accent-light)]/15 backdrop-blur-xs space-y-1">
         <button
           onClick={() => setIsProfileOpen(true)}
-          className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] transition-colors group text-left"
+          className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] transition-colors group text-left cursor-pointer"
           title={t.nav.settings}
         >
-          <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs accent-bg text-white shadow shrink-0">
+          <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs accent-bg text-white shadow-md shrink-0">
             {settings.userName ? settings.userName.substring(0, 2).toUpperCase() : 'SF'}
           </div>
           {!sidebarCollapsed && (
@@ -519,9 +527,8 @@ export const Sidebar: React.FC = () => {
               <div className="text-xs font-semibold truncate text-[var(--text-primary)]">
                 {settings.userName || 'Sylvain Ferry'}
               </div>
-              <div className="text-[10px] text-[var(--text-muted)] truncate flex items-center gap-1 font-mono">
-                <Bot size={11} className="text-amber-400" />
-                {settings.aiProvider.toUpperCase()} | Linear+GH
+              <div className="text-[10px] text-[var(--text-muted)] truncate">
+                {settings.userEmail || 'Paramètres & Profil'}
               </div>
             </div>
           )}
@@ -533,7 +540,7 @@ export const Sidebar: React.FC = () => {
         {!sidebarCollapsed && (
           <button
             onClick={() => reseedDemo()}
-            className="w-full flex items-center gap-2 px-2.5 py-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] rounded transition-colors"
+            className="w-full flex items-center gap-2 px-2.5 py-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] rounded-lg transition-colors cursor-pointer"
             title={t.nav.reseedDemo}
           >
             <RotateCcw size={11} />

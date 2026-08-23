@@ -578,7 +578,7 @@ func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, er
 
 		tasks = append(tasks, models.Task{
 			ID:          fmt.Sprintf("gh-%d", item.Number),
-			Key:         fmt.Sprintf("GH-#%d", item.Number),
+			Key:         fmt.Sprintf("#%d", item.Number),
 			Title:       item.Title,
 			Description: item.Body,
 			Status:      status,
@@ -631,7 +631,7 @@ func (r *Runner) CreateGithubIssue(repo string, repoPath string, title string, d
 	issueURL := strings.TrimSpace(output)
 	parts := strings.Split(issueURL, "/")
 	issueNum := parts[len(parts)-1]
-	key := fmt.Sprintf("GH-#%s", issueNum)
+	key := fmt.Sprintf("#%s", issueNum)
 	id := fmt.Sprintf("gh-%s", issueNum)
 
 	now := time.Now()
@@ -650,6 +650,15 @@ func (r *Runner) CreateGithubIssue(repo string, repoPath string, title string, d
 	}, nil
 }
 
+func cleanGithubIssueNum(keyOrNumber string) (int, error) {
+	s := strings.TrimSpace(keyOrNumber)
+	s = strings.TrimPrefix(s, "GH-#")
+	s = strings.TrimPrefix(s, "gh-")
+	s = strings.TrimPrefix(s, "GH-")
+	s = strings.TrimPrefix(s, "#")
+	return strconv.Atoi(s)
+}
+
 func (r *Runner) UpdateGithubIssueState(repo string, repoPath string, keyOrNumber string, status models.Status) error {
 	if repo == "" {
 		repo = "sebastienferry/fretzee-studio"
@@ -658,9 +667,7 @@ func (r *Runner) UpdateGithubIssueState(repo string, repoPath string, keyOrNumbe
 		repoPath = "/Users/sferry/Sources/fretzee-studio"
 	}
 
-	cleanNum := strings.TrimPrefix(keyOrNumber, "GH-#")
-	cleanNum = strings.TrimPrefix(cleanNum, "gh-")
-	num, err := strconv.Atoi(cleanNum)
+	num, err := cleanGithubIssueNum(keyOrNumber)
 	if err != nil {
 		return fmt.Errorf("invalid github issue number: %s", keyOrNumber)
 	}
@@ -681,7 +688,7 @@ func (r *Runner) UpdateGithubIssueState(repo string, repoPath string, keyOrNumbe
 	return err
 }
 
-func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber string, title *string, description *string, status *models.Status, labels []string) error {
+func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber string, title *string, description *string, status *models.Status, labels []string, removedLabels []string) error {
 	if repo == "" {
 		repo = "sebastienferry/fretzee-studio"
 	}
@@ -689,9 +696,7 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 		repoPath = "/Users/sferry/Sources/fretzee-studio"
 	}
 
-	cleanNum := strings.TrimPrefix(keyOrNumber, "GH-#")
-	cleanNum = strings.TrimPrefix(cleanNum, "gh-")
-	num, err := strconv.Atoi(cleanNum)
+	num, err := cleanGithubIssueNum(keyOrNumber)
 	if err != nil {
 		return fmt.Errorf("invalid github issue number: %s", keyOrNumber)
 	}
@@ -704,7 +709,26 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 		ghPath = "/opt/homebrew/bin/gh"
 	}
 
-	// Edit title, body & labels
+	// 1. Update State (close / reopen)
+	if status != nil {
+		if *status == models.StatusFinished || *status == models.StatusDone || *status == models.StatusToClose {
+			output, err := r.runCommand(ctx, repoPath, ghPath, "issue", "close", strconv.Itoa(num), "-R", repo)
+			if err != nil {
+				log.Printf("[CLI] gh issue close %d failed: %v (output: %s)", num, err, output)
+			} else {
+				log.Printf("[CLI] Closed GitHub issue #%d in %s", num, repo)
+			}
+		} else {
+			output, err := r.runCommand(ctx, repoPath, ghPath, "issue", "reopen", strconv.Itoa(num), "-R", repo)
+			if err != nil {
+				log.Printf("[CLI] gh issue reopen %d failed: %v (output: %s)", num, err, output)
+			} else {
+				log.Printf("[CLI] Reopened GitHub issue #%d in %s", num, repo)
+			}
+		}
+	}
+
+	// 2. Edit title, body & labels
 	args := []string{"issue", "edit", strconv.Itoa(num), "-R", repo}
 	needEdit := false
 	if title != nil && *title != "" {
@@ -715,63 +739,89 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 		args = append(args, "--body", *description)
 		needEdit = true
 	}
-	for _, l := range labels {
-		args = append(args, "--add-label", l)
-		needEdit = true
+
+	// Handle workflow stage labels
+	allStages := []string{"new", "untouched", "clarified", "specified", "implemented", "reviewed", "finished"}
+	if len(labels) > 0 {
+		var activeStage string
+		for _, l := range labels {
+			cleanL := strings.TrimPrefix(strings.ToLower(l), "#")
+			for _, st := range allStages {
+				if cleanL == st {
+					activeStage = st
+					break
+				}
+			}
+		}
+
+		if activeStage != "" {
+			args = append(args, "--add-label", activeStage)
+			for _, st := range allStages {
+				if st != activeStage {
+					args = append(args, "--remove-label", st)
+				}
+			}
+			needEdit = true
+		}
+
+		// Also add other non-workflow labels
+		for _, l := range labels {
+			cleanL := strings.TrimPrefix(strings.ToLower(l), "#")
+			isStage := false
+			for _, st := range allStages {
+				if cleanL == st {
+					isStage = true
+					break
+				}
+			}
+			if !isStage && cleanL != "" {
+				args = append(args, "--add-label", cleanL)
+				needEdit = true
+			}
+		}
+	}
+
+	// Remove explicitly removed labels
+	for _, rl := range removedLabels {
+		cleanRl := strings.TrimPrefix(strings.ToLower(rl), "#")
+		if cleanRl != "" {
+			args = append(args, "--remove-label", cleanRl)
+			needEdit = true
+		}
 	}
 
 	if needEdit {
-		_, _ = r.runCommand(ctx, repoPath, ghPath, args...)
-	}
-
-	// State update (close / reopen)
-	if status != nil {
-		if *status == models.StatusDone {
-			_, _ = r.runCommand(ctx, repoPath, ghPath, "issue", "close", strconv.Itoa(num), "-R", repo)
+		output, err := r.runCommand(ctx, repoPath, ghPath, args...)
+		if err != nil {
+			log.Printf("[CLI] gh issue edit #%d failed: %v (output: %s)", num, err, output)
 		} else {
-			_, _ = r.runCommand(ctx, repoPath, ghPath, "issue", "reopen", strconv.Itoa(num), "-R", repo)
+			log.Printf("[CLI] Successfully updated GitHub issue #%d in %s", num, repo)
 		}
 	}
+
 	return nil
 }
 
 func (r *Runner) AddIssueComment(source string, repo string, repoPath string, key string, body string) error {
-	if strings.TrimSpace(body) == "" {
+	if body == "" {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	if source == "linear" || strings.HasPrefix(key, "FRE-") {
-		linearPath, err := exec.LookPath("linear")
+		linPath, err := exec.LookPath("linear")
 		if err != nil {
-			linearPath = "/opt/homebrew/bin/linear"
+			linPath = "/opt/homebrew/bin/linear"
 		}
-
-		// Try writing to temp file for multi-line markdown comment
-		tmpFile, tmpErr := os.CreateTemp("", "linear-comment-*.md")
-		if tmpErr == nil {
-			tmpPath := tmpFile.Name()
-			defer os.Remove(tmpPath)
-			_, _ = tmpFile.WriteString(body)
-			_ = tmpFile.Close()
-
-			output, err := r.runCommand(ctx, "", linearPath, "issue", "comment", "add", key, "--body-file", tmpPath)
-			if err == nil {
-				log.Printf("[CLI] Comment added to Linear %s: %s", key, strings.TrimSpace(output))
-				return nil
-			}
-			log.Printf("[CLI] linear issue comment add --body-file failed: %v (output: %s), trying direct -b flag...", err, output)
-		}
-
-		output, err := r.runCommand(ctx, "", linearPath, "issue", "comment", "add", key, "-b", body)
+		output, err := r.runCommand(ctx, repoPath, linPath, "issue", "comment", "add", key, "--body", body)
 		if err != nil {
 			log.Printf("[CLI] linear issue comment add %s failed: %v (output: %s)", key, err, output)
 		}
 		return err
 
-	} else if source == "github" || strings.HasPrefix(key, "GH-#") || strings.HasPrefix(key, "gh-") {
+	} else if source == "github" || strings.HasPrefix(key, "#") || strings.HasPrefix(key, "GH-#") || strings.HasPrefix(key, "gh-") {
 		ghPath, err := exec.LookPath("gh")
 		if err != nil {
 			ghPath = "/opt/homebrew/bin/gh"
@@ -779,8 +829,11 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 		if repo == "" {
 			repo = "sebastienferry/fretzee-studio"
 		}
-		cleanNum := strings.TrimPrefix(key, "GH-#")
-		cleanNum = strings.TrimPrefix(cleanNum, "gh-")
+		num, err := cleanGithubIssueNum(key)
+		if err != nil {
+			return fmt.Errorf("invalid github issue number: %s", key)
+		}
+		cleanNum := strconv.Itoa(num)
 
 		tmpFile, tmpErr := os.CreateTemp("", "gh-comment-*.md")
 		if tmpErr == nil {

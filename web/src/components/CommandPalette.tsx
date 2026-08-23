@@ -148,7 +148,7 @@ export const CommandPalette: React.FC = () => {
     },
     ...projects.map(p => ({
       id: `switch_proj_${p.id}`,
-      title: `Basculer sur le projet: ${p.name} (${p.linearTeam || 'FRE'})`,
+      title: `Basculer sur le projet: ${p.name}${p.linearTeam ? ` (${p.linearTeam})` : ''}`,
       icon: <Layers size={16} className={`text-${p.color || 'indigo'}-400`} />,
       shortcut: p.slug.substring(0, 3).toUpperCase(),
       action: () => {
