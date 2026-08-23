@@ -696,6 +696,46 @@ func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string,
 		}
 	}
 
+	// Symlink / propagate skills and agent configurations (.gemini, .agy, .agents, .taskacao)
+	agentDirs := []string{".gemini", ".agy", ".agents", ".taskacao"}
+	for _, ad := range agentDirs {
+		mainAd := filepath.Join(mainRepoPath, ad)
+		wtAd := filepath.Join(worktreePath, ad)
+		if fi, err := os.Stat(mainAd); err == nil && fi.IsDir() {
+			if _, err := os.Stat(wtAd); os.IsNotExist(err) {
+				_ = os.Symlink(mainAd, wtAd)
+			}
+		}
+	}
+
+	// Ensure default skills are present in the worktree
+	for _, s := range DefaultProjectSkills {
+		dirs := []string{
+			filepath.Join(worktreePath, ".gemini", "skills", s.DirName),
+			filepath.Join(worktreePath, ".agy", "skills", s.DirName),
+			filepath.Join(worktreePath, ".agents", "skills", s.DirName),
+		}
+		for _, dir := range dirs {
+			_ = os.MkdirAll(dir, 0755)
+			filePath := filepath.Join(dir, "SKILL.md")
+			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+				_ = os.WriteFile(filePath, []byte(s.Content), 0644)
+			}
+		}
+	}
+
+	// Symlink .env and .env.local if present in root
+	envFiles := []string{".env", ".env.local"}
+	for _, ef := range envFiles {
+		mainEf := filepath.Join(mainRepoPath, ef)
+		wtEf := filepath.Join(worktreePath, ef)
+		if fi, err := os.Stat(mainEf); err == nil && !fi.IsDir() {
+			if _, err := os.Stat(wtEf); os.IsNotExist(err) {
+				_ = os.Symlink(mainEf, wtEf)
+			}
+		}
+	}
+
 	return worktreePath, targetBranch, nil
 }
 
