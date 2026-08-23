@@ -332,7 +332,7 @@ export const TaskChatDrawer: React.FC = () => {
                       {chatTask.branchName}
                     </span>
                   )}
-                  <span>• CWD: {project?.repoPath ? project.repoPath.split('/').pop() : 'fretzee-studio'}</span>
+                  <span>• CWD: {project?.repoPath ? (project.repoPath.split('/').pop() || project.name) : (project?.name || 'Workspace')}</span>
                   <span>• {settings.aiProvider.toUpperCase()}</span>
                 </div>
               </div>

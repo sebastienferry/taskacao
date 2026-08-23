@@ -2,8 +2,6 @@ import React, { useState, useEffect, useRef } from 'react'
 import {
   X,
   Plus,
-  FolderGit2,
-  Folder,
   Loader2
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
@@ -17,7 +15,6 @@ export const QuickAddModal: React.FC = () => {
     createTask,
     projects,
     selectedProjectId,
-    settings,
     t,
   } = useApp()
 
@@ -159,9 +156,23 @@ export const QuickAddModal: React.FC = () => {
           {/* Project Target */}
           {projects.length > 0 && (
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                Espace Projet Cible *
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                  Projet *
+                </label>
+                {activeProject && (
+                  <span className="text-[10px] text-[var(--text-muted)] flex items-center gap-1 font-mono">
+                    <span>Tracker :</span>
+                    <span className="font-semibold text-[var(--accent-color)]">
+                      {activeProject.issueTracker === 'linear'
+                        ? `Linear (${activeProject.linearTeam || 'FRE'})`
+                        : activeProject.issueTracker === 'github'
+                        ? `GitHub (${activeProject.githubRepo ? activeProject.githubRepo.split('/')[1] || activeProject.githubRepo : 'repo'})`
+                        : 'Local'}
+                    </span>
+                  </span>
+                )}
+              </div>
               <select
                 value={taskProjectId}
                 onChange={e => handleProjectChange(e.target.value)}
@@ -169,66 +180,12 @@ export const QuickAddModal: React.FC = () => {
               >
                 {projects.map(p => (
                   <option key={p.id} value={p.id}>
-                    {p.name} ({p.issueTracker?.toUpperCase() || 'LOCAL'}{p.linearTeam ? ` · ${p.linearTeam}` : ''})
+                    {p.name}
                   </option>
                 ))}
               </select>
             </div>
           )}
-
-          {/* Tracker Selection (Linear / GitHub / Local) */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-                {t.quickAdd.tracker}
-              </label>
-              {activeProject?.issueTracker && (
-                <span className="text-[10px] text-[var(--text-muted)]">
-                  (Défaut projet : {activeProject.issueTracker.toUpperCase()})
-                </span>
-              )}
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => setSource('linear')}
-                className={`py-2 px-2.5 rounded-xl border text-center font-bold text-xs flex items-center justify-center gap-1.5 transition-all ${
-                  source === 'linear'
-                    ? 'bg-[var(--accent-light)] border-[var(--accent-color)] accent-text ring-2 ring-[var(--accent-glow)]'
-                    : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[var(--text-muted)]'
-                }`}
-              >
-                <span className="font-bold text-indigo-400 font-mono text-sm leading-none">◆</span>
-                <span>Linear {activeProject?.linearTeam ? `(${activeProject.linearTeam})` : settings.linearTeam ? `(${settings.linearTeam})` : ''}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSource('github')}
-                className={`py-2 px-2.5 rounded-xl border text-center font-bold text-xs flex items-center justify-center gap-1.5 transition-all ${
-                  source === 'github'
-                    ? 'bg-[var(--accent-light)] border-[var(--accent-color)] accent-text ring-2 ring-[var(--accent-glow)]'
-                    : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[var(--text-muted)]'
-                }`}
-              >
-                <FolderGit2 size={13} className="text-purple-400" />
-                <span>GitHub {activeProject?.githubRepo ? `(${activeProject.githubRepo.split('/')[1] || activeProject.githubRepo})` : ''}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSource('local')}
-                className={`py-2 px-2.5 rounded-xl border text-center font-bold text-xs flex items-center justify-center gap-1.5 transition-all ${
-                  source === 'local'
-                    ? 'bg-[var(--accent-light)] border-[var(--accent-color)] accent-text ring-2 ring-[var(--accent-glow)]'
-                    : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[var(--text-muted)]'
-                }`}
-              >
-                <Folder size={13} className="text-emerald-400" />
-                <span>Local {activeProject ? `(${activeProject.linearTeam || activeProject.slug?.toUpperCase() || 'TASK'})` : ''}</span>
-              </button>
-            </div>
-          </div>
 
           {/* Status & Priority Selectors */}
           <div className="grid grid-cols-2 gap-3">

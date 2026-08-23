@@ -63,7 +63,7 @@ export const TaskDetailModal: React.FC = () => {
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState<Status>('backlog')
   const [priority, setPriority] = useState<Priority>('medium')
-  const [taskProjectId, setTaskProjectId] = useState<string>('fretzee-studio')
+  const [taskProjectId, setTaskProjectId] = useState<string>(projects[0]?.id || '')
   const [branchName, setBranchName] = useState('')
   const [prUrl, setPrUrl] = useState('')
   const [labels, setLabels] = useState<string[]>([])
@@ -89,7 +89,7 @@ export const TaskDetailModal: React.FC = () => {
       setDescription(selectedTask.description || '')
       setStatus(selectedTask.status)
       setPriority(selectedTask.priority)
-      setTaskProjectId(selectedTask.projectId || 'fretzee-studio')
+      setTaskProjectId(selectedTask.projectId || projects[0]?.id || '')
       setBranchName(selectedTask.branchName || '')
       setPrUrl(selectedTask.prUrl || '')
       setLabels(selectedTask.labels || [])
@@ -614,9 +614,22 @@ export const TaskDetailModal: React.FC = () => {
 
         {/* Project */}
         <div>
-          <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-            Projet
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+              Projet
+            </label>
+            {projects.find(p => p.id === taskProjectId) && (
+              <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                Tracker : <span className="font-semibold text-[var(--accent-color)]">
+                  {projects.find(p => p.id === taskProjectId)?.issueTracker === 'linear'
+                    ? `Linear (${projects.find(p => p.id === taskProjectId)?.linearTeam || 'FRE'})`
+                    : projects.find(p => p.id === taskProjectId)?.issueTracker === 'github'
+                    ? 'GitHub'
+                    : 'Local'}
+                </span>
+              </span>
+            )}
+          </div>
           <select
             value={taskProjectId}
             onChange={async (e) => {
