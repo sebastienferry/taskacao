@@ -109,6 +109,8 @@ interface AppContextType {
   setDiffTask: (task: Task | null) => void
   fetchGitDiff: (taskId: string) => Promise<GitDiffResult | null>
   checkoutTaskBranch: (taskId: string) => Promise<boolean>
+  cleanLocalBranches: (projectIdOrPath?: string) => Promise<boolean>
+  deleteGitBranch: (branch: string, deleteRemote?: boolean, projectIdOrPath?: string) => Promise<boolean>
 }
 
 const defaultSettings: UserSettings = {
@@ -1331,6 +1333,72 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [selectedProjectId, fetchGitBranches, fetchGitStatus, addToast])
 
+  const cleanLocalBranches = useCallback(async (projectIdOrPath?: string): Promise<boolean> => {
+    try {
+      const target = projectIdOrPath || selectedProjectId || ''
+      const res = await fetch(`${API_BASE}/git/branches/clean`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: target }),
+      })
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.error || 'Erreur lors du nettoyage des branches')
+      }
+      const data = await res.json()
+      await fetchGitBranches(target)
+      await fetchGitStatus()
+      addToast({
+        type: 'success',
+        title: 'Nettoyage des branches locales',
+        description: data.message || `${data.deletedBranches?.length || 0} branches supprimées.`,
+      })
+      return true
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Échec du nettoyage',
+        description: err.message,
+      })
+      return false
+    }
+  }, [selectedProjectId, fetchGitBranches, fetchGitStatus, addToast])
+
+  const deleteGitBranch = useCallback(async (branch: string, deleteRemote: boolean = false, projectIdOrPath?: string): Promise<boolean> => {
+    try {
+      const target = projectIdOrPath || selectedProjectId || ''
+      const res = await fetch(`${API_BASE}/git/branches/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          branch,
+          deleteRemote,
+          projectId: target,
+        }),
+      })
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.error || 'Erreur lors de la suppression de la branche')
+      }
+      const data = await res.json()
+      await fetchGitBranches(target)
+      await fetchGitStatus()
+      addToast({
+        type: 'success',
+        title: 'Branche supprimée',
+        description: data.message || `Branche '${branch}' supprimée.`,
+      })
+      return true
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Échec de la suppression',
+        description: err.message,
+      })
+      return false
+    }
+  }, [selectedProjectId, fetchGitBranches, fetchGitStatus, addToast])
+
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1485,6 +1553,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         clearCompletedActivities,
         availableLabels,
         availableAssignees,
+        cleanLocalBranches,
+        deleteGitBranch,
       }}
     >
       {children}

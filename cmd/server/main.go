@@ -40,6 +40,8 @@ func main() {
 	mux.HandleFunc("/api/git/status", h.HandleGitStatus)
 	mux.HandleFunc("/api/git/branches", h.HandleGitBranches)
 	mux.HandleFunc("/api/git-branches", h.HandleGitBranches)
+	mux.HandleFunc("/api/git/branches/clean", h.HandleGitCleanBranches)
+	mux.HandleFunc("/api/git/branches/delete", h.HandleGitDeleteBranch)
 	mux.HandleFunc("/api/git/checkout", h.HandleGitCheckout)
 	mux.HandleFunc("/api/git-checkout", h.HandleGitCheckout)
 	mux.HandleFunc("/api/sync/all", h.HandleSyncAll)

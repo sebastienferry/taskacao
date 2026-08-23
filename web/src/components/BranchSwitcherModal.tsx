@@ -10,6 +10,7 @@ import {
   Cloud,
   Loader2,
   ArrowRight,
+  Trash2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 
@@ -20,6 +21,8 @@ export const BranchSwitcherModal: React.FC = () => {
     gitBranches,
     fetchGitBranches,
     switchGitBranch,
+    cleanLocalBranches,
+    deleteGitBranch,
     gitStatus,
     currentProject,
     addToast,
@@ -27,12 +30,16 @@ export const BranchSwitcherModal: React.FC = () => {
 
   const [search, setSearch] = useState('')
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isCleaning, setIsCleaning] = useState(false)
+  const [deletingBranch, setDeletingBranch] = useState<string | null>(null)
   const [switchingBranch, setSwitchingBranch] = useState<string | null>(null)
 
   useEffect(() => {
     if (isBranchModalOpen) {
       setSearch('')
       setSwitchingBranch(null)
+      setDeletingBranch(null)
+      setIsCleaning(false)
       fetchGitBranches()
     }
   }, [isBranchModalOpen, fetchGitBranches])
@@ -51,8 +58,38 @@ export const BranchSwitcherModal: React.FC = () => {
     }
   }
 
+  const handleCleanAll = async () => {
+    if (isCleaning) return
+    const confirmed = window.confirm(
+      'Voulez-vous vraiment supprimer TOUTES les branches locales de ce projet (sauf la branche principale main/master) ? Les worktrees associés seront également nettoyés.'
+    )
+    if (!confirmed) return
+
+    setIsCleaning(true)
+    try {
+      await cleanLocalBranches()
+    } finally {
+      setIsCleaning(false)
+    }
+  }
+
+  const handleDeleteBranch = async (branchName: string) => {
+    if (deletingBranch) return
+    const confirmed = window.confirm(
+      `Voulez-vous supprimer définitivement la branche locale "${branchName}" ?`
+    )
+    if (!confirmed) return
+
+    setDeletingBranch(branchName)
+    try {
+      await deleteGitBranch(branchName, false)
+    } finally {
+      setDeletingBranch(null)
+    }
+  }
+
   const handleSwitch = async (branchName: string, create: boolean = false) => {
-    if (switchingBranch) return
+    if (switchingBranch || deletingBranch || isCleaning) return
     setSwitchingBranch(branchName)
     try {
       const success = await switchGitBranch(branchName, create)
@@ -227,6 +264,22 @@ export const BranchSwitcherModal: React.FC = () => {
               <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
                 Branches Locales ({localBranches.length})
               </span>
+              {localBranches.some(b => b.name !== 'main' && b.name !== 'master') && (
+                <button
+                  type="button"
+                  onClick={handleCleanAll}
+                  disabled={isCleaning}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[10px] font-medium text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all cursor-pointer disabled:opacity-50"
+                  title="Supprimer toutes les branches locales sauf la branche par défaut (main/master)"
+                >
+                  {isCleaning ? (
+                    <Loader2 size={10} className="animate-spin" />
+                  ) : (
+                    <Trash2 size={10} />
+                  )}
+                  <span>Nettoyer les locales</span>
+                </button>
+              )}
             </div>
 
             <div className="mt-1 space-y-1">
@@ -238,6 +291,8 @@ export const BranchSwitcherModal: React.FC = () => {
                 localBranches.map(branch => {
                   const isCurrent = branch.name === currentBranch
                   const isSwitching = switchingBranch === branch.name
+                  const isDeleting = deletingBranch === branch.name
+                  const canDelete = !isCurrent && branch.name !== 'main' && branch.name !== 'master'
 
                   return (
                     <div
@@ -283,12 +338,32 @@ export const BranchSwitcherModal: React.FC = () => {
                         ) : isCurrent ? (
                           <Check size={14} className="text-cyan-400" />
                         ) : (
-                          <button
-                            type="button"
-                            className="opacity-0 group-hover:opacity-100 px-2 py-0.5 rounded-md text-[10px] font-medium bg-[var(--accent-color)] text-white transition-opacity"
-                          >
-                            Bascule
-                          </button>
+                          <div className="flex items-center gap-1">
+                            {canDelete && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleDeleteBranch(branch.name)
+                                }}
+                                disabled={isDeleting}
+                                className="opacity-0 group-hover:opacity-100 p-1 rounded-md text-[var(--text-muted)] hover:text-rose-400 hover:bg-rose-500/15 transition-all cursor-pointer disabled:opacity-50"
+                                title={`Supprimer la branche ${branch.name}`}
+                              >
+                                {isDeleting ? (
+                                  <Loader2 size={12} className="animate-spin text-rose-400" />
+                                ) : (
+                                  <Trash2 size={12} />
+                                )}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="opacity-0 group-hover:opacity-100 px-2 py-0.5 rounded-md text-[10px] font-medium bg-[var(--accent-color)] text-white transition-opacity"
+                            >
+                              Bascule
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>

@@ -1112,6 +1112,148 @@ func (d *DB) SwitchGitBranch(projectIDOrPath, targetBranch string, create bool) 
 	return d.runner.GetCwdGitStatus(repoPath)
 }
 
+func (d *DB) CleanAllLocalBranches(projectIDOrPath string) (*models.CleanBranchesResult, error) {
+	d.mu.RLock()
+	repoPath := projectIDOrPath
+	if projectIDOrPath != "" {
+		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
+			repoPath = proj.RepoPath
+		}
+	}
+	if repoPath == "" {
+		settings, _ := d.getSettingsUnsafe()
+		if settings != nil && settings.RepoPath != "" {
+			repoPath = settings.RepoPath
+		}
+	}
+	d.mu.RUnlock()
+
+	if repoPath == "" {
+		repoPath = "."
+	}
+
+	if fi, err := os.Stat(repoPath); err != nil || !fi.IsDir() {
+		return nil, fmt.Errorf("dossier introuvable: %s", repoPath)
+	}
+
+	// 1. Detect default branch (main or master)
+	defaultBranch := "main"
+	if err := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "main").Run(); err != nil {
+		if err2 := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "master").Run(); err2 == nil {
+			defaultBranch = "master"
+		}
+	}
+
+	// 2. Remove any active worktrees under .tasks/worktrees/
+	worktreesDir := filepath.Join(repoPath, ".tasks", "worktrees")
+	if entries, err := os.ReadDir(worktreesDir); err == nil {
+		for _, e := range entries {
+			wtPath := filepath.Join(worktreesDir, e.Name())
+			_ = exec.Command("git", "-C", repoPath, "worktree", "remove", "--force", wtPath).Run()
+			_ = os.RemoveAll(wtPath)
+		}
+	}
+	_ = exec.Command("git", "-C", repoPath, "worktree", "prune").Run()
+
+	// 3. Checkout default branch in main repo
+	_ = exec.Command("git", "-C", repoPath, "checkout", defaultBranch).Run()
+
+	// 4. List all local branches
+	out, err := exec.Command("git", "-C", repoPath, "branch", "--format=%(refname:short)").Output()
+	if err != nil {
+		return nil, fmt.Errorf("erreur liste des branches: %w", err)
+	}
+
+	var deleted []string
+	lines := strings.Split(string(out), "\n")
+	for _, l := range lines {
+		branch := strings.TrimSpace(l)
+		if branch == "" || branch == defaultBranch || branch == "main" || branch == "master" {
+			continue
+		}
+		// Force delete local branch
+		delCmd := exec.Command("git", "-C", repoPath, "branch", "-D", branch)
+		if delOut, delErr := delCmd.CombinedOutput(); delErr == nil {
+			deleted = append(deleted, branch)
+		} else {
+			log.Printf("[GIT] Failed to delete branch %s: %s", branch, string(delOut))
+		}
+	}
+
+	return &models.CleanBranchesResult{
+		RepoPath:        repoPath,
+		DefaultBranch:   defaultBranch,
+		DeletedBranches: deleted,
+		Message:         fmt.Sprintf("%d branches locales nettoyées avec succès.", len(deleted)),
+	}, nil
+}
+
+func (d *DB) DeleteGitBranch(projectIDOrPath string, branchName string, deleteRemote bool) error {
+	branchName = strings.TrimSpace(branchName)
+	if branchName == "" {
+		return fmt.Errorf("nom de branche requis")
+	}
+	if branchName == "main" || branchName == "master" || branchName == "HEAD" {
+		return fmt.Errorf("impossible de supprimer la branche principale '%s'", branchName)
+	}
+
+	d.mu.RLock()
+	repoPath := projectIDOrPath
+	if projectIDOrPath != "" {
+		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
+			repoPath = proj.RepoPath
+		}
+	}
+	if repoPath == "" {
+		settings, _ := d.getSettingsUnsafe()
+		if settings != nil && settings.RepoPath != "" {
+			repoPath = settings.RepoPath
+		}
+	}
+	d.mu.RUnlock()
+
+	if repoPath == "" {
+		repoPath = "."
+	}
+
+	// 1. If a worktree is checked out on this branch, remove it
+	worktreesDir := filepath.Join(repoPath, ".tasks", "worktrees")
+	if entries, err := os.ReadDir(worktreesDir); err == nil {
+		for _, e := range entries {
+			wtPath := filepath.Join(worktreesDir, e.Name())
+			curCmd := exec.Command("git", "-C", wtPath, "rev-parse", "--abbrev-ref", "HEAD")
+			if curOut, curErr := curCmd.Output(); curErr == nil && strings.TrimSpace(string(curOut)) == branchName {
+				_ = exec.Command("git", "-C", repoPath, "worktree", "remove", "--force", wtPath).Run()
+				_ = os.RemoveAll(wtPath)
+			}
+		}
+	}
+	_ = exec.Command("git", "-C", repoPath, "worktree", "prune").Run()
+
+	// 2. If main repo is currently on this branch, switch to main/master first
+	curCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	if curOut, curErr := curCmd.Output(); curErr == nil && strings.TrimSpace(string(curOut)) == branchName {
+		defaultBranch := "main"
+		if err := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "main").Run(); err != nil {
+			defaultBranch = "master"
+		}
+		_ = exec.Command("git", "-C", repoPath, "checkout", defaultBranch).Run()
+	}
+
+	// 3. Delete local branch
+	delCmd := exec.Command("git", "-C", repoPath, "branch", "-D", branchName)
+	if out, err := delCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("erreur suppression branche locale %s: %s", branchName, string(out))
+	}
+
+	// 4. Optionally delete remote branch
+	if deleteRemote {
+		_ = exec.Command("git", "-C", repoPath, "push", "origin", "--delete", branchName).Run()
+	}
+
+	return nil
+}
+
 func (d *DB) getNextTaskKey(prefix string) (string, error) {
 	if prefix == "" {
 		prefix = "TASK"

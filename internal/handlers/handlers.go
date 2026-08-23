@@ -150,6 +150,88 @@ func (h *Handler) HandleGitCheckout(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleGitCleanBranches(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		Path      string `json:"path"`
+		ProjectID string `json:"projectId"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	target := req.Path
+	if target == "" {
+		target = req.ProjectID
+	}
+	if target == "" {
+		target = r.URL.Query().Get("projectId")
+	}
+
+	res, err := h.db.CleanAllLocalBranches(target)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *Handler) HandleGitDeleteBranch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		Branch       string `json:"branch"`
+		Path         string `json:"path"`
+		ProjectID    string `json:"projectId"`
+		DeleteRemote bool   `json:"deleteRemote"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	branchName := req.Branch
+	if branchName == "" {
+		branchName = r.URL.Query().Get("branch")
+	}
+	if branchName == "" {
+		pathParts := strings.Split(r.URL.Path, "/")
+		if len(pathParts) > 0 {
+			last := pathParts[len(pathParts)-1]
+			if last != "delete" && last != "branches" {
+				branchName = last
+			}
+		}
+	}
+
+	if branchName == "" {
+		writeError(w, http.StatusBadRequest, "Nom de branche requis")
+		return
+	}
+
+	target := req.Path
+	if target == "" {
+		target = req.ProjectID
+	}
+	if target == "" {
+		target = r.URL.Query().Get("projectId")
+	}
+
+	err := h.db.DeleteGitBranch(target, branchName, req.DeleteRemote)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"branch":  branchName,
+		"message": fmt.Sprintf("Branche '%s' supprimée avec succès.", branchName),
+	})
+}
+
 func (h *Handler) HandleSyncAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")

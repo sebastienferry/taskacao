@@ -173,6 +173,13 @@ type GitBranchesInfo struct {
 	Branches      []GitBranchItem `json:"branches"`
 }
 
+type CleanBranchesResult struct {
+	RepoPath        string   `json:"repoPath"`
+	DefaultBranch   string   `json:"defaultBranch"`
+	DeletedBranches []string `json:"deletedBranches"`
+	Message         string   `json:"message"`
+}
+
 type GitDiffFile struct {
 	Path      string `json:"path"`
 	OldPath   string `json:"oldPath,omitempty"`
