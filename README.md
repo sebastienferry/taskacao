@@ -82,12 +82,24 @@ Puis ouvrez **http://localhost:5173**.
 
 ---
 
+## 📚 Documentation Technique Complète
+
+Une suite documentaire complète pour développeurs et LLMs est disponible dans le dossier [`/docs`](./docs) :
+
+- 🏛️ [**Architecture & Conception Générale** (`docs/ARCHITECTURE.md`)](./docs/ARCHITECTURE.md) : Modèle de concurrence, persistance SQLite, isolation Git Worktrees, PTY ZSH & WebSockets.
+- ⚡ [**Capacités & Workflows Agentiques** (`docs/CAPABILITIES.md`)](./docs/CAPABILITIES.md) : Multi-projets, pipeline de 5 skills, Auto-Pilot, synchronisation Linear / GitHub.
+- 🎨 [**Composants UX & Design Frontend** (`docs/UX_COMPONENTS.md`)](./docs/UX_COMPONENTS.md) : Kanban drag-and-drop, vue liste, terminal interactif Xterm.js, inspecteur de Diff Git.
+- 🔌 [**Spécification API & Schéma de Données** (`docs/API_AND_DATA_SPEC.md`)](./docs/API_AND_DATA_SPEC.md) : Schéma SQLite complet, endpoints REST et protocole WebSocket `/ws/terminal`.
+- 🤖 [**Guide de Ré-implémentation pour LLMs** (`docs/REIMPLEMENTATION_GUIDE.md`)](./docs/REIMPLEMENTATION_GUIDE.md) : Blueprint étape par étape pour reconstruire Taskacao de zéro.
+
+---
+
 ## ⌨️ Raccourcis Clavier
 
 | Raccourci | Action |
 |---|---|
 | `/` | Cibler la barre de recherche globale |
 | `Cmd+K` ou `Ctrl+K` | Ouvrir la palette de commandes & skills |
-| `N` ou `C` | Ouvrir la modale d'ajout rapide (Linear / GitHub / Local) |
+| `N` ou `C` | Ouvrir la modale d'ajout rapide de tâche |
 | `Esc` | Fermer la modale / vider la recherche |
 | `↑` / `↓` + `Entrée` | Naviguer et valider dans la palette d'actions |
