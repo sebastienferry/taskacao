@@ -55,6 +55,11 @@ func main() {
 	mux.HandleFunc("/api/settings", h.HandleSettings)
 	mux.HandleFunc("/api/seed", h.HandleSeed)
 
+	// Interactive PTY Terminal Routes & WebSocket
+	mux.HandleFunc("/ws/terminal", h.HandleTerminalWs)
+	mux.HandleFunc("/api/terminal/send", h.HandleTerminalSend)
+	mux.HandleFunc("/api/terminal/reset", h.HandleTerminalReset)
+
 	// Static Web Assets / SPA fallback
 	webDistDir := "./web/dist"
 	if _, err := os.Stat(webDistDir); err == nil {

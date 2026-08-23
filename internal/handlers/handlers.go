@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,14 +14,19 @@ import (
 	"github.com/google/uuid"
 	"tasks/internal/db"
 	"tasks/internal/models"
+	"tasks/internal/terminal"
 )
 
 type Handler struct {
-	db *db.DB
+	db          *db.DB
+	terminalMgr *terminal.Manager
 }
 
 func NewHandler(database *db.DB) *Handler {
-	return &Handler{db: database}
+	return &Handler{
+		db:          database,
+		terminalMgr: terminal.NewManager(),
+	}
 }
 
 func (h *Handler) EnableCORS(next http.Handler) http.Handler {
@@ -1083,4 +1089,129 @@ func (h *Handler) HandleActivityDetail(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
+}
+
+// HandleTerminalWs upgrades the connection to WebSocket and streams the interactive PTY session
+func (h *Handler) HandleTerminalWs(w http.ResponseWriter, r *http.Request) {
+	taskID := r.URL.Query().Get("taskId")
+	sessionID := r.URL.Query().Get("sessionId")
+	customCwd := r.URL.Query().Get("cwd")
+
+	if sessionID == "" {
+		if taskID != "" {
+			sessionID = "task-" + taskID
+		} else {
+			sessionID = "global-workspace"
+		}
+	}
+
+	workDir := customCwd
+	envVars := make(map[string]string)
+
+	if taskID != "" {
+		task, _ := h.db.GetTaskByID(taskID)
+		if task != nil {
+			envVars["TASKACAO_TASK_ID"] = task.ID
+			envVars["TASKACAO_TASK_KEY"] = task.Key
+			envVars["TASKACAO_TASK_TITLE"] = task.Title
+			envVars["TASKACAO_TASK_PROJECT"] = task.ProjectID
+
+			settings, _ := h.db.GetSettings()
+			baseRepo := "."
+			if settings != nil && settings.RepoPath != "" {
+				baseRepo = settings.RepoPath
+			}
+			if task.ProjectID != "" {
+				if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil && proj.RepoPath != "" {
+					baseRepo = proj.RepoPath
+					envVars["TASKACAO_PROJECT_NAME"] = proj.Name
+					envVars["TASKACAO_GITHUB_REPO"] = proj.GithubRepo
+					envVars["TASKACAO_LINEAR_TEAM"] = proj.LinearTeam
+				}
+			}
+
+			// Ensure task worktree
+			if baseRepo != "" {
+				wtPath, branch, err := h.db.EnsureTaskWorktree(baseRepo, task)
+				if err == nil && wtPath != "" {
+					workDir = wtPath
+					envVars["TASKACAO_TASK_WORKTREE"] = wtPath
+					envVars["TASKACAO_TASK_BRANCH"] = branch
+				} else if workDir == "" {
+					workDir = baseRepo
+				}
+			}
+		}
+	}
+
+	if workDir == "" {
+		workDir, _ = os.Getwd()
+	}
+
+	h.terminalMgr.HandleWebSocket(w, r, sessionID, workDir, envVars)
+}
+
+// HandleTerminalSend allows sending command strings / keystrokes into a running terminal session
+func (h *Handler) HandleTerminalSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		TaskID    string `json:"taskId"`
+		SessionID string `json:"sessionId"`
+		Input     string `json:"input"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	sessionID := req.SessionID
+	if sessionID == "" {
+		if req.TaskID != "" {
+			sessionID = "task-" + req.TaskID
+		} else {
+			sessionID = "global-workspace"
+		}
+	}
+
+	if err := h.terminalMgr.SendInput(sessionID, req.Input); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Input sent successfully"})
+}
+
+// HandleTerminalReset terminates the running PTY session so a clean shell can spawn
+func (h *Handler) HandleTerminalReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		TaskID    string `json:"taskId"`
+		SessionID string `json:"sessionId"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	sessionID := req.SessionID
+	if sessionID == "" {
+		if req.TaskID != "" {
+			sessionID = "task-" + req.TaskID
+		} else {
+			sessionID = "global-workspace"
+		}
+	}
+
+	_ = h.terminalMgr.CloseSession(sessionID)
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Terminal session reset successfully"})
 }

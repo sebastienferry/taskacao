@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { TaskMessage } from '../types'
+import { InteractiveTerminal } from './InteractiveTerminal'
 
 // Simple Markdown Renderer with Code Blocks and Copy Button
 const MarkdownContent: React.FC<{ content: string }> = ({ content }) => {
@@ -606,136 +607,104 @@ export const TaskChatDrawer: React.FC = () => {
               </>
             )}
 
-            {/* VIEW MODE B: RAW TERMINAL STREAM */}
+            {/* VIEW MODE B: INTERACTIVE ZSH TERMINAL (PTY) */}
             {activeTab === 'terminal' && (
-              <div className="h-full flex flex-col space-y-2 font-mono">
-                <div className="flex items-center justify-between text-[11px] text-slate-400 pb-1 border-b border-slate-800">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="font-bold text-slate-200">Terminal Copilot Stream ({settings.aiProvider})</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const fullLog = terminalLogs.join('\n')
-                      navigator.clipboard.writeText(fullLog)
-                    }}
-                    className="hover:text-white flex items-center gap-1 text-[10px] cursor-pointer"
-                  >
-                    <Copy size={11} />
-                    <span>Copier le flux</span>
-                  </button>
-                </div>
-
-                <div className="flex-1 p-4 rounded-2xl bg-slate-950 text-slate-200 border border-slate-800 text-xs overflow-y-auto leading-relaxed shadow-inner max-h-[calc(100vh-280px)] space-y-1">
-                  <div className="text-emerald-400 pb-2 border-b border-slate-900">
-                    Taskacao Interactive Terminal v2.0 - Target: {chatTask.key} ({chatTask.branchName || 'main'})
-                  </div>
-                  {terminalLogs.length === 0 ? (
-                    <div className="text-slate-600 italic py-4 text-center">
-                      Aucun log de terminal pour l'instant. Envoyez une commande ou une compétence pour démarrer le streaming.
-                    </div>
-                  ) : (
-                    terminalLogs.map((log, lIdx) => (
-                      <pre key={lIdx} className="whitespace-pre-wrap font-mono text-[11px] text-slate-300">
-                        {log}
-                      </pre>
-                    ))
-                  )}
-                  <div ref={terminalEndRef} />
-                </div>
+              <div className="h-full flex flex-col -m-2">
+                <InteractiveTerminal task={chatTask} isExpanded={isFullscreen} />
               </div>
             )}
           </div>
 
-          {/* Input & Skills Bar */}
-          <div className="p-3 sm:p-4 border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/90 backdrop-blur-md shrink-0 space-y-2.5">
-            
-            {/* Quick Skills / Slash Actions */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] no-scrollbar">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] shrink-0 mr-1 flex items-center gap-1">
-                <Zap size={11} className="text-[var(--accent-color)]" />
-                Actions :
-              </span>
+          {/* Input & Skills Bar (Active in Chat mode) */}
+          {activeTab === 'chat' && (
+            <div className="p-3 sm:p-4 border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/90 backdrop-blur-md shrink-0 space-y-2.5">
+              
+              {/* Quick Skills / Slash Actions */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] no-scrollbar">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] shrink-0 mr-1 flex items-center gap-1">
+                  <Zap size={11} className="text-[var(--accent-color)]" />
+                  Actions :
+                </span>
 
-              <button
-                type="button"
-                onClick={() => handleSend('Analyse la tâche et pose les questions clés de clarification.', 'clarify')}
-                className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-amber-500/20 text-amber-300 border border-[var(--border-color)] hover:border-amber-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
-              >
-                🔍 /clarify
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSend('Analyse la tâche et pose les questions clés de clarification.', 'clarify')}
+                  className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-amber-500/20 text-amber-300 border border-[var(--border-color)] hover:border-amber-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
+                >
+                  🔍 /clarify
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleSend('Rédige la spécification technique Speckit pour ce ticket.', 'specify')}
-                className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-blue-500/20 text-blue-300 border border-[var(--border-color)] hover:border-blue-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
-              >
-                📝 /specify
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSend('Rédige la spécification technique Speckit pour ce ticket.', 'specify')}
+                  className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-blue-500/20 text-blue-300 border border-[var(--border-color)] hover:border-blue-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
+                >
+                  📝 /specify
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleSend('Implémente et écris directement les modifications de code pour ce ticket.', 'implement')}
-                className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-indigo-500/20 text-indigo-300 border border-[var(--border-color)] hover:border-indigo-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
-              >
-                💻 /code
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSend('Implémente et écris directement les modifications de code pour ce ticket.', 'implement')}
+                  className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-indigo-500/20 text-indigo-300 border border-[var(--border-color)] hover:border-indigo-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
+                >
+                  💻 /code
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleSend('Lance les tests et vérifie la compilation du projet.')}
-                className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-emerald-500/20 text-emerald-300 border border-[var(--border-color)] hover:border-emerald-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
-              >
-                🧪 /test
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSend('Lance les tests et vérifie la compilation du projet.')}
+                  className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-emerald-500/20 text-emerald-300 border border-[var(--border-color)] hover:border-emerald-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
+                >
+                  🧪 /test
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleSend('Vérifie les fichiers modifiés, commite et crée la Pull Request.', 'create_pr')}
-                className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-purple-500/20 text-purple-300 border border-[var(--border-color)] hover:border-purple-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
-              >
-                🚀 /pr
-              </button>
-            </div>
-
-            {/* Input form */}
-            <div className="relative flex items-end gap-2">
-              <div className="relative flex-1">
-                <textarea
-                  ref={inputRef}
-                  rows={2}
-                  value={inputText}
-                  onChange={e => setInputText(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={t.chat.sendPlaceholder}
-                  disabled={isStreaming}
-                  className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-color)] resize-none leading-relaxed shadow-inner"
-                />
+                <button
+                  type="button"
+                  onClick={() => handleSend('Vérifie les fichiers modifiés, commite et crée la Pull Request.', 'create_pr')}
+                  className="px-2 py-0.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-purple-500/20 text-purple-300 border border-[var(--border-color)] hover:border-purple-500/40 text-[10px] font-bold shrink-0 transition-colors cursor-pointer"
+                >
+                  🚀 /pr
+                </button>
               </div>
 
-              {isStreaming ? (
-                <button
-                  type="button"
-                  onClick={() => setIsStreaming(false)}
-                  className="h-10 px-4 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition-all cursor-pointer shrink-0"
-                >
-                  <Square size={13} fill="currentColor" />
-                  <span>{t.chat.cancelStream}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled={!inputText.trim()}
-                  onClick={() => handleSend()}
-                  className="h-10 px-4 rounded-xl bg-[var(--accent-color)] hover:opacity-90 disabled:opacity-40 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition-all cursor-pointer shrink-0"
-                >
-                  <span>{t.chat.send}</span>
-                  <Send size={13} />
-                </button>
-              )}
+              {/* Input form */}
+              <div className="relative flex items-end gap-2">
+                <div className="relative flex-1">
+                  <textarea
+                    ref={inputRef}
+                    rows={2}
+                    value={inputText}
+                    onChange={e => setInputText(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={t.chat.sendPlaceholder}
+                    disabled={isStreaming}
+                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-color)] resize-none leading-relaxed shadow-inner"
+                  />
+                </div>
+
+                {isStreaming ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsStreaming(false)}
+                    className="h-10 px-4 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition-all cursor-pointer shrink-0"
+                  >
+                    <Square size={13} fill="currentColor" />
+                    <span>{t.chat.cancelStream}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!inputText.trim()}
+                    onClick={() => handleSend()}
+                    className="h-10 px-4 rounded-xl bg-[var(--accent-color)] hover:opacity-90 disabled:opacity-40 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition-all cursor-pointer shrink-0"
+                  >
+                    <span>{t.chat.send}</span>
+                    <Send size={13} />
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

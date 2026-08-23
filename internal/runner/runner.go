@@ -25,7 +25,7 @@ func NewRunner() *Runner {
 	return &Runner{}
 }
 
-func getDynamicCustomPath() string {
+func GetDynamicCustomPath() string {
 	homeDir, _ := os.UserHomeDir()
 	var parts []string
 	if homeDir != "" {
@@ -35,7 +35,7 @@ func getDynamicCustomPath() string {
 	return strings.Join(parts, ":")
 }
 
-func findCliTool(tool string) (string, error) {
+func FindCliTool(tool string) (string, error) {
 	if p, err := exec.LookPath(tool); err == nil {
 		return p, nil
 	}
@@ -62,7 +62,7 @@ func (r *Runner) runCommand(ctx context.Context, dir string, name string, args .
 
 	// Inherit and extend PATH dynamically to include ~/.local/bin and Homebrew paths
 	env := os.Environ()
-	customPath := getDynamicCustomPath()
+	customPath := GetDynamicCustomPath()
 	foundPath := false
 	for i, e := range env {
 		if strings.HasPrefix(e, "PATH=") {
@@ -106,7 +106,7 @@ func (r *Runner) CheckCliTools(repoPath string) []models.CliStatus {
 	defer cancel()
 
 	for _, tool := range tools {
-		path, err := findCliTool(tool)
+		path, err := FindCliTool(tool)
 
 		status := models.CliStatus{
 			Tool:      tool,
@@ -1004,17 +1004,17 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 
 	switch provider {
 	case "agy":
-		agyPath, _ := findCliTool("agy")
+		agyPath, _ := FindCliTool("agy")
 		steps = append(steps, fmt.Sprintf("Exécution de : agy -p \"...\" dans %s", filepath.Base(repoDir)))
 		output, execErr = r.runCommand(ctx, repoDir, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
 
 	case "vibe":
-		vibePath, _ := findCliTool("vibe")
+		vibePath, _ := FindCliTool("vibe")
 		steps = append(steps, fmt.Sprintf("Exécution de : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
 		output, execErr = r.runCommand(ctx, repoDir, vibePath, "-p", finalPrompt, "--auto-approve")
 
 	case "claude":
-		claudePath, _ := findCliTool("claude")
+		claudePath, _ := FindCliTool("claude")
 		steps = append(steps, fmt.Sprintf("Exécution de : claude -p \"...\" dans %s", filepath.Base(repoDir)))
 		output, execErr = r.runCommand(ctx, repoDir, claudePath, "-p", finalPrompt)
 
@@ -1140,15 +1140,15 @@ func (r *Runner) RunAIChatStream(
 	var cmd *exec.Cmd
 	switch provider {
 	case "agy":
-		agyPath, _ := findCliTool("agy")
+		agyPath, _ := FindCliTool("agy")
 		addStep(fmt.Sprintf("Exécution en direct : agy -p \"...\" dans %s", filepath.Base(repoDir)))
 		cmd = exec.CommandContext(ctx, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
 	case "vibe":
-		vibePath, _ := findCliTool("vibe")
+		vibePath, _ := FindCliTool("vibe")
 		addStep(fmt.Sprintf("Exécution en direct : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
 		cmd = exec.CommandContext(ctx, vibePath, "-p", finalPrompt, "--auto-approve")
 	case "claude":
-		claudePath, _ := findCliTool("claude")
+		claudePath, _ := FindCliTool("claude")
 		addStep(fmt.Sprintf("Exécution en direct : claude -p \"...\" dans %s", filepath.Base(repoDir)))
 		cmd = exec.CommandContext(ctx, claudePath, "-p", finalPrompt)
 	default:
@@ -1165,7 +1165,7 @@ func (r *Runner) RunAIChatStream(
 
 	// Inherit and extend PATH
 	env := os.Environ()
-	customPath := getDynamicCustomPath()
+	customPath := GetDynamicCustomPath()
 	foundPath := false
 	for i, e := range env {
 		if strings.HasPrefix(e, "PATH=") {

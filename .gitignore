@@ -25,7 +25,5 @@ Thumbs.db
 tmp/
 scratch/
 
-# Taskacao config & parallel worktrees
+# Taskacao parallel agent worktrees
 .tasks/
-.taskacao/
-.fretzee/
