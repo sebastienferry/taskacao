@@ -53,6 +53,7 @@ export const TaskDetailModal: React.FC = () => {
     switchGitBranch,
     settings,
     updateSettings,
+    openInEditor,
     addToast,
     t,
   } = useApp()
@@ -211,10 +212,11 @@ export const TaskDetailModal: React.FC = () => {
         body: JSON.stringify({ body: commentBody }),
       })
       if (!res.ok) throw new Error('Comment failed')
+      const trackerName = selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Tracker'
       addToast({
         type: 'success',
         title: 'Commentaire posté',
-        description: `Le commentaire a été publié sur ${selectedTask.source === 'linear' ? 'Linear' : 'GitHub'}.`,
+        description: `Le commentaire a été publié sur ${trackerName}.`,
       })
       setClarificationInput('')
     } catch (err: any) {
@@ -238,8 +240,8 @@ export const TaskDetailModal: React.FC = () => {
       setDescription(updatedDesc)
       await updateTask(selectedTask.id, { description: updatedDesc, status: 'to_specify' })
       
-      // Also post comment on Linear/GitHub if remote task
-      if (selectedTask.source === 'linear' || selectedTask.source === 'github') {
+      // Also post comment on remote tracker if applicable
+      if (selectedTask.source === 'linear' || selectedTask.source === 'github' || selectedTask.source === 'jira') {
         try {
           await fetch(`/api/tasks/${encodeURIComponent(selectedTask.id)}/comment`, {
             method: 'POST',
@@ -458,10 +460,10 @@ export const TaskDetailModal: React.FC = () => {
               onClick={handlePostAnswersComment}
               disabled={!clarificationInput.trim() || isPostingComment}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] transition-all disabled:opacity-40"
-              title={`Poster ce commentaire directement sur ${selectedTask.source === 'linear' ? 'Linear' : 'GitHub'}`}
+              title={`Poster ce commentaire directement sur ${selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'le tracker'}`}
             >
               {isPostingComment ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-              <span className="hidden sm:inline">Commenter ({selectedTask.source === 'linear' ? 'Linear' : 'GitHub'})</span>
+              <span className="hidden sm:inline">Commenter ({selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Tracker'})</span>
             </button>
           </div>
 
@@ -752,6 +754,15 @@ export const TaskDetailModal: React.FC = () => {
                     <span>{copiedBranch ? 'Copié !' : 'Copier'}</span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => selectedTask && openInEditor({ taskId: selectedTask.id })}
+                  className="text-[9px] font-mono font-bold text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  title={`Ouvrir le dossier / worktree dans ${settings.editorCommand || 'VS Code'}`}
+                >
+                  <Code2 size={10} className="text-cyan-400" />
+                  <span>Ouvrir éditeur</span>
+                </button>
               </div>
             </div>
             <div className="relative">
@@ -1098,6 +1109,7 @@ export const TaskDetailModal: React.FC = () => {
                 <span className="font-mono text-sm font-bold text-[var(--accent-color)] bg-[var(--accent-light)] px-2.5 py-1 rounded-lg flex items-center gap-1.5 shrink-0">
                   {selectedTask.source === 'linear' && <span className="text-indigo-400 font-bold font-mono">◆</span>}
                   {selectedTask.source === 'github' && <FolderGit2 size={13} className="text-purple-400" />}
+                  {selectedTask.source === 'jira' && <span className="text-blue-400 font-sans font-black text-xs">J</span>}
                   {(!selectedTask.source || selectedTask.source === 'local') && <Folder size={13} className="text-emerald-400" />}
                   {selectedTask.key}
                 </span>
@@ -1112,11 +1124,13 @@ export const TaskDetailModal: React.FC = () => {
                         ? 'text-indigo-400 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30'
                         : selectedTask.source === 'github'
                         ? 'text-purple-400 bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30'
+                        : selectedTask.source === 'jira'
+                        ? 'text-blue-400 bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30'
                         : 'text-[var(--accent-color)] bg-[var(--accent-light)]'
                     }`}
-                    title="Ouvrir dans Linear/GitHub"
+                    title={selectedTask.source === 'linear' ? 'Ouvrir dans Linear' : selectedTask.source === 'github' ? 'Ouvrir dans GitHub' : selectedTask.source === 'jira' ? 'Ouvrir dans Jira' : 'Ouvrir'}
                   >
-                    <span>{selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : 'Ouvrir'}</span>
+                    <span>{selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Ouvrir'}</span>
                     <ExternalLink size={11} />
                   </a>
                 )}
@@ -1135,6 +1149,19 @@ export const TaskDetailModal: React.FC = () => {
                 >
                   <MessageSquare size={12} />
                   <span>Discuter</span>
+                </button>
+
+                {/* Open in Editor Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedTask) openInEditor({ taskId: selectedTask.id })
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 transition-all cursor-pointer shadow-xs active:scale-95"
+                  title={`Ouvrir le code / worktree dans ${settings.editorCommand || 'VS Code'}`}
+                >
+                  <Code2 size={12} className="text-cyan-400" />
+                  <span className="hidden sm:inline">Éditeur</span>
                 </button>
 
                 {/* Switch to Modal Button */}
@@ -1230,6 +1257,7 @@ export const TaskDetailModal: React.FC = () => {
             <span className="font-mono text-sm font-bold text-[var(--accent-color)] bg-[var(--accent-light)] px-2.5 py-1 rounded-lg flex items-center gap-1.5">
               {selectedTask.source === 'linear' && <span className="text-indigo-400 font-bold font-mono">◆</span>}
               {selectedTask.source === 'github' && <FolderGit2 size={13} className="text-purple-400" />}
+              {selectedTask.source === 'jira' && <span className="text-blue-400 font-sans font-black text-xs">J</span>}
               {(!selectedTask.source || selectedTask.source === 'local') && <Folder size={13} className="text-emerald-400" />}
               {selectedTask.key}
             </span>
@@ -1240,10 +1268,10 @@ export const TaskDetailModal: React.FC = () => {
                   target="_blank"
                   rel="noreferrer"
                   className="flex items-center gap-1 text-[11px] font-semibold text-[var(--accent-color)] hover:underline"
-                  title="Ouvrir dans Linear/GitHub"
+                  title={selectedTask.source === 'linear' ? 'Ouvrir dans Linear' : selectedTask.source === 'github' ? 'Ouvrir dans GitHub' : selectedTask.source === 'jira' ? 'Ouvrir dans Jira' : 'Ouvrir'}
                 >
                   <ExternalLink size={12} />
-                  <span>{selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : 'Ouvrir'}</span>
+                  <span>{selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Ouvrir'}</span>
                 </a>
               )}
             </div>
@@ -1261,6 +1289,19 @@ export const TaskDetailModal: React.FC = () => {
             >
               <MessageSquare size={13} />
               <span>Discuter avec l'agent</span>
+            </button>
+
+            {/* Open in Editor Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedTask) openInEditor({ taskId: selectedTask.id })
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 transition-all cursor-pointer shadow-xs active:scale-95"
+              title={`Ouvrir le code / worktree dans ${settings.editorCommand || 'VS Code'}`}
+            >
+              <Code2 size={13} className="text-cyan-400" />
+              <span>Éditeur ({settings.editorCommand || 'code'})</span>
             </button>
 
             {/* Switch to Right Panel Button */}
@@ -1479,7 +1520,7 @@ export const TaskDetailModal: React.FC = () => {
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] transition-all disabled:opacity-40"
                     >
                       {isPostingComment ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                      <span>Commenter ({selectedTask.source === 'linear' ? 'Linear' : 'GitHub'})</span>
+                      <span>Commenter ({selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Tracker'})</span>
                     </button>
                   </div>
 

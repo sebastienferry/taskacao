@@ -14,6 +14,7 @@ import {
   MessageSquare,
   CheckCircle2,
   Clock,
+  Code2,
 } from 'lucide-react'
 import type { Task, Priority } from '../types'
 import { useApp } from '../context/AppContext'
@@ -25,7 +26,7 @@ interface TaskCardProps {
 }
 
 export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStart }) => {
-  const { setSelectedTask, setChatTask, setDiffTask, runSkill, isSkillRunning, runningSkillId, activities, t } = useApp()
+  const { setSelectedTask, setChatTask, setDiffTask, runSkill, isSkillRunning, runningSkillId, activities, openInEditor, settings, t } = useApp()
 
   const formatRelativeTime = (dateStr?: string) => {
     if (!dateStr) return ''
@@ -155,12 +156,23 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
                   ? 'bg-indigo-500/15 text-indigo-400 hover:bg-indigo-500/25 border border-indigo-500/30'
                   : task.source === 'github'
                   ? 'bg-purple-500/15 text-purple-400 hover:bg-purple-500/25 border border-purple-500/30'
+                  : task.source === 'jira'
+                  ? 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25 border border-blue-500/30'
                   : 'bg-[var(--accent-light)] text-[var(--accent-color)] hover:opacity-80'
               }`}
-              title={task.source === 'linear' ? `Ouvrir ${task.key} sur Linear` : `Ouvrir ${task.key} sur GitHub`}
+              title={
+                task.source === 'linear'
+                  ? `Ouvrir ${task.key} sur Linear`
+                  : task.source === 'github'
+                  ? `Ouvrir ${task.key} sur GitHub`
+                  : task.source === 'jira'
+                  ? `Ouvrir ${task.key} sur Jira`
+                  : `Ouvrir ${task.key}`
+              }
             >
               {task.source === 'linear' && <span className="text-indigo-400">◆</span>}
               {task.source === 'github' && <FolderGit2 size={12} className="text-purple-400" />}
+              {task.source === 'jira' && <span className="text-blue-400 font-sans font-black text-[9px]">J</span>}
               <span className="truncate max-w-[120px]">{task.key}</span>
               <ExternalLink size={9} className="opacity-70 group-hover:opacity-100" />
             </a>
@@ -325,6 +337,20 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
           >
             <MessageSquare size={10} />
             <span>Discuter</span>
+          </button>
+
+          {/* Open in Editor button */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              openInEditor({ taskId: task.id })
+            }}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] transition-all cursor-pointer shadow-2xs active:scale-95"
+            title={`Ouvrir le dossier / code dans ${settings.editorCommand || 'VS Code'}`}
+          >
+            <Code2 size={10} className="text-cyan-400" />
+            <span>Éditeur</span>
           </button>
 
           {isNewOrBacklog ? (

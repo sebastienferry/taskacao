@@ -10,8 +10,10 @@ import {
   Zap,
   AlertCircle,
   GitBranch,
+  Code2,
 } from 'lucide-react'
 import type { Task } from '../types'
+import { useApp } from '../context/AppContext'
 
 interface InteractiveTerminalProps {
   task: Task
@@ -19,6 +21,7 @@ interface InteractiveTerminalProps {
 }
 
 export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ task, isExpanded }) => {
+  const { settings, openInEditor } = useApp()
   const terminalContainerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -190,23 +193,24 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ task, 
   }
 
   // Quick Action commands
-  const handleLaunchAgy = () => {
-    sendCommand(`agy\n`)
+  const aiCmd = settings.aiProvider || 'agy'
+  const handleLaunchAgent = () => {
+    sendCommand(`${aiCmd}\n`)
   }
 
   const handleRunSkill = (skill: string) => {
     switch (skill) {
       case 'clarify':
-        sendCommand(`agy -p "/clarify-issue"\n`)
+        sendCommand(`${aiCmd} -p "/clarify-issue"\n`)
         break
       case 'specify':
-        sendCommand(`agy -p "/specify-issue"\n`)
+        sendCommand(`${aiCmd} -p "/specify-issue"\n`)
         break
       case 'implement':
-        sendCommand(`agy -p "/code-issue"\n`)
+        sendCommand(`${aiCmd} -p "/code-issue"\n`)
         break
       case 'pr':
-        sendCommand(`agy -p "/create-pr"\n`)
+        sendCommand(`${aiCmd} -p "/create-pr"\n`)
         break
       case 'test':
         sendCommand(`npm test || go test ./...\n`)
@@ -330,11 +334,11 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ task, 
 
         <button
           type="button"
-          onClick={handleLaunchAgy}
+          onClick={handleLaunchAgent}
           className="flex items-center gap-1 px-2.5 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 rounded-md font-mono text-[11px] transition-all shrink-0 cursor-pointer shadow-sm hover:scale-[1.02]"
         >
           <Sparkles size={11} className="text-indigo-400" />
-          <span className="font-semibold">Lancer agy</span>
+          <span className="font-semibold">Lancer {aiCmd}</span>
         </button>
 
         <button
@@ -375,6 +379,16 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ task, 
           className="flex items-center gap-1 px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 rounded-md font-mono text-[10.5px] transition-all shrink-0 cursor-pointer"
         >
           <span>git status</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => openInEditor({ taskId: task.id })}
+          className="flex items-center gap-1 px-2 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 rounded-md font-mono text-[10.5px] transition-all shrink-0 cursor-pointer"
+          title={`Ouvrir le dossier dans ${settings.editorCommand || 'VS Code'}`}
+        >
+          <Code2 size={11} className="text-cyan-400" />
+          <span>{settings.editorCommand || 'code'}</span>
         </button>
       </div>
 

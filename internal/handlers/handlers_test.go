@@ -127,3 +127,40 @@ func TestCreateTaskWithCustomTrackerSource(t *testing.T) {
 	}
 }
 
+func TestHandleOpenEditor(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	database, err := db.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer database.Close()
+
+	h := handlers.NewHandler(database)
+
+	// Test HandleOpenEditor with echo command
+	body := `{"path": ".", "editorCommand": "echo"}`
+	req, err := http.NewRequest(http.MethodPost, "/api/open-editor", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	h.HandleOpenEditor(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected status 200 OK, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to decode response JSON: %v", err)
+	}
+
+	if resp["success"] != true {
+		t.Errorf("Expected success=true, got %v", resp["success"])
+	}
+}
+

@@ -12,6 +12,7 @@ import {
   Sliders,
   PanelRight,
   Square,
+  Code2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { AccentColor, Theme, Language, Density, ViewMode, DetailMode } from '../types'
@@ -35,6 +36,7 @@ export const ProfileModal: React.FC = () => {
   const [density, setDensity] = useState<Density>(settings.density)
   const [defaultView, setDefaultView] = useState<ViewMode>(settings.defaultView)
   const [detailMode, setDetailMode] = useState<DetailMode>(settings.detailMode || 'panel')
+  const [editorCommand, setEditorCommand] = useState(settings.editorCommand || 'code')
 
   useEffect(() => {
     if (isProfileOpen) {
@@ -46,6 +48,7 @@ export const ProfileModal: React.FC = () => {
       setDensity(settings.density)
       setDefaultView(settings.defaultView)
       setDetailMode(settings.detailMode || 'panel')
+      setEditorCommand(settings.editorCommand || 'code')
     }
   }, [isProfileOpen, settings])
 
@@ -93,6 +96,7 @@ export const ProfileModal: React.FC = () => {
       density,
       defaultView,
       detailMode,
+      editorCommand: editorCommand.trim() || 'code',
     })
     setIsProfileOpen(false)
   }
@@ -336,6 +340,56 @@ export const ProfileModal: React.FC = () => {
                   </button>
                 )
               })}
+            </div>
+          </div>
+
+          {/* Default Code Editor */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
+                <Code2 size={13} className="text-[var(--accent-color)]" />
+                <span>Éditeur de code (Ouvrir le dossier / code)</span>
+              </label>
+              <span className="text-[10px] text-[var(--text-muted)] font-mono">Défaut : code (VS Code)</span>
+            </div>
+            
+            {/* Quick Presets */}
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+              {[
+                { cmd: 'code', label: 'VS Code' },
+                { cmd: 'cursor', label: 'Cursor' },
+                { cmd: 'zed', label: 'Zed' },
+                { cmd: 'subl', label: 'Sublime' },
+                { cmd: 'idea', label: 'IntelliJ' },
+                { cmd: 'webstorm', label: 'WebStorm' },
+              ].map(preset => {
+                const isSelected = editorCommand === preset.cmd
+                return (
+                  <button
+                    key={preset.cmd}
+                    type="button"
+                    onClick={() => setEditorCommand(preset.cmd)}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-semibold border transition-all cursor-pointer text-center ${
+                      isSelected
+                        ? 'bg-[var(--accent-light)] border-[var(--accent-color)] accent-text shadow-xs'
+                        : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Custom Command Input */}
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                type="text"
+                value={editorCommand}
+                onChange={e => setEditorCommand(e.target.value)}
+                placeholder="Ex: code, cursor, zed"
+                className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
+              />
             </div>
           </div>
 

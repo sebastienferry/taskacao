@@ -34,3 +34,16 @@ func TestGetCwdGitStatus(t *testing.T) {
 	t.Logf("Detected git status: branch=%s, clean=%v, modified=%d, untracked=%d",
 		status.Branch, status.IsClean, status.ModifiedCount, status.UntrackedCount)
 }
+
+func TestOpenInEditor(t *testing.T) {
+	r := runner.NewRunner()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+
+	// Use 'echo' or 'true' as mock editor command
+	if err := r.OpenInEditor("echo", cwd); err != nil {
+		t.Fatalf("OpenInEditor failed with echo: %v", err)
+	}
+}

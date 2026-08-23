@@ -99,7 +99,7 @@ func (r *Runner) runCommand(ctx context.Context, dir string, name string, args .
 }
 
 func (r *Runner) CheckCliTools(repoPath string) []models.CliStatus {
-	tools := []string{"git", "gh", "linear", "agy", "vibe", "claude"}
+	tools := []string{"git", "gh", "linear", "acli", "agy", "vibe", "claude", "gemini", "codex"}
 	var results []models.CliStatus
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -120,36 +120,51 @@ func (r *Runner) CheckCliTools(repoPath string) []models.CliStatus {
 				out, aErr := r.runCommand(ctx, repoPath, path, "auth", "status")
 				if aErr == nil || strings.Contains(out, "Logged in to") {
 					status.AuthStatus = "Authenticated"
-					status.Details = "GitHub CLI connecté"
+					status.Details = "GitHub CLI connected"
 				} else {
 					status.AuthStatus = "Not Authenticated"
-					status.Details = "Exécutez 'gh auth login'"
+					status.Details = "Run 'gh auth login'"
 				}
 			case "linear":
 				out, aErr := r.runCommand(ctx, repoPath, path, "auth", "whoami")
 				if aErr == nil && strings.Contains(out, "Workspace:") {
 					status.AuthStatus = "Authenticated"
-					status.Details = "Linear connecté"
+					status.Details = "Linear connected"
 				} else {
 					status.AuthStatus = "Not Authenticated"
-					status.Details = "Exécutez 'linear auth login'"
+					status.Details = "Run 'linear auth login'"
+				}
+			case "acli":
+				out, aErr := r.runCommand(ctx, repoPath, path, "auth", "status")
+				if aErr == nil || strings.Contains(out, "Logged in") {
+					status.AuthStatus = "Authenticated"
+					status.Details = "Atlassian CLI connected"
+				} else {
+					status.AuthStatus = "Ready"
+					status.Details = "Atlassian CLI available"
 				}
 			case "git":
 				status.AuthStatus = "Ready"
-				status.Details = "Git disponible"
+				status.Details = "Git available"
 			case "agy":
 				status.AuthStatus = "Ready"
-				status.Details = "Antigravity CLI Agent prêt"
+				status.Details = "Antigravity CLI Agent ready"
 			case "vibe":
 				status.AuthStatus = "Ready"
-				status.Details = "Mistral Vibe CLI Agent prêt"
+				status.Details = "Mistral Vibe CLI Agent ready"
 			case "claude":
 				status.AuthStatus = "Ready"
-				status.Details = "Claude Code CLI Agent prêt"
+				status.Details = "Claude Code CLI Agent ready"
+			case "gemini":
+				status.AuthStatus = "Ready"
+				status.Details = "Gemini CLI Agent ready"
+			case "codex":
+				status.AuthStatus = "Ready"
+				status.Details = "Codex CLI Agent ready"
 			}
 		} else {
 			status.AuthStatus = "Not Installed"
-			status.Details = "Binaire introuvable dans le PATH"
+			status.Details = fmt.Sprintf("Tool '%s' not found in PATH", tool)
 		}
 
 		results = append(results, status)
@@ -158,7 +173,7 @@ func (r *Runner) CheckCliTools(repoPath string) []models.CliStatus {
 	return results
 }
 
-// Linear JSON structures
+// Linear API Data Models
 type LinearIssueNode struct {
 	ID          string `json:"id"`
 	Identifier  string `json:"identifier"`
@@ -167,15 +182,20 @@ type LinearIssueNode struct {
 	URL         string `json:"url"`
 	Priority    int    `json:"priority"`
 	State       struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Type  string `json:"type"`
+		Color string `json:"color"`
 	} `json:"state"`
 	Assignee *struct {
+		ID          string `json:"id"`
 		Name        string `json:"name"`
 		DisplayName string `json:"displayName"`
+		AvatarUrl   string `json:"avatarUrl"`
 	} `json:"assignee"`
 	Labels *struct {
 		Nodes []struct {
+			ID   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"nodes"`
 	} `json:"labels"`
@@ -188,19 +208,22 @@ type LinearQueryResponse struct {
 }
 
 func (r *Runner) SyncFromLinear(teamKey string) ([]models.Task, error) {
-	if teamKey == "" {
-		teamKey = "FRE"
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	linearPath, err := exec.LookPath("linear")
-	if err != nil {
-		linearPath = "/opt/homebrew/bin/linear"
+	linearPath, _ := FindCliTool("linear")
+	if linearPath == "" {
+		linearPath = "linear"
 	}
 
-	output, err := r.runCommand(ctx, "", linearPath, "issue", "query", "--team", teamKey, "--json")
+	var args []string
+	if teamKey != "" {
+		args = []string{"issue", "query", "--team", teamKey, "--json"}
+	} else {
+		args = []string{"issue", "query", "--json"}
+	}
+
+	output, err := r.runCommand(ctx, "", linearPath, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query Linear: %w (output: %s)", err, output)
 	}
@@ -787,8 +810,34 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 		}
 	}
 
-	// 2. Edit title, body & labels
-	args := []string{"issue", "edit", strconv.Itoa(num), "-R", repo}
+	// 2. Query existing labels so we only remove labels that actually exist on GitHub
+	existingLabelsMap := make(map[string]bool)
+	var viewArgs []string
+	if repo != "" {
+		viewArgs = []string{"issue", "view", strconv.Itoa(num), "-R", repo, "--json", "labels"}
+	} else {
+		viewArgs = []string{"issue", "view", strconv.Itoa(num), "--json", "labels"}
+	}
+	if viewOut, err := r.runCommand(ctx, repoPath, ghPath, viewArgs...); err == nil {
+		var viewRes struct {
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
+		}
+		if err := json.Unmarshal([]byte(viewOut), &viewRes); err == nil {
+			for _, l := range viewRes.Labels {
+				existingLabelsMap[strings.ToLower(l.Name)] = true
+			}
+		}
+	}
+
+	// 3. Edit title, body & labels
+	var args []string
+	if repo != "" {
+		args = []string{"issue", "edit", strconv.Itoa(num), "-R", repo}
+	} else {
+		args = []string{"issue", "edit", strconv.Itoa(num)}
+	}
 	needEdit := false
 	if title != nil && *title != "" {
 		args = append(args, "--title", *title)
@@ -801,8 +850,8 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 
 	// Handle workflow stage labels
 	allStages := []string{"new", "untouched", "clarified", "specified", "implemented", "reviewed", "finished"}
+	var activeStage string
 	if len(labels) > 0 {
-		var activeStage string
 		for _, l := range labels {
 			cleanL := strings.TrimPrefix(strings.ToLower(l), "#")
 			for _, st := range allStages {
@@ -816,7 +865,7 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 		if activeStage != "" {
 			args = append(args, "--add-label", activeStage)
 			for _, st := range allStages {
-				if st != activeStage {
+				if st != activeStage && existingLabelsMap[st] {
 					args = append(args, "--remove-label", st)
 				}
 			}
@@ -840,10 +889,10 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 		}
 	}
 
-	// Remove explicitly removed labels
+	// Remove explicitly removed labels only if they exist on the issue
 	for _, rl := range removedLabels {
 		cleanRl := strings.TrimPrefix(strings.ToLower(rl), "#")
-		if cleanRl != "" {
+		if cleanRl != "" && (len(existingLabelsMap) == 0 || existingLabelsMap[cleanRl]) {
 			args = append(args, "--remove-label", cleanRl)
 			needEdit = true
 		}
@@ -852,13 +901,269 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 	if needEdit {
 		output, err := r.runCommand(ctx, repoPath, ghPath, args...)
 		if err != nil {
-			log.Printf("[CLI] gh issue edit #%d failed: %v (output: %s)", num, err, output)
+			log.Printf("[CLI] gh issue edit #%d failed: %v (output: %s), retrying without --remove-label...", num, err, output)
+			// Fallback: Retry without --remove-label flags
+			var fallbackArgs []string
+			if repo != "" {
+				fallbackArgs = []string{"issue", "edit", strconv.Itoa(num), "-R", repo}
+			} else {
+				fallbackArgs = []string{"issue", "edit", strconv.Itoa(num)}
+			}
+			if title != nil && *title != "" {
+				fallbackArgs = append(fallbackArgs, "--title", *title)
+			}
+			if description != nil {
+				fallbackArgs = append(fallbackArgs, "--body", *description)
+			}
+			if activeStage != "" {
+				fallbackArgs = append(fallbackArgs, "--add-label", activeStage)
+			}
+			if out2, err2 := r.runCommand(ctx, repoPath, ghPath, fallbackArgs...); err2 == nil {
+				log.Printf("[CLI] Successfully updated GitHub issue #%d in %s (fallback)", num, repo)
+			} else {
+				log.Printf("[CLI] Fallback gh issue edit #%d also failed: %v (output: %s)", num, err2, out2)
+			}
 		} else {
 			log.Printf("[CLI] Successfully updated GitHub issue #%d in %s", num, repo)
 		}
 	}
 
 	return nil
+}
+
+// -------------------------------------------------------------
+// JIRA CLI (acli) INTEGRATION
+// -------------------------------------------------------------
+
+type JiraIssueField struct {
+	Summary     string `json:"summary"`
+	Description string `json:"description"`
+	Status      struct {
+		Name string `json:"name"`
+	} `json:"status"`
+	Priority struct {
+		Name string `json:"name"`
+	} `json:"priority"`
+	Assignee struct {
+		DisplayName string            `json:"displayName"`
+		AvatarUrls  map[string]string `json:"avatarUrls"`
+	} `json:"assignee"`
+	Labels  []string `json:"labels"`
+	Created string   `json:"created"`
+	Updated string   `json:"updated"`
+}
+
+type JiraIssueItem struct {
+	ID     string         `json:"id"`
+	Key    string         `json:"key"`
+	Self   string         `json:"self"`
+	Fields JiraIssueField `json:"fields"`
+}
+
+type JiraQueryResponse struct {
+	Issues []JiraIssueItem `json:"issues"`
+}
+
+func (r *Runner) SyncFromJira(projectKey string, repoPath string, trackerUrl string) ([]models.Task, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	var args []string
+	if projectKey != "" {
+		args = []string{"jira", "workitem", "list", "--project", projectKey, "--output", "json"}
+	} else {
+		args = []string{"jira", "workitem", "list", "--output", "json"}
+	}
+
+	output, err := r.runCommand(ctx, repoPath, acliPath, args...)
+	if err != nil {
+		args = []string{"jira", "issue", "list", "--output", "json"}
+		if projectKey != "" {
+			args = append(args, "--project", projectKey)
+		}
+		var err2 error
+		output, err2 = r.runCommand(ctx, repoPath, acliPath, args...)
+		if err2 != nil {
+			return nil, fmt.Errorf("failed to query Jira via acli: %w (output: %s)", err, output)
+		}
+	}
+
+	var items []JiraIssueItem
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		var resp JiraQueryResponse
+		if err2 := json.Unmarshal([]byte(output), &resp); err2 == nil {
+			items = resp.Issues
+		} else {
+			return nil, fmt.Errorf("failed to parse Jira JSON response: %w", err)
+		}
+	}
+
+	var tasks []models.Task
+	for i, item := range items {
+		var priority models.Priority
+		pName := strings.ToLower(item.Fields.Priority.Name)
+		switch {
+		case strings.Contains(pName, "urgent") || strings.Contains(pName, "blocker") || strings.Contains(pName, "highest") || strings.Contains(pName, "critical"):
+			priority = models.PriorityUrgent
+		case strings.Contains(pName, "high") || strings.Contains(pName, "major"):
+			priority = models.PriorityHigh
+		case strings.Contains(pName, "medium") || strings.Contains(pName, "normal"):
+			priority = models.PriorityMedium
+		default:
+			priority = models.PriorityLow
+		}
+
+		var status models.Status = models.StatusToClarify
+		stName := strings.ToLower(item.Fields.Status.Name)
+		switch {
+		case strings.Contains(stName, "clarif") || strings.Contains(stName, "triage") || strings.Contains(stName, "backlog") || strings.Contains(stName, "open"):
+			status = models.StatusToClarify
+		case strings.Contains(stName, "specif") || strings.Contains(stName, "to do") || strings.Contains(stName, "todo") || strings.Contains(stName, "selected"):
+			status = models.StatusToSpecify
+		case strings.Contains(stName, "progress") || strings.Contains(stName, "in dev") || strings.Contains(stName, "implement"):
+			status = models.StatusToImplement
+		case strings.Contains(stName, "test") || strings.Contains(stName, "qa") || strings.Contains(stName, "validation") || strings.Contains(stName, "review") || strings.Contains(stName, "pr"):
+			status = models.StatusToTest
+		case strings.Contains(stName, "done") || strings.Contains(stName, "closed") || strings.Contains(stName, "resolved") || strings.Contains(stName, "finish"):
+			status = models.StatusFinished
+		default:
+			status = models.StatusToClarify
+		}
+
+		var extURL *string
+		if trackerUrl != "" {
+			u := fmt.Sprintf("%s/browse/%s", strings.TrimSuffix(trackerUrl, "/"), item.Key)
+			extURL = &u
+		}
+
+		avatar := ""
+		if item.Fields.Assignee.AvatarUrls != nil {
+			avatar = item.Fields.Assignee.AvatarUrls["48x48"]
+			if avatar == "" {
+				avatar = item.Fields.Assignee.AvatarUrls["32x32"]
+			}
+		}
+
+		tasks = append(tasks, models.Task{
+			ID:             "jira-" + item.Key,
+			Key:            item.Key,
+			Title:          item.Fields.Summary,
+			Description:    item.Fields.Description,
+			Status:         status,
+			Priority:       priority,
+			Labels:         item.Fields.Labels,
+			Assignee:       item.Fields.Assignee.DisplayName,
+			AssigneeAvatar: avatar,
+			Position:       i + 1,
+			Source:         "jira",
+			ExternalURL:    extURL,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		})
+	}
+	return tasks, nil
+}
+
+func (r *Runner) CreateJiraIssue(projectKey string, repoPath string, trackerUrl string, title string, description string, priority models.Priority, labels []string) (*models.Task, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	args := []string{"jira", "workitem", "create", "--project", projectKey, "--summary", title, "--description", description, "--output", "json"}
+	output, err := r.runCommand(ctx, repoPath, acliPath, args...)
+	if err != nil {
+		args = []string{"jira", "issue", "create", "--project", projectKey, "--summary", title, "--description", description, "--output", "json"}
+		var err2 error
+		output, err2 = r.runCommand(ctx, repoPath, acliPath, args...)
+		if err2 != nil {
+			return nil, fmt.Errorf("failed to create Jira issue: %w (output: %s)", err, output)
+		}
+	}
+
+	var created struct {
+		Key string `json:"key"`
+		ID  string `json:"id"`
+	}
+	_ = json.Unmarshal([]byte(output), &created)
+	key := created.Key
+	if key == "" {
+		re := regexp.MustCompile(`[A-Z][A-Z0-9_]+-[0-9]+`)
+		key = re.FindString(output)
+		if key == "" {
+			key = fmt.Sprintf("%s-NEW", projectKey)
+		}
+	}
+
+	var extURL *string
+	if trackerUrl != "" {
+		u := fmt.Sprintf("%s/browse/%s", strings.TrimSuffix(trackerUrl, "/"), key)
+		extURL = &u
+	}
+
+	return &models.Task{
+		ID:          "jira-" + key,
+		Key:         key,
+		Title:       title,
+		Description: description,
+		Status:      models.StatusToClarify,
+		Priority:    priority,
+		Labels:      labels,
+		Source:      "jira",
+		ExternalURL: extURL,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}, nil
+}
+
+func (r *Runner) UpdateJiraIssueState(issueKey string, status models.Status, repoPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	stateName := "In Progress"
+	switch status {
+	case models.StatusToClarify, models.StatusBacklog:
+		stateName = "To Do"
+	case models.StatusToSpecify:
+		stateName = "To Do"
+	case models.StatusToImplement, models.StatusInProgress:
+		stateName = "In Progress"
+	case models.StatusToTest, models.StatusToValidate:
+		stateName = "In Review"
+	case models.StatusToClose, models.StatusFinished, models.StatusDone:
+		stateName = "Done"
+	}
+
+	args := []string{"jira", "workitem", "transition", issueKey, "--state", stateName}
+	_, err := r.runCommand(ctx, repoPath, acliPath, args...)
+	return err
+}
+
+func (r *Runner) PostJiraComment(issueKey string, body string, repoPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	args := []string{"jira", "workitem", "comment", issueKey, "--body", body}
+	_, err := r.runCommand(ctx, repoPath, acliPath, args...)
+	return err
 }
 
 func (r *Runner) AddIssueComment(source string, repo string, repoPath string, key string, body string) error {
@@ -869,10 +1174,10 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if source == "linear" || strings.HasPrefix(key, "FRE-") {
-		linPath, err := exec.LookPath("linear")
-		if err != nil {
-			linPath = "/opt/homebrew/bin/linear"
+	if source == "linear" {
+		linPath, _ := FindCliTool("linear")
+		if linPath == "" {
+			linPath = "linear"
 		}
 		output, err := r.runCommand(ctx, repoPath, linPath, "issue", "comment", "add", key, "--body", body)
 		if err != nil {
@@ -926,17 +1231,21 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 			log.Printf("[CLI] gh issue comment %s failed: %v (output: %s)", key, err, output)
 		}
 		return err
+	} else if source == "jira" {
+		return r.PostJiraComment(key, body, repoPath)
 	}
 	return nil
 }
 
 func (r *Runner) RunAI(settings *models.Settings, skillID string, task *models.Task, customPrompt string) (string, []string, error) {
 	repoDir := ""
-	if settings != nil && settings.RepoPath != "" {
+	if task != nil && task.WorktreePath != nil && *task.WorktreePath != "" {
+		repoDir = *task.WorktreePath
+	} else if settings != nil && settings.RepoPath != "" {
 		repoDir = strings.TrimSpace(settings.RepoPath)
 	}
 	if repoDir == "" {
-		repoDir = "/Users/sferry/Sources/fretzee-studio"
+		repoDir = "."
 	}
 	repoDir = filepath.Clean(repoDir)
 	if abs, err := filepath.Abs(repoDir); err == nil {
@@ -946,10 +1255,10 @@ func (r *Runner) RunAI(settings *models.Settings, skillID string, task *models.T
 	var steps []string
 	if stat, err := os.Stat(repoDir); err != nil || !stat.IsDir() {
 		cwd, _ := os.Getwd()
-		steps = append(steps, fmt.Sprintf("⚠️ Répertoire projet '%s' introuvable, repli sur : %s", repoDir, cwd))
+		steps = append(steps, fmt.Sprintf("⚠️ Project directory '%s' not found, falling back to: %s", repoDir, cwd))
 		repoDir = cwd
 	} else {
-		steps = append(steps, fmt.Sprintf("📁 Dossier du projet analysé (CWD) : %s", repoDir))
+		steps = append(steps, fmt.Sprintf("📁 Project working directory (CWD): %s", repoDir))
 	}
 
 	var promptTemplate string
@@ -1635,5 +1944,40 @@ func (r *Runner) GetCwdGitStatus(repoDir string) (*models.GitStatusInfo, error) 
 		RemoteURL:      remoteURL,
 		LatestCommit:   latestCommit,
 	}, nil
+}
+
+// OpenInEditor opens the specified directory or file in a code editor (defaults to 'code' for VS Code)
+func (r *Runner) OpenInEditor(editorCmd string, targetPath string) error {
+	if strings.TrimSpace(editorCmd) == "" {
+		editorCmd = "code"
+	}
+	editorCmd = strings.TrimSpace(editorCmd)
+
+	if targetPath == "" {
+		targetPath = "."
+	}
+	targetPath = filepath.Clean(targetPath)
+	if abs, err := filepath.Abs(targetPath); err == nil {
+		targetPath = abs
+	}
+
+	parts := strings.Fields(editorCmd)
+	if len(parts) == 0 {
+		parts = []string{"code"}
+	}
+
+	bin, err := FindCliTool(parts[0])
+	if err == nil && bin != "" {
+		parts[0] = bin
+	}
+
+	args := append(parts[1:], targetPath)
+	cmd := exec.Command(parts[0], args...)
+	cmd.Env = append(os.Environ(), "PATH="+GetDynamicCustomPath()+":"+os.Getenv("PATH"))
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to open in '%s': %w", editorCmd, err)
+	}
+	return nil
 }
 

@@ -13,13 +13,14 @@ export type Status =
   | 'to_validate'
   | 'done'
 
-export type TaskSource = 'linear' | 'github' | 'local'
+export type TaskSource = 'linear' | 'github' | 'jira' | 'local'
 
 export type ActivityStatus = 'queued' | 'pending' | 'running' | 'completed' | 'failed' | 'canceled'
 
 export interface TaskActivity {
   id: string
   taskId: string
+  projectId?: string
   taskKey?: string
   taskTitle?: string
   skillId: string
@@ -197,9 +198,9 @@ export type WorkflowStage = 'new' | 'clarified' | 'specified' | 'implemented' | 
 
 export type DetailMode = 'modal' | 'panel'
 
-export type AIProvider = 'agy' | 'vibe' | 'claude' | 'custom'
+export type AIProvider = 'agy' | 'vibe' | 'claude' | 'gemini' | 'codex' | 'custom'
 
-export type IssueTracker = 'linear' | 'github' | 'local'
+export type IssueTracker = 'linear' | 'github' | 'jira' | 'local'
 
 export interface UserSettings {
   id: number
@@ -223,6 +224,7 @@ export interface UserSettings {
   promptImplement: string
   promptCreatePr: string
   promptPick: string
+  editorCommand: string
   updatedAt: string
 }
 

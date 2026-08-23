@@ -43,6 +43,7 @@ const (
 type TaskActivity struct {
 	ID          string     `json:"id"`
 	TaskID      string     `json:"taskId"`
+	ProjectID   string     `json:"projectId,omitempty"`
 	TaskKey     string     `json:"taskKey,omitempty"`
 	TaskTitle   string     `json:"taskTitle,omitempty"`
 	SkillID     string     `json:"skillId"`
@@ -244,7 +245,8 @@ type Task struct {
 	DueDate        *string        `json:"dueDate"`
 	BranchName     *string        `json:"branchName,omitempty"`
 	PrURL          *string        `json:"prUrl,omitempty"`
-	Source         string         `json:"source"` // "linear", "github", "local"
+	WorktreePath   *string        `json:"worktreePath,omitempty"`
+	Source         string         `json:"source"` // "linear", "github", "jira", "local"
 	ExternalURL    *string        `json:"externalUrl,omitempty"`
 	Activities     []TaskActivity `json:"activities,omitempty"`
 	CreatedAt      time.Time      `json:"createdAt"`
@@ -273,6 +275,7 @@ type Settings struct {
 	PromptImplement    string    `json:"promptImplement"`
 	PromptCreatePR     string    `json:"promptCreatePr"`
 	PromptPick         string    `json:"promptPick"`
+	EditorCommand      string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
 	UpdatedAt          time.Time `json:"updatedAt"`
 }
 

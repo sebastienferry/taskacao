@@ -19,11 +19,11 @@
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
 
-    /* Always sleek dark header with accent tint */
-    --header-bg: #090d16;
-    --header-border: #1e293b;
-    --header-input-bg: #121929;
-    --header-input-border: #26354f;
+    /* Header variables */
+    --header-bg: #1e293b;
+    --header-border: #334155;
+    --header-input-bg: #0f172a;
+    --header-input-border: #334155;
     --header-text: #f8fafc;
     --header-text-muted: #94a3b8;
   }
@@ -37,14 +37,14 @@
     --text-secondary: #334155;
     --text-muted: #64748b;
 
-    /* High-contrast dark header in light mode */
-    --header-bg: #0b0f19;
-    --header-border: #1e293b;
-    --header-input-bg: #141e32;
-    --header-input-border: #2c3c58;
-    --header-text: #f8fafc;
-    --header-text-muted: #94a3b8;
-    --header-accent-tint: rgba(99, 102, 241, 0.16);
+    /* Light theme header */
+    --header-bg: #ffffff;
+    --header-border: #cbd5e1;
+    --header-input-bg: #f1f5f9;
+    --header-input-border: #cbd5e1;
+    --header-text: #090d16;
+    --header-text-muted: #64748b;
+    --header-accent-tint: rgba(99, 102, 241, 0.08);
   }
 
   /* Density Scaling */

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -47,6 +48,7 @@ func main() {
 	mux.HandleFunc("/api/sync/all", h.HandleSyncAll)
 	mux.HandleFunc("/api/sync/linear", h.HandleSyncLinear)
 	mux.HandleFunc("/api/sync/github", h.HandleSyncGithub)
+	mux.HandleFunc("/api/sync/jira", h.HandleSyncJira)
 	mux.HandleFunc("/api/skills", h.HandleSkills)
 	mux.HandleFunc("/api/projects", h.HandleProjects)
 	mux.HandleFunc("/api/projects/", h.HandleProjectDetail)
@@ -56,6 +58,8 @@ func main() {
 	mux.HandleFunc("/api/activities/", h.HandleActivityDetail)
 	mux.HandleFunc("/api/settings", h.HandleSettings)
 	mux.HandleFunc("/api/seed", h.HandleSeed)
+	mux.HandleFunc("/api/open-editor", h.HandleOpenEditor)
+	mux.HandleFunc("/api/editor/open", h.HandleOpenEditor)
 
 	// Interactive PTY Terminal Routes & WebSocket
 	mux.HandleFunc("/ws/terminal", h.HandleTerminalWs)
@@ -68,7 +72,9 @@ func main() {
 		fs := http.FileServer(http.Dir(webDistDir))
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
-				http.NotFound(w, r)
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Route API non trouvée: %s", r.URL.Path)})
 				return
 			}
 			path := filepath.Join(webDistDir, r.URL.Path)
@@ -81,7 +87,9 @@ func main() {
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
-				http.NotFound(w, r)
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Route API non trouvée: %s", r.URL.Path)})
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -23,6 +23,7 @@ import (
 type SkillJob struct {
 	ActivityID    string
 	TaskID        string
+	ProjectID     string
 	SkillID       string
 	Prompt        string
 	RemovedLabels []string
@@ -97,6 +98,7 @@ func (d *DB) initSchema() error {
 			prompt_implement TEXT NOT NULL DEFAULT '',
 			prompt_create_pr TEXT NOT NULL DEFAULT '',
 			prompt_pick TEXT NOT NULL DEFAULT '',
+			editor_command TEXT NOT NULL DEFAULT 'code',
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`CREATE TABLE IF NOT EXISTS projects (
@@ -219,6 +221,7 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_implement TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_create_pr TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_pick TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN editor_command TEXT NOT NULL DEFAULT 'code';")
 
 	// Migrate legacy stage names to 5-stage workflow
 	_, _ = d.conn.Exec("UPDATE tasks SET status = 'to_clarify' WHERE status = 'backlog';")
@@ -233,7 +236,7 @@ func (d *DB) initSchema() error {
 	if projectsCount == 0 {
 		_, _ = d.conn.Exec(`
 			INSERT INTO projects (id, name, slug, description, icon, color, repo_path, linear_team, github_repo, issue_tracker, is_default)
-			VALUES ('default', 'Workspace', 'default', 'Espace de travail principal', 'Folder', 'emerald', '.', '', '', 'local', 1);
+			VALUES ('default', 'Default Project', 'default', 'Primary workspace repository', 'Folder', 'emerald', '.', '', '', 'local', 1);
 		`)
 	}
 
@@ -249,7 +252,7 @@ func (d *DB) seedIfEmpty() error {
 	if settingsCount == 0 {
 		_, err = d.conn.Exec(`
 			INSERT INTO settings (id, theme, accent_color, language, density, default_view, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo)
-			VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Developer', 'dev@example.com', '', 'agy', 'agy -p "{prompt}"', '.', 'local', '', '')
+			VALUES (1, 'dark', 'indigo', 'en', 'standard', 'board', 'Developer', 'dev@example.com', '', 'agy', 'agy -p "{prompt}"', '.', 'local', '', '')
 		`)
 		if err != nil {
 			return err
@@ -266,7 +269,7 @@ func (d *DB) SeedDemoData() error {
 	// Ensure default settings
 	_, err := d.conn.Exec(`
 		INSERT INTO settings (id, theme, accent_color, language, density, default_view, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo)
-		VALUES (1, 'dark', 'indigo', 'fr', 'standard', 'board', 'Developer', 'dev@example.com', '', 'agy', 'agy -p "{prompt}"', '.', 'local', '', '')
+		VALUES (1, 'dark', 'indigo', 'en', 'standard', 'board', 'Developer', 'dev@example.com', '', 'agy', 'agy -p "{prompt}"', '.', 'local', '', '')
 		ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP;
 	`)
 	if err != nil {
@@ -281,49 +284,25 @@ func (d *DB) SeedDemoData() error {
 		return err
 	}
 
-	// 1. Seed the 6 local tasks for project 'tasks' (Taskacao)
+	// Seed clean demo tasks for default project
 	now := time.Now()
-	localTasks := []struct {
+	demoTasks := []struct {
 		ID, Key, Title, Desc, Status, Priority, Branch, Labels string
 		Pos                                                    int
 	}{
-		{"task-1", "TASK-1", "Create a github repo for Taskacao and configure repository metadata", "Initialisation et configuration du dépôt GitHub public pour Taskacao avec métadonnées et intégration continue.", "finished", "high", "TASK-1-create-a-github-repo-for-taska", `["github", "devops", "repo"]`, 1},
-		{"task-2", "TASK-2", "Clarifier le titre de la side bar", "Améliorer la clarté de la barre latérale pour la gestion multi-projets et le statut des compétences.", "finished", "medium", "TASK-2-clarifier-le-titre-de-la-side-", `["ui", "sidebar", "ux"]`, 2},
-		{"task-3", "TASK-3", "Task board flickering", "Résoudre le clignotement / scintillement intempestif des colonnes lors du rafraîchissement des activités et du drag & drop.", "finished", "high", "TASK-3-task-board-flickering", `["bug", "ui", "kanban"]`, 3},
-		{"task-4", "TASK-4", "Add current branch in Ux", "Afficher la branche Git courante dans la barre d'état et le badge de tâche pour faciliter le repérage de travail.", "finished", "medium", "TASK-4-add-current-branch-in-ux", `["git", "ux", "statusbar"]`, 4},
-		{"task-5", "TASK-5", "Ne pas pouvoir changer le tracker lors de la creation d'une tache", "Verrouiller le tracker cible (Linear, GitHub, Local) lors de la création pour respecter la configuration du projet actif.", "finished", "medium", "TASK-2-ne-pas-pouvoir-changer-le-trac", `["tracker", "quick-add", "ui"]`, 5},
-		{"task-6", "TASK-6", "Wrong filter switching to/from activities", "Corriger les filtres de statut et de projet lors du passage entre la vue Activités et le tableau Kanban.", "finished", "high", "TASK-4-wrong-filter-switching-to/from", `["filters", "navigation", "bug"]`, 6},
+		{"task-1", "TASK-1", "Initialize workspace configuration and metadata", "Setup project structure, metadata, and continuous integration pipeline.", "finished", "high", "TASK-1-init-workspace", `["devops", "repo"]`, 1},
+		{"task-2", "TASK-2", "Configure multi-tracker sync and issue mappings", "Implement generic abstractions for Linear, GitHub, Jira, and Local SQLite storage.", "to_implement", "high", "TASK-2-configure-trackers", `["tracker", "sync", "backend"]`, 2},
+		{"task-3", "TASK-3", "Refine Kanban board drag and drop interactions", "Ensure optimistic UI updates and smooth animations across all workflow stages.", "to_specify", "medium", "TASK-3-kanban-board-dnd", `["ui", "kanban", "frontend"]`, 3},
+		{"task-4", "TASK-4", "Implement interactive terminal session manager", "Provide browser-based PTY terminal with contextual environment variables and WebSocket streaming.", "to_test", "high", "TASK-4-terminal-session", `["pty", "terminal", "websocket"]`, 4},
+		{"task-5", "TASK-5", "Integrate automated AI skill runner pipeline", "Orchestrate clarify, specify, code, and PR generation skills directly in isolated worktrees.", "to_close", "high", "TASK-5-ai-skills-pipeline", `["ai", "agent", "skills"]`, 5},
+		{"task-6", "TASK-6", "Add live Git diff and branch inspector", "Display syntax-highlighted file diffs and branch status against the main repository.", "to_clarify", "low", "TASK-6-git-diff-inspector", `["git", "diff", "ui"]`, 6},
 	}
 
-	for _, lt := range localTasks {
+	for _, dt := range demoTasks {
 		_, _ = d.conn.Exec(`
 			INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, position, branch_name, source, created_at, updated_at)
-			VALUES (?, 'tasks', ?, ?, ?, ?, ?, ?, 'Developer', ?, ?, 'local', ?, ?)
-		`, lt.ID, lt.Key, lt.Title, lt.Desc, lt.Status, lt.Priority, lt.Labels, lt.Pos, lt.Branch, now.Format(time.RFC3339), now)
-	}
-
-	// 2. Live sync from Linear for fretzee-studio
-	linTasks, err := d.runner.SyncFromLinear("FRE")
-	if err == nil && len(linTasks) > 0 {
-		for _, t := range linTasks {
-			labelsJSON, _ := json.Marshal(t.Labels)
-			_, _ = d.conn.Exec(`
-				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, source, external_url, created_at, updated_at)
-				VALUES (?, 'fretzee-studio', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, t.ID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, t.AssigneeAvatar, t.Position, t.DueDate, t.BranchName, t.PrURL, t.Source, t.ExternalURL, t.CreatedAt, now)
-		}
-	}
-
-	// 3. Live sync from GitHub for fretzee-studio
-	ghTasks, err := d.runner.SyncFromGithub("sebastienferry/fretzee-studio", "/Users/sferry/Sources/fretzee-studio")
-	if err == nil && len(ghTasks) > 0 {
-		for _, t := range ghTasks {
-			labelsJSON, _ := json.Marshal(t.Labels)
-			_, _ = d.conn.Exec(`
-				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, source, external_url, created_at, updated_at)
-				VALUES (?, 'fretzee-studio', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, t.ID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, t.AssigneeAvatar, t.Position, t.DueDate, t.BranchName, t.PrURL, t.Source, t.ExternalURL, t.CreatedAt, now)
-		}
+			VALUES (?, 'default', ?, ?, ?, ?, ?, ?, 'Developer', ?, ?, 'local', ?, ?)
+		`, dt.ID, dt.Key, dt.Title, dt.Desc, dt.Status, dt.Priority, dt.Labels, dt.Pos, dt.Branch, now.Format(time.RFC3339), now)
 	}
 
 	return nil
@@ -341,10 +320,10 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 
 		src := t.Source
 		if src == "" {
-			if strings.HasPrefix(t.Key, "FRE-") {
-				src = "linear"
-			} else if strings.HasPrefix(t.Key, "#") || strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
+			if strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") || strings.HasPrefix(t.Key, "#") {
 				src = "github"
+			} else if strings.Contains(t.Key, "-") {
+				src = "linear"
 			} else {
 				src = "local"
 			}
@@ -352,7 +331,12 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 
 		projID := t.ProjectID
 		if projID == "" {
-			projID = "fretzee-studio"
+			var defaultProjID string
+			_ = d.conn.QueryRow("SELECT id FROM projects WHERE is_default = 1 LIMIT 1").Scan(&defaultProjID)
+			if defaultProjID == "" {
+				defaultProjID = "default"
+			}
+			projID = defaultProjID
 		}
 
 		if err == sql.ErrNoRows {
@@ -372,6 +356,51 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 				SET title = ?, description = ?, status = ?, priority = ?, labels = ?, assignee = ?, source = ?, external_url = ?, updated_at = ?
 				WHERE id = ?
 			`, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, src, t.ExternalURL, now, existingID)
+		}
+	}
+	return nil
+}
+
+func (d *DB) computeExternalURLUnsafe(t *models.Task) *string {
+	if t.ExternalURL != nil && *t.ExternalURL != "" {
+		return t.ExternalURL
+	}
+	var proj *models.Project
+	if t.ProjectID != "" {
+		proj, _ = d.getProjectByIDUnsafe(t.ProjectID)
+	}
+	source := t.Source
+	if source == "" && proj != nil {
+		source = proj.IssueTracker
+	}
+	switch source {
+	case "linear":
+		if proj != nil && proj.TrackerUrl != "" {
+			u := fmt.Sprintf("%s/issue/%s", strings.TrimSuffix(proj.TrackerUrl, "/"), t.Key)
+			return &u
+		}
+		if proj != nil && proj.LinearTeam != "" {
+			u := fmt.Sprintf("https://linear.app/%s/issue/%s", proj.LinearTeam, t.Key)
+			return &u
+		}
+		u := fmt.Sprintf("https://linear.app/issue/%s", t.Key)
+		return &u
+	case "github":
+		var repo string
+		if proj != nil && proj.GithubRepo != "" {
+			repo = proj.GithubRepo
+		} else if proj != nil && proj.RepoPath != "" {
+			repo, _ = runner.ResolveGithubRepo("", proj.RepoPath)
+		}
+		cleanNum := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(t.Key, "GH-#"), "gh-"), "#")
+		if repo != "" {
+			u := fmt.Sprintf("https://github.com/%s/issues/%s", repo, cleanNum)
+			return &u
+		}
+	case "jira":
+		if proj != nil && proj.TrackerUrl != "" {
+			u := fmt.Sprintf("%s/browse/%s", strings.TrimSuffix(proj.TrackerUrl, "/"), t.Key)
+			return &u
 		}
 	}
 	return nil
@@ -466,23 +495,18 @@ func (d *DB) GetTasks(query, status, priority, label, projectID string) ([]model
 		}
 		if source.Valid && source.String != "" {
 			t.Source = source.String
-		} else if strings.HasPrefix(t.Key, "FRE-") {
-			t.Source = "linear"
 		} else if strings.HasPrefix(t.Key, "#") || strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
 			t.Source = "github"
+		} else if strings.Contains(t.Key, "-") {
+			t.Source = "linear"
 		} else {
 			t.Source = "local"
 		}
 
 		if extURL.Valid && extURL.String != "" {
 			t.ExternalURL = &extURL.String
-		} else if t.Source == "linear" {
-			url := fmt.Sprintf("https://linear.app/fretzee/issue/%s", t.Key)
-			t.ExternalURL = &url
-		} else if t.Source == "github" {
-			cleanNum := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(t.Key, "GH-#"), "gh-"), "#")
-			url := fmt.Sprintf("https://github.com/sebastienferry/fretzee-studio/issues/%s", cleanNum)
-			t.ExternalURL = &url
+		} else {
+			t.ExternalURL = d.computeExternalURLUnsafe(&t)
 		}
 
 		_ = json.Unmarshal([]byte(labelsJSON), &t.Labels)
@@ -552,23 +576,18 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 	}
 	if source.Valid && source.String != "" {
 		t.Source = source.String
-	} else if strings.HasPrefix(t.Key, "FRE-") {
-		t.Source = "linear"
 	} else if strings.HasPrefix(t.Key, "#") || strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
 		t.Source = "github"
+	} else if strings.Contains(t.Key, "-") {
+		t.Source = "linear"
 	} else {
 		t.Source = "local"
 	}
 
 	if extURL.Valid && extURL.String != "" {
 		t.ExternalURL = &extURL.String
-	} else if t.Source == "linear" {
-		url := fmt.Sprintf("https://linear.app/fretzee/issue/%s", t.Key)
-		t.ExternalURL = &url
-	} else if t.Source == "github" {
-		cleanNum := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(t.Key, "GH-#"), "gh-"), "#")
-		url := fmt.Sprintf("https://github.com/sebastienferry/fretzee-studio/issues/%s", cleanNum)
-		t.ExternalURL = &url
+	} else {
+		t.ExternalURL = d.computeExternalURLUnsafe(&t)
 	}
 	_ = json.Unmarshal([]byte(labelsJSON), &t.Labels)
 	if t.Labels == nil {
@@ -696,8 +715,8 @@ func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string,
 		}
 	}
 
-	// Symlink / propagate skills and agent configurations (.gemini, .agy, .agents, .taskacao)
-	agentDirs := []string{".gemini", ".agy", ".agents", ".taskacao"}
+	// Symlink / propagate skills and agent configurations (.agents, .gemini, .agy, .taskacao)
+	agentDirs := []string{".agents", ".gemini", ".agy", ".taskacao"}
 	for _, ad := range agentDirs {
 		mainAd := filepath.Join(mainRepoPath, ad)
 		wtAd := filepath.Join(worktreePath, ad)
@@ -708,12 +727,12 @@ func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string,
 		}
 	}
 
-	// Ensure default skills are present in the worktree
+	// Ensure default skills are present in the worktree (.agents/skills, .gemini/skills, .agy/skills)
 	for _, s := range DefaultProjectSkills {
 		dirs := []string{
+			filepath.Join(worktreePath, ".agents", "skills", s.DirName),
 			filepath.Join(worktreePath, ".gemini", "skills", s.DirName),
 			filepath.Join(worktreePath, ".agy", "skills", s.DirName),
-			filepath.Join(worktreePath, ".agents", "skills", s.DirName),
 		}
 		for _, dir := range dirs {
 			_ = os.MkdirAll(dir, 0755)
@@ -724,14 +743,14 @@ func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string,
 		}
 	}
 
-	// Symlink .env and .env.local if present in root
-	envFiles := []string{".env", ".env.local"}
-	for _, ef := range envFiles {
-		mainEf := filepath.Join(mainRepoPath, ef)
-		wtEf := filepath.Join(worktreePath, ef)
-		if fi, err := os.Stat(mainEf); err == nil && !fi.IsDir() {
-			if _, err := os.Stat(wtEf); os.IsNotExist(err) {
-				_ = os.Symlink(mainEf, wtEf)
+	// Symlink all .env* execution environment files if present in root
+	envMatches, _ := filepath.Glob(filepath.Join(mainRepoPath, ".env*"))
+	for _, envFile := range envMatches {
+		base := filepath.Base(envFile)
+		wtFile := filepath.Join(worktreePath, base)
+		if fi, err := os.Stat(envFile); err == nil && !fi.IsDir() {
+			if _, err := os.Stat(wtFile); os.IsNotExist(err) {
+				_ = os.Symlink(envFile, wtFile)
 			}
 		}
 	}
@@ -1604,12 +1623,12 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 
 func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 	var s models.Settings
-	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, pClar, pSpec, pImpl, pPR, pPick sql.NullString
+	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, pClar, pSpec, pImpl, pPR, pPick, editCmd sql.NullString
 
 	err := d.conn.QueryRow(`
 		SELECT id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar,
 		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo,
-		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, updated_at
+		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
 		&s.ID,
@@ -1633,6 +1652,7 @@ func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 		&pImpl,
 		&pPR,
 		&pPick,
+		&editCmd,
 		&s.UpdatedAt,
 	)
 	if err != nil {
@@ -1675,6 +1695,11 @@ func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 	}
 	if pPick.Valid {
 		s.PromptPick = pPick.String
+	}
+	if editCmd.Valid && editCmd.String != "" {
+		s.EditorCommand = editCmd.String
+	} else {
+		s.EditorCommand = "code"
 	}
 	return &s, nil
 }
@@ -1794,23 +1819,18 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	}
 	if source.Valid && source.String != "" {
 		t.Source = source.String
-	} else if strings.HasPrefix(t.Key, "FRE-") {
-		t.Source = "linear"
 	} else if strings.HasPrefix(t.Key, "#") || strings.HasPrefix(t.Key, "GH-#") || strings.HasPrefix(t.Key, "gh-") {
 		t.Source = "github"
+	} else if strings.Contains(t.Key, "-") {
+		t.Source = "linear"
 	} else {
 		t.Source = "local"
 	}
 
 	if extURL.Valid && extURL.String != "" {
 		t.ExternalURL = &extURL.String
-	} else if t.Source == "linear" {
-		url := fmt.Sprintf("https://linear.app/fretzee/issue/%s", t.Key)
-		t.ExternalURL = &url
-	} else if t.Source == "github" {
-		cleanNum := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(t.Key, "GH-#"), "gh-"), "#")
-		url := fmt.Sprintf("https://github.com/sebastienferry/fretzee-studio/issues/%s", cleanNum)
-		t.ExternalURL = &url
+	} else {
+		t.ExternalURL = d.computeExternalURLUnsafe(&t)
 	}
 	_ = json.Unmarshal([]byte(labelsJSON), &t.Labels)
 	if t.Labels == nil {
@@ -2113,6 +2133,7 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 		if s.PromptImplement == "" { s.PromptImplement = current.PromptImplement }
 		if s.PromptCreatePR == "" { s.PromptCreatePR = current.PromptCreatePR }
 		if s.PromptPick == "" { s.PromptPick = current.PromptPick }
+		if s.EditorCommand == "" { s.EditorCommand = current.EditorCommand }
 	}
 
 	if s.Theme == "" { s.Theme = "dark" }
@@ -2129,11 +2150,12 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 	if s.IssueTracker == "" { s.IssueTracker = "local" }
 	if s.LinearTeam == "" { s.LinearTeam = "" }
 	if s.GithubRepo == "" { s.GithubRepo = "" }
+	if s.EditorCommand == "" { s.EditorCommand = "code" }
 
 	now := time.Now()
 	_, err := d.conn.Exec(`
-		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			theme = excluded.theme,
 			accent_color = excluded.accent_color,
@@ -2155,8 +2177,9 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 			prompt_implement = excluded.prompt_implement,
 			prompt_create_pr = excluded.prompt_create_pr,
 			prompt_pick = excluded.prompt_pick,
+			editor_command = excluded.editor_command,
 			updated_at = excluded.updated_at
-	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, now)
+	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, now)
 
 	if err != nil {
 		return nil, err
@@ -2298,9 +2321,8 @@ func (d *DB) processSkillJob(job SkillJob) {
 		d.mu.RUnlock()
 		if settings == nil {
 			settings = &models.Settings{
-				LinearTeam: "FRE",
-				GithubRepo: "sebastienferry/fretzee-studio",
-				RepoPath:   "/Users/sferry/Sources/fretzee-studio",
+				AIProvider: "agy",
+				RepoPath:   ".",
 			}
 		}
 		d.processSyncJob(ctx, job, settings)
@@ -2334,9 +2356,7 @@ func (d *DB) processSkillJob(job SkillJob) {
 	if settings == nil {
 		settings = &models.Settings{
 			AIProvider: "agy",
-			RepoPath:   "/Users/sferry/Sources/fretzee-studio",
-			LinearTeam: "FRE",
-			GithubRepo: "sebastienferry/fretzee-studio",
+			RepoPath:   ".",
 		}
 	}
 
@@ -2600,118 +2620,225 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 
 	switch job.SkillID {
 	case "sync_linear":
-		team := settings.LinearTeam
-		if job.Prompt != "" {
+		team := ""
+		if job.ProjectID != "" {
+			if p, _ := d.getProjectByIDUnsafe(job.ProjectID); p != nil {
+				team = p.LinearTeam
+			}
+		}
+		if team == "" && job.Prompt != "" {
 			team = job.Prompt
 		}
 		if team == "" {
-			team = "FRE"
+			team = settings.LinearTeam
 		}
-		steps = append(steps, fmt.Sprintf("1. Connexion à la CLI Linear pour l'équipe %s...", team))
-		outputLines = append(outputLines, fmt.Sprintf("### 🔄 Synchronisation Linear (Team: %s)\n", team))
+		steps = append(steps, fmt.Sprintf("1. Connecting to Linear CLI for team %s...", team))
+		outputLines = append(outputLines, fmt.Sprintf("### 🔄 Linear Synchronization (Team: %s)\n", team))
 
 		tasks, err := d.runner.SyncFromLinear(team)
 		if err != nil {
 			hasError = true
-			errMsg := fmt.Sprintf("Échec de synchronisation Linear : %v", err)
+			errMsg := fmt.Sprintf("Linear synchronization failed: %v", err)
 			steps = append(steps, "⚠️ "+errMsg)
-			outputLines = append(outputLines, "**Erreur :** "+errMsg)
-			summary = "Erreur lors de la synchronisation Linear"
+			outputLines = append(outputLines, "**Error:** "+errMsg)
+			summary = "Error during Linear sync"
 		} else {
-			steps = append(steps, fmt.Sprintf("2. %d tickets récupérés depuis l'API Linear", len(tasks)))
+			steps = append(steps, fmt.Sprintf("2. %d tickets fetched from Linear", len(tasks)))
+			if job.ProjectID != "" {
+				for i := range tasks {
+					tasks[i].ProjectID = job.ProjectID
+				}
+			}
 			_ = d.ImportOrUpdateTasks(tasks)
-			steps = append(steps, "3. Base de données locale mise à jour avec succès")
+			steps = append(steps, "3. Local database updated successfully")
 			totalImported = len(tasks)
-			summary = fmt.Sprintf("%d issues Linear synchronisées avec succès", len(tasks))
+			summary = fmt.Sprintf("%d Linear issues synchronized successfully", len(tasks))
 
-			outputLines = append(outputLines, fmt.Sprintf("✅ **%d tickets importés / mis à jour depuis Linear :**\n", len(tasks)))
+			outputLines = append(outputLines, fmt.Sprintf("✅ **%d tickets imported / updated from Linear:**\n", len(tasks)))
 			for _, t := range tasks {
-				outputLines = append(outputLines, fmt.Sprintf("- **[%s]** %s *(Statut: %s, Priorité: %s)*", t.Key, t.Title, t.Status, t.Priority))
+				outputLines = append(outputLines, fmt.Sprintf("- **[%s]** %s *(Status: %s, Priority: %s)*", t.Key, t.Title, t.Status, t.Priority))
 			}
 		}
 
 	case "sync_github":
-		repo := settings.GithubRepo
-		if job.Prompt != "" {
+		repo := ""
+		repoPath := ""
+		if job.ProjectID != "" {
+			if p, _ := d.getProjectByIDUnsafe(job.ProjectID); p != nil {
+				repo = p.GithubRepo
+				repoPath = p.RepoPath
+			}
+		}
+		if repo == "" && job.Prompt != "" {
 			repo = job.Prompt
 		}
 		if repo == "" {
-			repo = "sebastienferry/fretzee-studio"
+			repo = settings.GithubRepo
 		}
-		repoPath := settings.RepoPath
 		if repoPath == "" {
-			repoPath = "/Users/sferry/Sources/fretzee-studio"
+			repoPath = settings.RepoPath
 		}
-		steps = append(steps, fmt.Sprintf("1. Connexion à GitHub CLI pour le repository %s...", repo))
-		outputLines = append(outputLines, fmt.Sprintf("### 🐙 Synchronisation GitHub (%s)\n", repo))
+		steps = append(steps, fmt.Sprintf("1. Connecting to GitHub CLI for repository %s...", repo))
+		outputLines = append(outputLines, fmt.Sprintf("### 🐙 GitHub Synchronization (%s)\n", repo))
 
 		tasks, err := d.runner.SyncFromGithub(repo, repoPath)
 		if err != nil {
 			hasError = true
-			errMsg := fmt.Sprintf("Échec de synchronisation GitHub : %v", err)
+			errMsg := fmt.Sprintf("GitHub synchronization failed: %v", err)
 			steps = append(steps, "⚠️ "+errMsg)
-			outputLines = append(outputLines, "**Erreur :** "+errMsg)
-			summary = "Erreur lors de la synchronisation GitHub"
+			outputLines = append(outputLines, "**Error:** "+errMsg)
+			summary = "Error during GitHub sync"
 		} else {
-			steps = append(steps, fmt.Sprintf("2. %d tickets récupérés depuis GitHub Issues", len(tasks)))
+			steps = append(steps, fmt.Sprintf("2. %d tickets fetched from GitHub Issues", len(tasks)))
+			if job.ProjectID != "" {
+				for i := range tasks {
+					tasks[i].ProjectID = job.ProjectID
+				}
+			}
 			_ = d.ImportOrUpdateTasks(tasks)
-			steps = append(steps, "3. Base de données locale mise à jour avec succès")
+			steps = append(steps, "3. Local database updated successfully")
 			totalImported = len(tasks)
-			summary = fmt.Sprintf("%d issues GitHub synchronisées avec succès", len(tasks))
+			summary = fmt.Sprintf("%d GitHub issues synchronized successfully", len(tasks))
 
-			outputLines = append(outputLines, fmt.Sprintf("✅ **%d tickets importés / mis à jour depuis GitHub :**\n", len(tasks)))
+			outputLines = append(outputLines, fmt.Sprintf("✅ **%d tickets imported / updated from GitHub:**\n", len(tasks)))
 			for _, t := range tasks {
-				outputLines = append(outputLines, fmt.Sprintf("- **[%s]** %s *(Statut: %s, Priorité: %s)*", t.Key, t.Title, t.Status, t.Priority))
+				outputLines = append(outputLines, fmt.Sprintf("- **[%s]** %s *(Status: %s, Priority: %s)*", t.Key, t.Title, t.Status, t.Priority))
+			}
+		}
+
+	case "sync_jira":
+		projectKey := ""
+		trackerUrl := ""
+		repoPath := ""
+		if job.ProjectID != "" {
+			if p, _ := d.getProjectByIDUnsafe(job.ProjectID); p != nil {
+				projectKey = p.Slug
+				trackerUrl = p.TrackerUrl
+				repoPath = p.RepoPath
+			}
+		}
+		if projectKey == "" && job.Prompt != "" {
+			projectKey = job.Prompt
+		}
+		if repoPath == "" {
+			repoPath = settings.RepoPath
+		}
+		steps = append(steps, fmt.Sprintf("1. Connecting to Atlassian / Jira CLI for project %s...", projectKey))
+		outputLines = append(outputLines, fmt.Sprintf("### 🔷 Jira Synchronization (Project: %s)\n", projectKey))
+
+		tasks, err := d.runner.SyncFromJira(projectKey, repoPath, trackerUrl)
+		if err != nil {
+			hasError = true
+			errMsg := fmt.Sprintf("Jira synchronization failed: %v", err)
+			steps = append(steps, "⚠️ "+errMsg)
+			outputLines = append(outputLines, "**Error:** "+errMsg)
+			summary = "Error during Jira sync"
+		} else {
+			steps = append(steps, fmt.Sprintf("2. %d tickets fetched from Jira", len(tasks)))
+			if job.ProjectID != "" {
+				for i := range tasks {
+					tasks[i].ProjectID = job.ProjectID
+				}
+			}
+			_ = d.ImportOrUpdateTasks(tasks)
+			steps = append(steps, "3. Local database updated successfully")
+			totalImported = len(tasks)
+			summary = fmt.Sprintf("%d Jira issues synchronized successfully", len(tasks))
+
+			outputLines = append(outputLines, fmt.Sprintf("✅ **%d tickets imported / updated from Jira:**\n", len(tasks)))
+			for _, t := range tasks {
+				outputLines = append(outputLines, fmt.Sprintf("- **[%s]** %s *(Status: %s, Priority: %s)*", t.Key, t.Title, t.Status, t.Priority))
 			}
 		}
 
 	case "sync_all":
-		steps = append(steps, "1. Démarrage de la synchronisation globale...")
-		outputLines = append(outputLines, "### 🌐 Synchronisation Globale (Linear + GitHub)\n")
+		steps = append(steps, "1. Starting global multi-tracker synchronization...")
+		outputLines = append(outputLines, "### 🌐 Global Synchronization\n")
 
-		// 1. Linear
-		team := settings.LinearTeam
-		if team == "" {
-			team = "FRE"
-		}
-		linTasks, linErr := d.runner.SyncFromLinear(team)
-		if linErr != nil {
-			steps = append(steps, fmt.Sprintf("⚠️ Linear (%s) : %v", team, linErr))
-			outputLines = append(outputLines, fmt.Sprintf("❌ Linear (%s) : %v", team, linErr))
-		} else {
-			_ = d.ImportOrUpdateTasks(linTasks)
-			steps = append(steps, fmt.Sprintf("2. Linear : %d issues importées", len(linTasks)))
-			outputLines = append(outputLines, fmt.Sprintf("✅ Linear (%s) : %d issues synchronisées", team, len(linTasks)))
-			totalImported += len(linTasks)
+		projects, _ := d.getProjectsUnsafe()
+		if len(projects) == 0 {
+			projects = []models.Project{
+				{
+					ID:           "default",
+					LinearTeam:   settings.LinearTeam,
+					GithubRepo:   settings.GithubRepo,
+					RepoPath:     settings.RepoPath,
+					IssueTracker: settings.IssueTracker,
+				},
+			}
 		}
 
-		// 2. GitHub
-		repo := settings.GithubRepo
-		if repo == "" {
-			repo = "sebastienferry/fretzee-studio"
-		}
-		repoPath := settings.RepoPath
-		if repoPath == "" {
-			repoPath = "/Users/sferry/Sources/fretzee-studio"
-		}
-		ghTasks, ghErr := d.runner.SyncFromGithub(repo, repoPath)
-		if ghErr != nil {
-			steps = append(steps, fmt.Sprintf("⚠️ GitHub (%s) : %v", repo, ghErr))
-			outputLines = append(outputLines, fmt.Sprintf("❌ GitHub (%s) : %v", repo, ghErr))
-		} else {
-			_ = d.ImportOrUpdateTasks(ghTasks)
-			steps = append(steps, fmt.Sprintf("3. GitHub : %d issues importées", len(ghTasks)))
-			outputLines = append(outputLines, fmt.Sprintf("✅ GitHub (%s) : %d issues synchronisées", repo, len(ghTasks)))
-			totalImported += len(ghTasks)
+		for _, p := range projects {
+			switch p.IssueTracker {
+			case "linear":
+				if p.LinearTeam != "" || settings.LinearTeam != "" {
+					tm := p.LinearTeam
+					if tm == "" {
+						tm = settings.LinearTeam
+					}
+					linTasks, linErr := d.runner.SyncFromLinear(tm)
+					if linErr != nil {
+						steps = append(steps, fmt.Sprintf("⚠️ Linear (%s): %v", tm, linErr))
+						outputLines = append(outputLines, fmt.Sprintf("❌ Linear (%s): %v", tm, linErr))
+					} else {
+						for i := range linTasks {
+							linTasks[i].ProjectID = p.ID
+						}
+						_ = d.ImportOrUpdateTasks(linTasks)
+						steps = append(steps, fmt.Sprintf("✅ Linear (%s): %d issues imported", tm, len(linTasks)))
+						outputLines = append(outputLines, fmt.Sprintf("✅ Linear (%s): %d issues synced", tm, len(linTasks)))
+						totalImported += len(linTasks)
+					}
+				}
+			case "github":
+				ghRepo := p.GithubRepo
+				if ghRepo == "" {
+					ghRepo = settings.GithubRepo
+				}
+				ghPath := p.RepoPath
+				if ghPath == "" {
+					ghPath = settings.RepoPath
+				}
+				if ghRepo != "" || ghPath != "" {
+					ghTasks, ghErr := d.runner.SyncFromGithub(ghRepo, ghPath)
+					if ghErr != nil {
+						steps = append(steps, fmt.Sprintf("⚠️ GitHub (%s): %v", ghRepo, ghErr))
+						outputLines = append(outputLines, fmt.Sprintf("❌ GitHub (%s): %v", ghRepo, ghErr))
+					} else {
+						for i := range ghTasks {
+							ghTasks[i].ProjectID = p.ID
+						}
+						_ = d.ImportOrUpdateTasks(ghTasks)
+						steps = append(steps, fmt.Sprintf("✅ GitHub (%s): %d issues imported", ghRepo, len(ghTasks)))
+						outputLines = append(outputLines, fmt.Sprintf("✅ GitHub (%s): %d issues synced", ghRepo, len(ghTasks)))
+						totalImported += len(ghTasks)
+					}
+				}
+			case "jira":
+				jKey := p.Slug
+				jUrl := p.TrackerUrl
+				jPath := p.RepoPath
+				if jPath == "" {
+					jPath = settings.RepoPath
+				}
+				jTasks, jErr := d.runner.SyncFromJira(jKey, jPath, jUrl)
+				if jErr != nil {
+					steps = append(steps, fmt.Sprintf("⚠️ Jira (%s): %v", jKey, jErr))
+					outputLines = append(outputLines, fmt.Sprintf("❌ Jira (%s): %v", jKey, jErr))
+				} else {
+					for i := range jTasks {
+						jTasks[i].ProjectID = p.ID
+					}
+					_ = d.ImportOrUpdateTasks(jTasks)
+					steps = append(steps, fmt.Sprintf("✅ Jira (%s): %d issues imported", jKey, len(jTasks)))
+					outputLines = append(outputLines, fmt.Sprintf("✅ Jira (%s): %d issues synced", jKey, len(jTasks)))
+					totalImported += len(jTasks)
+				}
+			}
 		}
 
-		if linErr != nil && ghErr != nil {
-			hasError = true
-			summary = "Échec de synchronisation globale"
-		} else {
-			steps = append(steps, "4. Synchronisation globale terminée avec succès")
-			summary = fmt.Sprintf("Synchronisation globale terminée (%d tickets mis à jour)", totalImported)
-		}
+		steps = append(steps, "Global synchronization completed")
+		summary = fmt.Sprintf("Global synchronization finished (%d tickets updated)", totalImported)
 	}
 
 	completedTime := time.Now()
@@ -2994,12 +3121,27 @@ func (d *DB) EnqueueSync(syncType string, param string, projectID string) (*mode
 			fmt.Sprintf("Cible : GitHub Repository (%s)", repo),
 			"Poussée dans la file d'attente d'exécution...",
 		}
+	case "jira", "sync_jira":
+		syncType = "sync_jira"
+		jKey := ""
+		if proj != nil {
+			jKey = proj.Slug
+		}
+		if param != "" {
+			jKey = param
+		}
+		skillName = "Sync Jira"
+		summary = fmt.Sprintf("Synchronisation Jira (%s) en file d'attente", jKey)
+		steps = []string{
+			fmt.Sprintf("Cible : Jira Project (%s)", jKey),
+			"Poussée dans la file d'attente d'exécution...",
+		}
 	default:
 		syncType = "sync_all"
 		skillName = "Sync Globale"
-		summary = "Synchronisation globale (Linear + GitHub) en file d'attente"
+		summary = "Synchronisation multi-trackers en file d'attente"
 		steps = []string{
-			fmt.Sprintf("Cibles : Linear (Team: %s) & GitHub (%s)", linearTeam, githubRepo),
+			"Cibles : Tous les projets et trackers distants configurés",
 			"Poussée dans la file d'attente d'exécution...",
 		}
 	}
@@ -3026,6 +3168,7 @@ func (d *DB) EnqueueSync(syncType string, param string, projectID string) (*mode
 	d.jobQueue <- SkillJob{
 		ActivityID: activityID,
 		TaskID:     targetTaskID,
+		ProjectID:  projectID,
 		SkillID:    syncType,
 		Prompt:     param,
 	}
@@ -3081,6 +3224,7 @@ func (d *DB) EnqueueSkillOnTask(taskID string, skillID string, prompt string) (*
 	d.jobQueue <- SkillJob{
 		ActivityID: activityID,
 		TaskID:     task.ID,
+		ProjectID:  task.ProjectID,
 		SkillID:    targetSkill.ID,
 		Prompt:     prompt,
 	}
@@ -3406,6 +3550,10 @@ func (d *DB) ConvertTaskToRemote(taskID string, target string) (*models.Task, er
 	d.mu.RLock()
 	task, err := d.getTaskByIDUnsafe(taskID)
 	settings, _ := d.getSettingsUnsafe()
+	var proj *models.Project
+	if task != nil && task.ProjectID != "" {
+		proj, _ = d.getProjectByIDUnsafe(task.ProjectID)
+	}
 	d.mu.RUnlock()
 
 	if err != nil {
@@ -3417,9 +3565,7 @@ func (d *DB) ConvertTaskToRemote(taskID string, target string) (*models.Task, er
 
 	if settings == nil {
 		settings = &models.Settings{
-			LinearTeam: "FRE",
-			GithubRepo: "sebastienferry/fretzee-studio",
-			RepoPath:   "/Users/sferry/Sources/fretzee-studio",
+			RepoPath: ".",
 		}
 	}
 
@@ -3432,9 +3578,12 @@ func (d *DB) ConvertTaskToRemote(taskID string, target string) (*models.Task, er
 
 	switch target {
 	case "linear":
-		team := settings.LinearTeam
+		team := ""
+		if proj != nil {
+			team = proj.LinearTeam
+		}
 		if team == "" {
-			team = "FRE"
+			team = settings.LinearTeam
 		}
 		created, err := d.runner.CreateLinearIssue(team, task.Title, task.Description, task.Priority, task.Labels)
 		if err != nil {
@@ -3444,18 +3593,22 @@ func (d *DB) ConvertTaskToRemote(taskID string, target string) (*models.Task, er
 		extURL = created.ExternalURL
 
 		// Sync status to Linear if not backlog
-		if task.Status != models.StatusBacklog {
+		if task.Status != models.StatusBacklog && task.Status != models.StatusToClarify {
 			_ = d.runner.UpdateLinearIssueState(newKey, task.Status)
 		}
 
 	case "github":
-		repo := settings.GithubRepo
-		if repo == "" {
-			repo = "sebastienferry/fretzee-studio"
+		repo := ""
+		repoPath := ""
+		if proj != nil {
+			repo = proj.GithubRepo
+			repoPath = proj.RepoPath
 		}
-		repoPath := settings.RepoPath
+		if repo == "" {
+			repo = settings.GithubRepo
+		}
 		if repoPath == "" {
-			repoPath = "/Users/sferry/Sources/fretzee-studio"
+			repoPath = settings.RepoPath
 		}
 		created, err := d.runner.CreateGithubIssue(repo, repoPath, task.Title, task.Description, task.Labels)
 		if err != nil {
@@ -3465,12 +3618,33 @@ func (d *DB) ConvertTaskToRemote(taskID string, target string) (*models.Task, er
 		extURL = created.ExternalURL
 
 		// Sync status if done
-		if task.Status == models.StatusDone {
+		if task.Status == models.StatusDone || task.Status == models.StatusFinished || task.Status == models.StatusToClose {
 			_ = d.runner.UpdateGithubIssue(repo, repoPath, newKey, nil, nil, &task.Status, task.Labels, nil)
 		}
 
+	case "jira":
+		projectKey := ""
+		trackerUrl := ""
+		repoPath := ""
+		if proj != nil {
+			projectKey = proj.Slug
+			trackerUrl = proj.TrackerUrl
+			repoPath = proj.RepoPath
+		}
+		if repoPath == "" {
+			repoPath = settings.RepoPath
+		}
+		created, err := d.runner.CreateJiraIssue(projectKey, repoPath, trackerUrl, task.Title, task.Description, task.Priority, task.Labels)
+		if err != nil {
+			return nil, fmt.Errorf("création Jira impossible: %w", err)
+		}
+		newKey = created.Key
+		extURL = created.ExternalURL
+
+		_ = d.runner.UpdateJiraIssueState(newKey, task.Status, repoPath)
+
 	default:
-		return nil, fmt.Errorf("tracker distant non supporté: %s (choisir 'linear' ou 'github')", target)
+		return nil, fmt.Errorf("tracker distant non supporté: %s (choisir 'linear', 'github' ou 'jira')", target)
 	}
 
 	d.mu.Lock()
@@ -3799,12 +3973,17 @@ func (d *DB) DeleteProject(id string) error {
 	if p == nil {
 		return fmt.Errorf("projet non trouvé")
 	}
-	if p.IsDefault || p.ID == "fretzee-studio" {
+	if p.IsDefault {
 		return fmt.Errorf("impossible de supprimer le projet par défaut")
 	}
 
 	// Reassign tasks to default project
-	_, _ = d.conn.Exec("UPDATE tasks SET project_id = 'fretzee-studio' WHERE project_id = ?", p.ID)
+	var defaultProjID string
+	_ = d.conn.QueryRow("SELECT id FROM projects WHERE is_default = 1 LIMIT 1").Scan(&defaultProjID)
+	if defaultProjID == "" {
+		defaultProjID = "default"
+	}
+	_, _ = d.conn.Exec("UPDATE tasks SET project_id = ? WHERE project_id = ?", defaultProjID, p.ID)
 	_, err = d.conn.Exec("DELETE FROM projects WHERE id = ?", p.ID)
 	return err
 }
@@ -3918,23 +4097,31 @@ Revoir les changements, valider la qualité du code, commiter avec des messages 
 		ID:          "pick",
 		Name:        "Auto-Pilot Orchestrator",
 		DirName:     "pick-issue",
-		Description: "Routeur intelligent orchestrant automatiquement le cycle de vie complet de la tâche.",
+		Description: "Sélectionne la tâche prioritaire, exécute les compétences requises jusqu'à la PR ou la clôture.",
 		Content: `---
 name: pick-issue
-description: Auto-pilote intelligent orchestrant automatiquement le cycle de vie de la tâche.
+description: Sélectionne la tâche prioritaire, avance son statut à travers le cycle de développement complet et crée la PR.
 ---
-# Skill : Auto-Pilot Orchestrator
+# Skill : Auto-Pilot Orchestrator (Pick Issue)
 
 ## Objectif
-Déterminer automatiquement l'étape actuelle du ticket et enchaîner l'action optimale (Clarify -> Specify -> Implement -> PR).
+Prendre en charge une tâche depuis la file d'attente, exécuter de manière autonome le cycle de clarification, spécification, codage et ouverture de PR.
+
+## Instructions
+1. Identifier la tâche cible spécifiée ou prendre la plus prioritaire.
+2. Basculer ou créer la branche Git dédiée dans le worktree.
+3. Exécuter séquentiellement :
+   - /clarify-issue (si non cadrée)
+   - /specify-issue (si non spécifiée)
+   - /code-issue (implémentation et tests)
+   - /create-pr (validation finale et soumission)
+4. Mettre à jour le statut et consigner les artefacts d'exécution.
 `,
 	},
 }
 
 func (d *DB) GetProjectSkillsStatus(projectIDOrPath string) (*models.ProjectSkillsStatus, error) {
 	d.mu.RLock()
-	defer d.mu.RUnlock()
-
 	repoPath := projectIDOrPath
 	projectID := projectIDOrPath
 	projectName := projectIDOrPath
@@ -3946,27 +4133,38 @@ func (d *DB) GetProjectSkillsStatus(projectIDOrPath string) (*models.ProjectSkil
 			repoPath = proj.RepoPath
 		}
 	}
+	d.mu.RUnlock()
+
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		repoPath = "."
+	}
 
 	res := &models.ProjectSkillsStatus{
 		ProjectID:    projectID,
 		ProjectName:  projectName,
 		RepoPath:     repoPath,
 		PathExists:   false,
+		IsGitRepo:    false,
 		InstalledAll: true,
 		Skills:       []models.InstalledSkillInfo{},
 	}
 
-	if repoPath == "" {
+	fi, err := os.Stat(repoPath)
+	if err != nil || !fi.IsDir() {
 		res.InstalledAll = false
 		return res, nil
 	}
+	res.PathExists = true
 
-	if fi, err := os.Stat(repoPath); err == nil && fi.IsDir() {
-		res.PathExists = true
-		gitDir := filepath.Join(repoPath, ".git")
-		if gfi, gerr := os.Stat(gitDir); gerr == nil && gfi.IsDir() {
-			res.IsGitRepo = true
-			branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	// Check git repo
+	gitDir := filepath.Join(repoPath, ".git")
+	if gfi, gErr := os.Stat(gitDir); gErr == nil && gfi.IsDir() {
+		res.IsGitRepo = true
+		gitCheck := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+		gitCheck.Dir = repoPath
+		if err := gitCheck.Run(); err == nil {
+			branchCmd := exec.Command("git", "branch", "--show-current")
 			branchCmd.Dir = repoPath
 			if out, err := branchCmd.Output(); err == nil {
 				b := strings.TrimSpace(string(out))
@@ -3980,14 +4178,17 @@ func (d *DB) GetProjectSkillsStatus(projectIDOrPath string) (*models.ProjectSkil
 	}
 
 	for _, s := range DefaultProjectSkills {
-		// Check both .gemini/skills and .agy/skills and .skills
+		p0 := filepath.Join(repoPath, ".agents", "skills", s.DirName, "SKILL.md")
 		p1 := filepath.Join(repoPath, ".gemini", "skills", s.DirName, "SKILL.md")
 		p2 := filepath.Join(repoPath, ".agy", "skills", s.DirName, "SKILL.md")
 		p3 := filepath.Join(repoPath, ".skills", s.DirName, "SKILL.md")
 
 		installed := false
-		targetPath := p1
-		if _, err := os.Stat(p1); err == nil {
+		targetPath := p0
+		if _, err := os.Stat(p0); err == nil {
+			installed = true
+			targetPath = p0
+		} else if _, err := os.Stat(p1); err == nil {
 			installed = true
 			targetPath = p1
 		} else if _, err := os.Stat(p2); err == nil {
@@ -4017,7 +4218,7 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string) (*models.ProjectSkills
 	repoPath := projectIDOrPath
 	projectID := projectIDOrPath
 	projectName := projectIDOrPath
-	linearTeam := "FRE"
+	linearTeam := ""
 	githubRepo := ""
 	issueTracker := "local"
 
@@ -4049,9 +4250,10 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string) (*models.ProjectSkills
 		return nil, fmt.Errorf("impossible de créer le répertoire %s: %w", repoPath, err)
 	}
 
-	// Install skills into .gemini/skills/ and .agy/skills/
+	// Install skills into .agents/skills/, .gemini/skills/ and .agy/skills/
 	for _, s := range DefaultProjectSkills {
 		dirs := []string{
+			filepath.Join(repoPath, ".agents", "skills", s.DirName),
 			filepath.Join(repoPath, ".gemini", "skills", s.DirName),
 			filepath.Join(repoPath, ".agy", "skills", s.DirName),
 		}

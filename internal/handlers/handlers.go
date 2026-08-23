@@ -303,6 +303,30 @@ func (h *Handler) HandleSyncGithub(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) HandleSyncJira(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		ProjectKey string `json:"projectKey"`
+		ProjectID  string `json:"projectId"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	activity, err := h.db.EnqueueSync("jira", req.ProjectKey, req.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message":  "Synchronisation Jira ajoutée à la file d'attente",
+		"activity": activity,
+	})
+}
+
 func (h *Handler) HandleSkills(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -1296,4 +1320,90 @@ func (h *Handler) HandleTerminalReset(w http.ResponseWriter, r *http.Request) {
 
 	_ = h.terminalMgr.CloseSession(sessionID)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Terminal session reset successfully"})
+}
+
+// HandleOpenEditor opens a workspace, worktree, or path in the user's code editor (default: code)
+func (h *Handler) HandleOpenEditor(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		Path          string `json:"path"`
+		TaskID        string `json:"taskId"`
+		ProjectID     string `json:"projectId"`
+		EditorCommand string `json:"editorCommand"`
+	}
+
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	settings, _ := h.db.GetSettings()
+	editorCmd := req.EditorCommand
+	if editorCmd == "" && settings != nil && settings.EditorCommand != "" {
+		editorCmd = settings.EditorCommand
+	}
+	if editorCmd == "" {
+		editorCmd = "code"
+	}
+
+	targetPath := req.Path
+	if targetPath == "" && req.TaskID != "" {
+		task, err := h.db.GetTaskByID(req.TaskID)
+		if err == nil && task != nil {
+			if task.WorktreePath != nil && *task.WorktreePath != "" {
+				if _, statErr := os.Stat(*task.WorktreePath); statErr == nil {
+					targetPath = *task.WorktreePath
+				}
+			}
+			repoPath := "."
+			if task.ProjectID != "" {
+				if proj, projErr := h.db.GetProjectByID(task.ProjectID); projErr == nil && proj != nil && proj.RepoPath != "" {
+					repoPath = proj.RepoPath
+				}
+			}
+			if repoPath == "." && settings != nil && settings.RepoPath != "" {
+				repoPath = settings.RepoPath
+			}
+
+			if targetPath == "" {
+				wtPath, _, wtErr := h.db.EnsureTaskWorktree(repoPath, task)
+				if wtErr == nil && wtPath != "" {
+					targetPath = wtPath
+				}
+			}
+			if targetPath == "" {
+				targetPath = repoPath
+			}
+		}
+	}
+
+	if targetPath == "" && req.ProjectID != "" {
+		proj, err := h.db.GetProjectByID(req.ProjectID)
+		if err == nil && proj != nil && proj.RepoPath != "" {
+			targetPath = proj.RepoPath
+		}
+	}
+
+	if targetPath == "" && settings != nil && settings.RepoPath != "" {
+		targetPath = settings.RepoPath
+	}
+
+	if targetPath == "" {
+		targetPath, _ = os.Getwd()
+	}
+
+	if err := h.db.GetRunner().OpenInEditor(editorCmd, targetPath); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to open '%s' in '%s': %v", targetPath, editorCmd, err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"path":    targetPath,
+		"editor":  editorCmd,
+		"message": fmt.Sprintf("Opened %s in %s", targetPath, editorCmd),
+	})
 }

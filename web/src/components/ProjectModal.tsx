@@ -742,6 +742,7 @@ export const ProjectModal: React.FC = () => {
                   >
                     <option value="linear">Linear</option>
                     <option value="github">GitHub Issues</option>
+                    <option value="jira">Jira (Atlassian CLI)</option>
                     <option value="local">Local SQLite uniquement</option>
                   </select>
                 </div>

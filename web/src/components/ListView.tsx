@@ -19,6 +19,7 @@ import {
   Eye,
   EyeOff,
   MessageSquare,
+  Code2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Task, Status, Priority } from '../types'
@@ -37,6 +38,8 @@ export const ListView: React.FC = () => {
     activities,
     hideDone,
     toggleHideDone,
+    openInEditor,
+    settings,
     t,
   } = useApp()
 
@@ -176,12 +179,23 @@ export const ListView: React.FC = () => {
                     ? 'bg-indigo-500/15 text-indigo-400 hover:bg-indigo-500/25 border border-indigo-500/30'
                     : task.source === 'github'
                     ? 'bg-purple-500/15 text-purple-400 hover:bg-purple-500/25 border border-purple-500/30'
+                    : task.source === 'jira'
+                    ? 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25 border border-blue-500/30'
                     : 'bg-[var(--accent-light)] text-[var(--accent-color)] hover:opacity-80'
                 }`}
-                title={task.source === 'linear' ? `Ouvrir ${task.key} sur Linear` : `Ouvrir ${task.key} sur GitHub`}
+                title={
+                  task.source === 'linear'
+                    ? `Ouvrir ${task.key} sur Linear`
+                    : task.source === 'github'
+                    ? `Ouvrir ${task.key} sur GitHub`
+                    : task.source === 'jira'
+                    ? `Ouvrir ${task.key} sur Jira`
+                    : `Ouvrir ${task.key}`
+                }
               >
                 {task.source === 'linear' && <span className="text-indigo-400">◆</span>}
                 {task.source === 'github' && <FolderGit2 size={11} className="text-purple-400" />}
+                {task.source === 'jira' && <span className="text-blue-400 font-sans font-black text-[9px]">J</span>}
                 <span>{task.key}</span>
                 <ExternalLink size={9} />
               </a>
@@ -404,19 +418,30 @@ export const ListView: React.FC = () => {
           </div>
         </td>
 
-        {/* Delete action */}
+        {/* Actions */}
         <td className="py-2.5 px-3 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
-          <button
-            onClick={() => {
-              if (window.confirm(t.taskModal.deleteConfirm)) {
-                deleteTask(task.id)
-              }
-            }}
-            className="p-1 rounded text-[var(--text-muted)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors opacity-0 group-hover:opacity-100"
-            title={t.taskModal.delete}
-          >
-            <Trash2 size={14} />
-          </button>
+          <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              type="button"
+              onClick={() => openInEditor({ taskId: task.id })}
+              className="p-1 rounded text-[var(--text-muted)] hover:text-cyan-400 hover:bg-cyan-500/10 transition-colors"
+              title={`Ouvrir le code / worktree dans ${settings.editorCommand || 'VS Code'}`}
+            >
+              <Code2 size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm(t.taskModal.deleteConfirm)) {
+                  deleteTask(task.id)
+                }
+              }}
+              className="p-1 rounded text-[var(--text-muted)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+              title={t.taskModal.delete}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
         </td>
       </tr>
     )

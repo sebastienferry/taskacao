@@ -89,6 +89,8 @@ interface AppContextType {
   syncAll: () => Promise<void>
   syncLinear: (team?: string) => Promise<void>
   syncGithub: (repo?: string) => Promise<void>
+  syncJira: (projectKey?: string) => Promise<void>
+  syncCurrentProject: () => Promise<void>
   fetchCliStatus: () => Promise<void>
   reseedDemo: () => Promise<void>
   refreshTasks: () => Promise<void>
@@ -111,6 +113,7 @@ interface AppContextType {
   checkoutTaskBranch: (taskId: string) => Promise<boolean>
   cleanLocalBranches: (projectIdOrPath?: string) => Promise<boolean>
   deleteGitBranch: (branch: string, deleteRemote?: boolean, projectIdOrPath?: string) => Promise<boolean>
+  openInEditor: (options?: { taskId?: string; projectId?: string; path?: string; editorCommand?: string }) => Promise<boolean>
 }
 
 const defaultSettings: UserSettings = {
@@ -121,13 +124,13 @@ const defaultSettings: UserSettings = {
   density: 'standard',
   defaultView: 'board',
   detailMode: 'panel',
-  userName: 'Sébastien Ferry',
-  userEmail: 'sebastien.ferry@gmail.com',
+  userName: 'Developer',
+  userEmail: 'dev@example.com',
   userAvatar: '',
   aiProvider: 'agy',
   aiCommandTemplate: 'agy -p "{prompt}"',
   repoPath: '',
-  issueTracker: 'linear',
+  issueTracker: 'local',
   linearTeam: '',
   githubRepo: '',
   promptClarify: '',
@@ -135,6 +138,7 @@ const defaultSettings: UserSettings = {
   promptImplement: '',
   promptCreatePr: '',
   promptPick: '',
+  editorCommand: 'code',
   updatedAt: new Date().toISOString(),
 }
 
@@ -178,7 +182,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [diffTask, setDiffTask] = useState<Task | null>(null)
   const [hideDone, setHideDoneState] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('fretzee_hide_done') === 'true'
+      return localStorage.getItem('taskacao_hide_done') === 'true'
     } catch {
       return false
     }
@@ -188,7 +192,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setHideDoneState(prev => {
       const next = typeof val === 'function' ? val(prev) : val
       try {
-        localStorage.setItem('fretzee_hide_done', String(next))
+        localStorage.setItem('taskacao_hide_done', String(next))
       } catch {}
       return next
     })
@@ -209,7 +213,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProjectId, setSelectedProjectIdState] = useState<string | 'all'>(() => {
     try {
-      return localStorage.getItem('fretzee_selected_project_id') || 'all'
+      return localStorage.getItem('taskacao_selected_project_id') || 'all'
     } catch {
       return 'all'
     }
@@ -217,7 +221,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setSelectedProjectId = useCallback((id: string | 'all') => {
     setSelectedProjectIdState(id)
     try {
-      localStorage.setItem('fretzee_selected_project_id', id)
+      localStorage.setItem('taskacao_selected_project_id', id)
     } catch {}
   }, [])
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false)
@@ -347,18 +351,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             return prev
           }
           try {
-            const stored = localStorage.getItem('fretzee_selected_project_id')
+            const stored = localStorage.getItem('taskacao_selected_project_id')
             if (stored === 'all') return 'all'
             if (stored && projectList.some(p => p.id === stored || p.slug === stored)) {
               return stored
             }
           } catch {}
 
-          // Prioritize project with tasks (e.g. fretzee-studio) or 'all'
+          // Prioritize project with tasks or 'all'
           const projWithTasks = projectList.find(p => (p.taskCount || 0) > 0)
           if (projWithTasks) {
             try {
-              localStorage.setItem('fretzee_selected_project_id', projWithTasks.id)
+              localStorage.setItem('taskacao_selected_project_id', projWithTasks.id)
             } catch {}
             return projWithTasks.id
           }
@@ -674,6 +678,60 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
     } finally {
       setIsSyncing(false)
+    }
+  }
+
+  const syncJira = async (projectKey?: string) => {
+    setIsSyncing(true)
+    try {
+      const activeProj = selectedProjectId !== 'all' ? projects.find(p => p.id === selectedProjectId) : (projects.find(p => p.isDefault) || projects[0])
+      const targetKey = projectKey || activeProj?.linearTeam || ''
+      const res = await fetch(`${API_BASE}/sync/jira`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectKey: targetKey, projectId: activeProj?.id }),
+      })
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.error || 'Jira sync failed')
+      }
+      const data = await res.json()
+      if (data.activity) {
+        setActivities(prev => [data.activity, ...prev.filter(a => a.id !== data.activity.id)])
+      }
+      fetchActivityStats()
+      addToast({
+        type: 'info',
+        title: 'Synchronisation Jira lancée',
+        description: targetKey ? `Projet Jira ${targetKey} (${activeProj?.name || ''}) — Suivi dans Activités.` : 'Synchronisation Jira en cours...',
+      })
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  const syncCurrentProject = async () => {
+    const activeProj = currentProject || (projects.find(p => p.isDefault) || projects[0])
+    const tracker = activeProj?.issueTracker || 'local'
+    if (tracker === 'linear') {
+      await syncLinear(activeProj?.linearTeam)
+    } else if (tracker === 'github') {
+      await syncGithub(activeProj?.githubRepo)
+    } else if (tracker === 'jira') {
+      await syncJira(activeProj?.linearTeam)
+    } else {
+      await fetchTasks()
+      addToast({
+        type: 'info',
+        title: 'Projet local à jour',
+        description: `Tâches locales de ${activeProj?.name || 'ce projet'} rechargées depuis SQLite.`,
+      })
     }
   }
 
@@ -1399,6 +1457,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [selectedProjectId, fetchGitBranches, fetchGitStatus, addToast])
 
+  const openInEditor = useCallback(async (options?: { taskId?: string; projectId?: string; path?: string; editorCommand?: string }): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/open-editor`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: options?.taskId,
+          projectId: options?.projectId || (currentProject?.id !== 'default' ? currentProject?.id : undefined),
+          path: options?.path,
+          editorCommand: options?.editorCommand || settings.editorCommand || 'code',
+        }),
+      })
+      const text = await res.text()
+      let data: any = {}
+      try {
+        data = JSON.parse(text)
+      } catch {
+        if (res.status === 404) {
+          throw new Error("Route /api/open-editor non trouvée (404). Veuillez relancer le serveur Go (cmd/server).")
+        }
+        throw new Error(text || `Erreur HTTP ${res.status}`)
+      }
+      if (!res.ok) {
+        throw new Error(data.error || "Impossible d'ouvrir l'éditeur")
+      }
+      addToast({
+        type: 'success',
+        title: 'Éditeur ouvert',
+        description: `Dossier ouvert dans ${data.editor || 'l\'éditeur'} (${data.path || ''})`,
+      })
+      return true
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Erreur éditeur',
+        description: err.message,
+      })
+      return false
+    }
+  }, [currentProject, settings.editorCommand, addToast])
+
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1537,6 +1636,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         syncAll,
         syncLinear,
         syncGithub,
+        syncJira,
+        syncCurrentProject,
         fetchCliStatus,
         reseedDemo,
         refreshTasks: fetchTasks,
@@ -1555,6 +1656,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         availableAssignees,
         cleanLocalBranches,
         deleteGitBranch,
+        openInEditor,
       }}
     >
       {children}

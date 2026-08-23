@@ -22,10 +22,9 @@ export const QuickAddModal: React.FC = () => {
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState<Status>(quickAddInitialStatus)
   const [priority, setPriority] = useState<Priority>('medium')
-  const [taskProjectId, setTaskProjectId] = useState<string>(
-    selectedProjectId !== 'all' ? selectedProjectId : (projects[0]?.id || 'fretzee-studio')
-  )
-  const defaultProj = projects.find(p => p.id === (selectedProjectId !== 'all' ? selectedProjectId : (projects[0]?.id || 'fretzee-studio'))) || projects[0]
+  const fallbackProjectId = selectedProjectId !== 'all' ? selectedProjectId : (projects[0]?.id || 'default')
+  const [taskProjectId, setTaskProjectId] = useState<string>(fallbackProjectId)
+  const defaultProj = projects.find(p => p.id === fallbackProjectId) || projects[0]
   const [source, setSource] = useState<TaskSource>(
     (defaultProj?.issueTracker as TaskSource) || 'local'
   )
@@ -41,7 +40,7 @@ export const QuickAddModal: React.FC = () => {
       setDescription('')
       setStatus(quickAddInitialStatus || 'to_clarify')
       setPriority('medium')
-      const initialProjId = selectedProjectId !== 'all' ? selectedProjectId : (projects[0]?.id || 'fretzee-studio')
+      const initialProjId = selectedProjectId !== 'all' ? selectedProjectId : (projects[0]?.id || 'default')
       setTaskProjectId(initialProjId)
       const proj = projects.find(p => p.id === initialProjId) || projects[0]
       setSource((proj?.issueTracker as TaskSource) || 'local')
