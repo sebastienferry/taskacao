@@ -58,8 +58,17 @@ export interface Project {
   issueTracker: IssueTracker
   isDefault: boolean
   taskCount?: number
+  stageMapping?: Record<WorkflowStage, string>
   createdAt: string
   updatedAt: string
+}
+
+export interface DetectedStatus {
+  id: string
+  name: string
+  type?: string
+  color?: string
+  source?: string
 }
 
 export interface Task {
@@ -98,6 +107,7 @@ export interface GitDiffResult {
   branch: string
   baseBranch: string
   repoPath: string
+  worktreePath?: string
   isClean: boolean
   filesChanged: number
   insertions: number
@@ -106,6 +116,14 @@ export interface GitDiffResult {
   rawDiff: string
   prUrl?: string
   error?: string
+}
+
+export interface WorktreeInfo {
+  taskKey: string
+  branch: string
+  worktreePath: string
+  exists: boolean
+  mainRepoPath: string
 }
 
 export interface GitStatusInfo {
@@ -153,6 +171,10 @@ export type Language = 'fr' | 'en'
 export type Density = 'compact' | 'standard' | 'comfortable'
 
 export type ViewMode = 'board' | 'list' | 'activities' | 'sync'
+
+export type BoardGroupingMode = 'workflow' | 'status'
+
+export type WorkflowStage = 'untouched' | 'clarified' | 'specified' | 'implemented' | 'reviewed' | 'finished'
 
 export type DetailMode = 'modal' | 'panel'
 
@@ -218,6 +240,20 @@ export interface ProjectSkillsStatus {
   gitBranch?: string
   installedAll: boolean
   skills: InstalledSkillInfo[]
+}
+
+export interface GitBranchItem {
+  name: string
+  isCurrent: boolean
+  isRemote: boolean
+  commit?: string
+  message?: string
+}
+
+export interface GitBranchesInfo {
+  repoPath: string
+  currentBranch: string
+  branches: GitBranchItem[]
 }
 
 export interface ProjectGitInitResult {

@@ -69,46 +69,49 @@ type ActivityStats struct {
 }
 
 type Project struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Slug         string    `json:"slug"`
-	Description  string    `json:"description"`
-	Icon         string    `json:"icon"`         // "Folder", "Terminal", "Flame", "Zap", "Layers", "Code2", "Box", "Cpu"
-	Color        string    `json:"color"`        // "indigo", "emerald", "purple", "amber", "blue", "rose", "cyan", "orange"
-	RepoPath     string    `json:"repoPath"`     // CWD for AI skills
-	LinearTeam   string    `json:"linearTeam"`   // e.g. "FRE"
-	GithubRepo   string    `json:"githubRepo"`   // e.g. "sebastienferry/fretzee-studio"
-	IssueTracker string    `json:"issueTracker"` // "linear", "github", "local"
-	IsDefault    bool      `json:"isDefault"`
-	TaskCount    int       `json:"taskCount"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Slug         string            `json:"slug"`
+	Description  string            `json:"description"`
+	Icon         string            `json:"icon"`         // "Folder", "Terminal", "Flame", "Zap", "Layers", "Code2", "Box", "Cpu"
+	Color        string            `json:"color"`        // "indigo", "emerald", "purple", "amber", "blue", "rose", "cyan", "orange"
+	RepoPath     string            `json:"repoPath"`     // CWD for AI skills
+	LinearTeam   string            `json:"linearTeam"`   // e.g. "FRE"
+	GithubRepo   string            `json:"githubRepo"`   // e.g. "sebastienferry/fretzee-studio"
+	IssueTracker string            `json:"issueTracker"` // "linear", "github", "local"
+	IsDefault    bool              `json:"isDefault"`
+	StageMapping map[string]string `json:"stageMapping,omitempty"` // mapping AI workflow labels to tracker statuses
+	TaskCount    int               `json:"taskCount"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	UpdatedAt    time.Time         `json:"updatedAt"`
 }
 
 type CreateProjectRequest struct {
-	Name         string `json:"name"`
-	Slug         string `json:"slug,omitempty"`
-	Description  string `json:"description,omitempty"`
-	Icon         string `json:"icon,omitempty"`
-	Color        string `json:"color,omitempty"`
-	RepoPath     string `json:"repoPath,omitempty"`
-	LinearTeam   string `json:"linearTeam,omitempty"`
-	GithubRepo   string `json:"githubRepo,omitempty"`
-	IssueTracker string `json:"issueTracker,omitempty"`
-	IsDefault    bool   `json:"isDefault,omitempty"`
+	Name         string            `json:"name"`
+	Slug         string            `json:"slug,omitempty"`
+	Description  string            `json:"description,omitempty"`
+	Icon         string            `json:"icon,omitempty"`
+	Color        string            `json:"color,omitempty"`
+	RepoPath     string            `json:"repoPath,omitempty"`
+	LinearTeam   string            `json:"linearTeam,omitempty"`
+	GithubRepo   string            `json:"githubRepo,omitempty"`
+	IssueTracker string            `json:"issueTracker,omitempty"`
+	IsDefault    bool              `json:"isDefault,omitempty"`
+	StageMapping map[string]string `json:"stageMapping,omitempty"`
 }
 
 type UpdateProjectRequest struct {
-	Name         *string `json:"name,omitempty"`
-	Slug         *string `json:"slug,omitempty"`
-	Description  *string `json:"description,omitempty"`
-	Icon         *string `json:"icon,omitempty"`
-	Color        *string `json:"color,omitempty"`
-	RepoPath     *string `json:"repoPath,omitempty"`
-	LinearTeam   *string `json:"linearTeam,omitempty"`
-	GithubRepo   *string `json:"githubRepo,omitempty"`
-	IssueTracker *string `json:"issueTracker,omitempty"`
-	IsDefault    *bool   `json:"isDefault,omitempty"`
+	Name         *string            `json:"name,omitempty"`
+	Slug         *string            `json:"slug,omitempty"`
+	Description  *string            `json:"description,omitempty"`
+	Icon         *string            `json:"icon,omitempty"`
+	Color        *string            `json:"color,omitempty"`
+	RepoPath     *string            `json:"repoPath,omitempty"`
+	LinearTeam   *string            `json:"linearTeam,omitempty"`
+	GithubRepo   *string            `json:"githubRepo,omitempty"`
+	IssueTracker *string            `json:"issueTracker,omitempty"`
+	IsDefault    *bool              `json:"isDefault,omitempty"`
+	StageMapping *map[string]string `json:"stageMapping,omitempty"`
 }
 
 type InstalledSkillInfo struct {
@@ -138,6 +141,28 @@ type ProjectGitInitResult struct {
 	Initialized bool   `json:"initialized"`
 }
 
+type DetectedStatus struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Type   string `json:"type,omitempty"`   // "backlog", "unstarted", "started", "completed", "canceled", "triage", "custom"
+	Color  string `json:"color,omitempty"`
+	Source string `json:"source,omitempty"` // "linear", "github", "db", "preset"
+}
+
+type GitBranchItem struct {
+	Name      string `json:"name"`
+	IsCurrent bool   `json:"isCurrent"`
+	IsRemote  bool   `json:"isRemote"`
+	Commit    string `json:"commit,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+type GitBranchesInfo struct {
+	RepoPath      string          `json:"repoPath"`
+	CurrentBranch string          `json:"currentBranch"`
+	Branches      []GitBranchItem `json:"branches"`
+}
+
 type GitDiffFile struct {
 	Path      string `json:"path"`
 	OldPath   string `json:"oldPath,omitempty"`
@@ -152,6 +177,7 @@ type GitDiffResult struct {
 	Branch       string        `json:"branch"`
 	BaseBranch   string        `json:"baseBranch"`
 	RepoPath     string        `json:"repoPath"`
+	WorktreePath string        `json:"worktreePath,omitempty"`
 	IsClean      bool          `json:"isClean"`
 	FilesChanged int           `json:"filesChanged"`
 	Insertions   int           `json:"insertions"`
@@ -176,6 +202,14 @@ type GitStatusInfo struct {
 	RemoteURL      string `json:"remoteUrl,omitempty"`
 	LatestCommit   string `json:"latestCommit,omitempty"`
 	Error          string `json:"error,omitempty"`
+}
+
+type WorktreeInfo struct {
+	TaskKey      string `json:"taskKey"`
+	Branch       string `json:"branch"`
+	WorktreePath string `json:"worktreePath"`
+	Exists       bool   `json:"exists"`
+	MainRepoPath string `json:"mainRepoPath"`
 }
 
 type Task struct {

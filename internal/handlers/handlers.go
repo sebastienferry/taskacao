@@ -81,6 +81,66 @@ func (h *Handler) HandleGitStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+func (h *Handler) HandleGitBranches(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	target := r.URL.Query().Get("path")
+	if target == "" {
+		target = r.URL.Query().Get("projectId")
+	}
+	if target == "" {
+		target = r.URL.Query().Get("repoPath")
+	}
+
+	info, err := h.db.GetGitBranches(target)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (h *Handler) HandleGitCheckout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		Branch    string `json:"branch"`
+		Path      string `json:"path"`
+		ProjectID string `json:"projectId"`
+		Create    bool   `json:"create"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	target := req.Path
+	if target == "" {
+		target = req.ProjectID
+	}
+	if target == "" {
+		target = r.URL.Query().Get("projectId")
+	}
+
+	status, err := h.db.SwitchGitBranch(target, req.Branch, req.Create)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": fmt.Sprintf("Bascule effectuée sur la branche '%s'", req.Branch),
+		"status":  status,
+		"branch":  req.Branch,
+	})
+}
+
 func (h *Handler) HandleSyncAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -267,6 +327,48 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sub-action: /api/projects/{id}/detect-statuses or /api/projects/detect-statuses
+	if (len(parts) >= 2 && parts[1] == "detect-statuses") || id == "detect-statuses" {
+		target := id
+		if len(parts) >= 2 {
+			target = id
+		}
+		tracker := r.URL.Query().Get("tracker")
+		team := r.URL.Query().Get("team")
+		repo := r.URL.Query().Get("repo")
+
+		if r.Method == http.MethodPost {
+			var body struct {
+				ProjectID    string `json:"projectId"`
+				IssueTracker string `json:"issueTracker"`
+				LinearTeam   string `json:"linearTeam"`
+				GithubRepo   string `json:"githubRepo"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+				if body.ProjectID != "" {
+					target = body.ProjectID
+				}
+				if body.IssueTracker != "" {
+					tracker = body.IssueTracker
+				}
+				if body.LinearTeam != "" {
+					team = body.LinearTeam
+				}
+				if body.GithubRepo != "" {
+					repo = body.GithubRepo
+				}
+			}
+		}
+
+		statuses, err := h.db.DetectTrackerStatuses(target, tracker, team, repo)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, statuses)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		project, err := h.db.GetProjectByID(id)
@@ -384,6 +486,9 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/checkout"):
 		subAction = "checkout-branch"
 		id = strings.TrimSuffix(rawPath, "/checkout")
+	case strings.HasSuffix(rawPath, "/worktree"):
+		subAction = "worktree"
+		id = strings.TrimSuffix(rawPath, "/worktree")
 	default:
 		id = rawPath
 	}
@@ -527,6 +632,42 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			"repoPath": repoPath,
 		})
 		return
+	}
+
+	// Sub-action: /api/tasks/{id}/worktree
+	if subAction == "worktree" {
+		if r.Method == http.MethodGet {
+			info, err := h.db.GetTaskWorktreeInfo(id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, info)
+			return
+		} else if r.Method == http.MethodDelete {
+			task, err := h.db.GetTaskByID(id)
+			if err != nil || task == nil {
+				writeError(w, http.StatusNotFound, "Tâche non trouvée")
+				return
+			}
+			repoPath := ""
+			if task.ProjectID != "" {
+				if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil && proj.RepoPath != "" {
+					repoPath = proj.RepoPath
+				}
+			}
+			if repoPath == "" {
+				if settings, _ := h.db.GetSettings(); settings != nil && settings.RepoPath != "" {
+					repoPath = settings.RepoPath
+				}
+			}
+			if err := h.db.RemoveTaskWorktree(repoPath, task.Key); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"message": "Worktree supprimé avec succès"})
+			return
+		}
 	}
 
 

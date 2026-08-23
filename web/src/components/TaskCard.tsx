@@ -147,6 +147,22 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {(task.status === 'to_clarify' || task.status === 'backlog') && (
+            <button
+              onClick={async (e) => {
+                e.stopPropagation()
+                if (isSkillRunning) return
+                await runSkill(task.id, 'implement')
+              }}
+              disabled={isSkillRunning}
+              className="opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold text-white bg-linear-to-r from-blue-600 to-indigo-600 shadow-xs hover:opacity-90 transition-opacity duration-150 active:scale-95"
+              title="Passer directement au code (Implémentation)"
+            >
+              <Flame size={10} className="text-amber-300" />
+              <span>Code</span>
+            </button>
+          )}
+
           {nextSkill && (
             <button
               onClick={handleQuickSkillClick}
@@ -186,11 +202,12 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
           {task.labels.map(lbl => {
             const lower = lbl.toLowerCase()
             let badgeStyle = 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-color)]'
-            if (lower === 'new') badgeStyle = 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30 font-semibold'
+            if (lower === 'new' || lower === 'untouched') badgeStyle = 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30 font-semibold'
             else if (lower === 'clarified') badgeStyle = 'bg-amber-500/15 text-amber-400 border-amber-500/30 font-semibold'
             else if (lower === 'specified') badgeStyle = 'bg-blue-500/15 text-blue-400 border-blue-500/30 font-semibold'
             else if (lower === 'implemented') badgeStyle = 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30 font-semibold'
-            else if (lower === 'reviewed') badgeStyle = 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 font-semibold'
+            else if (lower === 'reviewed') badgeStyle = 'bg-purple-500/15 text-purple-400 border-purple-500/30 font-semibold'
+            else if (lower === 'finished' || lower === 'closed') badgeStyle = 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 font-semibold'
 
             return (
               <span

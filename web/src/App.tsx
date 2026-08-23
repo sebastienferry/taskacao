@@ -12,6 +12,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { ProfileModal } from './components/ProfileModal'
 import { ProjectModal } from './components/ProjectModal'
 import { GitDiffModal } from './components/GitDiffModal'
+import { BranchSwitcherModal } from './components/BranchSwitcherModal'
 import { StatusBar } from './components/StatusBar'
 import { ToastContainer } from './components/ToastContainer'
 import { Loader2 } from 'lucide-react'
@@ -62,6 +63,7 @@ const MainContent: React.FC = () => {
       <TaskDetailModal />
       <ProjectModal />
       <GitDiffModal />
+      <BranchSwitcherModal />
       <CommandPalette />
       <ProfileModal />
       <ToastContainer />

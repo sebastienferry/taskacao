@@ -23,9 +23,12 @@ import {
   ShieldCheck,
   HelpCircle,
   GitBranch,
+  ArrowRight,
+  Sliders,
+  RefreshCw,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { AccentColor, IssueTracker, ProjectSkillsStatus } from '../types'
+import type { AccentColor, IssueTracker, ProjectSkillsStatus, WorkflowStage, DetectedStatus } from '../types'
 
 const AVAILABLE_ICONS = [
   { name: 'Folder', Icon: Folder, label: 'Dossier' },
@@ -51,6 +54,32 @@ const AVAILABLE_COLORS: { name: AccentColor; label: string; bgClass: string; rin
   { name: 'orange', label: 'Orange', bgClass: 'bg-orange-500', ringClass: 'ring-orange-400' },
 ]
 
+const DEFAULT_STAGE_MAPPING: Record<WorkflowStage, string> = {
+  untouched: 'to_clarify',
+  clarified: 'to_specify',
+  specified: 'to_implement',
+  implemented: 'to_test',
+  reviewed: 'to_test',
+  finished: 'to_close',
+}
+
+const STAGE_CONFIGS: { id: WorkflowStage; label: string; sub: string; color: string }[] = [
+  { id: 'untouched', label: '#untouched', sub: 'Cadrage initial brut', color: 'cyan' },
+  { id: 'clarified', label: '#clarified', sub: 'Questions & cadrage validés', color: 'amber' },
+  { id: 'specified', label: '#specified', sub: 'Spécification technique prête', color: 'blue' },
+  { id: 'implemented', label: '#implemented', sub: 'Développement terminé sur branche', color: 'indigo' },
+  { id: 'reviewed', label: '#reviewed', sub: 'Revue de code & PR prête', color: 'purple' },
+  { id: 'finished', label: '#finished', sub: 'Ticket validé & fusionné', color: 'emerald' },
+]
+
+const STATUS_OPTIONS: { id: string; label: string; stageCategory: string }[] = [
+  { id: 'to_clarify', label: 'À clarifier / Todo (Backlog)', stageCategory: 'Todo' },
+  { id: 'to_specify', label: 'À spécifier (Cadré)', stageCategory: 'In Progress' },
+  { id: 'to_implement', label: 'À implémenter (En dev)', stageCategory: 'In Progress' },
+  { id: 'to_test', label: 'À tester (En revue / QA)', stageCategory: 'Review' },
+  { id: 'to_close', label: 'À fermer (Terminé / Mergé)', stageCategory: 'Done' },
+]
+
 export const ProjectModal: React.FC = () => {
   const {
     isProjectModalOpen,
@@ -74,8 +103,43 @@ export const ProjectModal: React.FC = () => {
   const [githubRepo, setGithubRepo] = useState('')
   const [issueTracker, setIssueTracker] = useState<IssueTracker>('linear')
   const [isDefault, setIsDefault] = useState(false)
+  const [stageMapping, setStageMapping] = useState<Record<WorkflowStage, string>>(DEFAULT_STAGE_MAPPING)
+  const [customInputMode, setCustomInputMode] = useState<Record<WorkflowStage, boolean>>({
+    untouched: false,
+    clarified: false,
+    specified: false,
+    implemented: false,
+    reviewed: false,
+    finished: false,
+  })
+  const [detectedStatuses, setDetectedStatuses] = useState<DetectedStatus[]>([])
+  const [isDetectingStatuses, setIsDetectingStatuses] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+
+  const fetchDetectedStatuses = async (customTeam?: string, customTracker?: string, customRepo?: string) => {
+    setIsDetectingStatuses(true)
+    try {
+      const res = await fetch('/api/projects/detect-statuses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: editingProject?.id || '',
+          issueTracker: customTracker || issueTracker,
+          linearTeam: customTeam || linearTeam,
+          githubRepo: customRepo || githubRepo,
+        }),
+      })
+      if (res.ok) {
+        const data: DetectedStatus[] = await res.json()
+        setDetectedStatuses(data)
+      }
+    } catch (err) {
+      console.error('Failed to detect statuses', err)
+    } finally {
+      setIsDetectingStatuses(false)
+    }
+  }
 
   // Skills & Git status in project CWD
   const [skillsStatus, setSkillsStatus] = useState<ProjectSkillsStatus | null>(null)
@@ -151,7 +215,13 @@ export const ProjectModal: React.FC = () => {
       setGithubRepo(editingProject.githubRepo || '')
       setIssueTracker(editingProject.issueTracker || 'linear')
       setIsDefault(editingProject.isDefault || false)
+      setStageMapping(
+        editingProject.stageMapping && Object.keys(editingProject.stageMapping).length > 0
+          ? { ...DEFAULT_STAGE_MAPPING, ...editingProject.stageMapping }
+          : DEFAULT_STAGE_MAPPING
+      )
       fetchSkillsStatus(editingProject.id)
+      fetchDetectedStatuses(editingProject.linearTeam, editingProject.issueTracker, editingProject.githubRepo)
     } else {
       setName('')
       setSlug('')
@@ -163,7 +233,9 @@ export const ProjectModal: React.FC = () => {
       setGithubRepo('')
       setIssueTracker('linear')
       setIsDefault(false)
+      setStageMapping(DEFAULT_STAGE_MAPPING)
       setSkillsStatus(null)
+      fetchDetectedStatuses('FRE', 'linear', '')
     }
   }, [editingProject, isProjectModalOpen])
 
@@ -263,6 +335,7 @@ export const ProjectModal: React.FC = () => {
         githubRepo: githubRepo.trim(),
         issueTracker,
         isDefault,
+        stageMapping,
       }
 
       if (editingProject) {
@@ -546,6 +619,204 @@ export const ProjectModal: React.FC = () => {
                 />
                 <FolderGit2 size={13} className="absolute left-2.5 top-2.5 text-[var(--text-muted)]" />
               </div>
+            </div>
+          </div>
+
+          {/* Mapping Pipeline IA ➔ Statuts Tracker */}
+          <div className="p-4 rounded-xl bg-[var(--bg-tertiary)]/60 border border-[var(--border-color)] space-y-3.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Sliders size={14} className="text-[var(--accent-color)]" />
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-primary)]">
+                  Mapping Pipeline IA ➔ Statuts Tracker
+                </span>
+                {detectedStatuses.length > 0 && (
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-[var(--accent-light)] accent-text font-bold">
+                    {detectedStatuses.length} statuts détectés
+                  </span>
+                )}
+              </div>
+
+              {/* Action Toolbar */}
+              <div className="flex items-center flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  disabled={isDetectingStatuses}
+                  onClick={() => fetchDetectedStatuses()}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] hover:border-[var(--accent-color)] hover:bg-[var(--accent-light)] transition-all cursor-pointer disabled:opacity-50"
+                  title="Scanner Linear / GitHub / Base de données pour détecter les statuts réels"
+                >
+                  <RefreshCw size={11} className={isDetectingStatuses ? 'animate-spin text-[var(--accent-color)]' : 'text-cyan-400'} />
+                  <span>{isDetectingStatuses ? 'Scan...' : 'Auto-détecter'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (detectedStatuses.length === 0) {
+                      addToast({
+                        type: 'info',
+                        title: 'Aucun statut détecté',
+                        description: 'Cliquez d\'abord sur "Auto-détecter" pour scanner votre tracker.',
+                      })
+                      return
+                    }
+                    const findStatus = (keywords: string[], fallback: string): string => {
+                      for (const kw of keywords) {
+                        const found = detectedStatuses.find(
+                          s => s.name.toLowerCase().includes(kw) || (s.type && s.type.toLowerCase().includes(kw))
+                        )
+                        if (found) return found.name
+                      }
+                      return fallback
+                    }
+                    setStageMapping({
+                      untouched: findStatus(['triage', 'backlog', 'unstarted', 'to_clarify', 'todo', 'open'], 'to_clarify'),
+                      clarified: findStatus(['cadré', 'clarified', 'specify', 'to_specify', 'triage', 'todo', 'unstarted'], 'to_specify'),
+                      specified: findStatus(['ready', 'specified', 'spec', 'plan', 'to_implement', 'todo'], 'to_implement'),
+                      implemented: findStatus(['in progress', 'progress', 'dev', 'started', 'implemented', 'doing', 'to_test'], 'to_test'),
+                      reviewed: findStatus(['review', 'pr', 'qa', 'test', 'reviewed', 'to_test'], 'to_test'),
+                      finished: findStatus(['done', 'closed', 'completed', 'finished', 'to_close'], 'to_close'),
+                    })
+                    addToast({
+                      type: 'success',
+                      title: 'Mapping auto-assigné !',
+                      description: 'Les statuts ont été mappés intelligemment sur vos 6 étapes IA.',
+                    })
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-[var(--accent-light)] accent-text border border-[var(--accent-color)]/30 hover:opacity-90 transition-all cursor-pointer"
+                  title="Associer automatiquement les statuts détectés aux 6 étapes IA"
+                >
+                  <Sparkles size={11} className="text-amber-400" />
+                  <span>Auto-assigner</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStageMapping(DEFAULT_STAGE_MAPPING)}
+                  className="px-2 py-1 rounded-lg text-[10px] font-medium bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent-color)]/40 transition-colors cursor-pointer"
+                  title="Réinitialiser avec le flux standard"
+                >
+                  Défaut
+                </button>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+              Associez chaque étape IA à un statut de votre tracker (choix dans la liste détectée ou saisie de n'importe quel statut personnalisé).
+            </p>
+
+            <div className="space-y-2">
+              {STAGE_CONFIGS.map(stage => {
+                const currentStatus = stageMapping[stage.id] || DEFAULT_STAGE_MAPPING[stage.id]
+                const isCustom = customInputMode[stage.id]
+
+                return (
+                  <div
+                    key={stage.id}
+                    className="p-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                  >
+                    {/* Stage Label Left */}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border font-mono shrink-0 ${
+                        stage.id === 'untouched' ? 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' :
+                        stage.id === 'clarified' ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' :
+                        stage.id === 'specified' ? 'bg-blue-500/15 text-blue-400 border-blue-500/30' :
+                        stage.id === 'implemented' ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30' :
+                        stage.id === 'reviewed' ? 'bg-purple-500/15 text-purple-400 border-purple-500/30' :
+                        'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                      }`}>
+                        {stage.label}
+                      </span>
+                      <span className="text-[11px] text-[var(--text-muted)] truncate">
+                        {stage.sub}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                      <ArrowRight size={13} className="text-[var(--text-muted)] hidden sm:inline shrink-0" />
+
+                      {isCustom ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={currentStatus}
+                            onChange={e =>
+                              setStageMapping(prev => ({
+                                ...prev,
+                                [stage.id]: e.target.value,
+                              }))
+                            }
+                            placeholder="Nom du statut (ex: QA, Ready...)"
+                            className="w-44 px-2.5 py-1 text-xs rounded-lg bg-[var(--bg-secondary)] border border-[var(--accent-color)] text-[var(--text-primary)] font-medium focus:outline-none"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCustomInputMode(prev => ({ ...prev, [stage.id]: false }))
+                            }
+                            className="px-2 py-1 rounded-lg text-[10px] font-medium bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] transition-colors cursor-pointer"
+                            title="Revenir à la liste"
+                          >
+                            Liste
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={currentStatus}
+                            onChange={e => {
+                              if (e.target.value === '__custom__') {
+                                setCustomInputMode(prev => ({ ...prev, [stage.id]: true }))
+                              } else {
+                                setStageMapping(prev => ({
+                                  ...prev,
+                                  [stage.id]: e.target.value,
+                                }))
+                              }
+                            }}
+                            className="w-48 px-2 py-1 text-xs rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] font-medium"
+                          >
+                            {detectedStatuses.length > 0 && (
+                              <optgroup label="✨ Statuts détectés (Tracker / DB)">
+                                {detectedStatuses.map(st => (
+                                  <option key={`det-${st.id}`} value={st.name}>
+                                    {st.name} {st.source ? `(${st.source})` : ''}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+
+                            <optgroup label="📋 Statuts standards Taskacao">
+                              {STATUS_OPTIONS.map(opt => (
+                                <option key={opt.id} value={opt.id}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </optgroup>
+
+                            <optgroup label="✏️ Personnalisé">
+                              <option value="__custom__">➕ Saisir un statut libre...</option>
+                            </optgroup>
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCustomInputMode(prev => ({ ...prev, [stage.id]: true }))
+                            }
+                            className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                            title="Saisir un statut libre en texte"
+                          >
+                            ✏️
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
 

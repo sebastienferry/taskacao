@@ -183,6 +183,12 @@ export const GitDiffModal: React.FC = () => {
                       <span className="text-rose-400 font-bold">-{diffResult.deletions}</span>
                     </>
                   )}
+
+                  {diffResult.worktreePath && (
+                    <span className="inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20" title={`Worktree isolé : ${diffResult.worktreePath}`}>
+                      <span>🌳 Worktree isolé</span>
+                    </span>
+                  )}
                 </div>
               )}
             </div>

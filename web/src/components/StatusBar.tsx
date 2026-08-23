@@ -23,6 +23,7 @@ export const StatusBar: React.FC = () => {
     setActiveView,
     setIsProfileOpen,
     setIsProjectModalOpen,
+    setIsBranchModalOpen,
     t,
     addToast,
   } = useApp()
@@ -93,9 +94,9 @@ export const StatusBar: React.FC = () => {
         {/* Git Branch Badge & Status */}
         {isGit && activeBranch ? (
           <div
-            onClick={handleCopyBranch}
+            onClick={() => setIsBranchModalOpen(true)}
             className="group flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] cursor-pointer transition-all border border-[var(--border-color)]/60"
-            title={`${t.statusBar.branch} : ${activeBranch} (Cliquer pour copier)`}
+            title={`${t.statusBar.branch} : ${activeBranch} (Cliquer pour changer de branche)`}
           >
             <GitBranch size={12} className="text-cyan-400 shrink-0 group-hover:scale-110 transition-transform" />
             <span className="font-bold text-cyan-300 dark:text-cyan-400 truncate max-w-[180px] sm:max-w-[260px]">
@@ -133,7 +134,11 @@ export const StatusBar: React.FC = () => {
             )}
 
             {/* Copy icon on hover */}
-            <span className="opacity-0 group-hover:opacity-100 text-[var(--text-muted)] transition-opacity ml-0.5">
+            <span
+              onClick={handleCopyBranch}
+              className="opacity-0 group-hover:opacity-100 hover:text-cyan-300 text-[var(--text-muted)] transition-opacity ml-0.5 p-0.5 rounded cursor-pointer"
+              title="Copier le nom de la branche"
+            >
               {copied ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
             </span>
           </div>

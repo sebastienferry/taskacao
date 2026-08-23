@@ -43,6 +43,7 @@ export const Header: React.FC = () => {
     setIsQuickAddOpen,
     setIsCommandPaletteOpen,
     setIsProfileOpen,
+    setIsBranchModalOpen,
     isSyncing,
     settings,
     updateSettings,
@@ -160,13 +161,9 @@ export const Header: React.FC = () => {
         {/* Active Git Branch Badge */}
         {gitStatus?.branch && (
           <div
-            onClick={() => {
-              if (gitStatus.branch) {
-                navigator.clipboard.writeText(gitStatus.branch)
-              }
-            }}
-            className="hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-mono font-semibold bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-cyan-500/40 cursor-pointer transition-all shadow-xs"
-            title={`Branche Git active : ${gitStatus.branch} (${gitStatus.isClean ? 'Clean' : '*' + (gitStatus.modifiedCount + gitStatus.untrackedCount)}) - Cliquer pour copier`}
+            onClick={() => setIsBranchModalOpen(true)}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-cyan-500/50 hover:bg-cyan-500/10 cursor-pointer transition-all shadow-xs"
+            title={`Branche Git active : ${gitStatus.branch} (${gitStatus.isClean ? 'Clean' : '*' + (gitStatus.modifiedCount + gitStatus.untrackedCount)}) - Cliquer pour changer de branche`}
           >
             <GitBranch size={13} className="text-cyan-400 shrink-0" />
             <span className="text-cyan-300 dark:text-cyan-400 font-bold truncate max-w-[160px]">{gitStatus.branch}</span>

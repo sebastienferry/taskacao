@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { Task, Status, Priority, UserSettings, ViewMode, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult, GitStatusInfo } from '../types'
+import type { Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult, GitStatusInfo, GitBranchesInfo } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 
 interface AppContextType {
@@ -21,6 +21,11 @@ interface AppContextType {
   gitStatus: GitStatusInfo | null
   isFetchingGitStatus: boolean
   fetchGitStatus: (targetPathOrProject?: string) => Promise<GitStatusInfo | null>
+  gitBranches: GitBranchesInfo | null
+  fetchGitBranches: (projectIdOrPath?: string) => Promise<GitBranchesInfo | null>
+  switchGitBranch: (branch: string, create?: boolean, projectIdOrPath?: string) => Promise<boolean>
+  isBranchModalOpen: boolean
+  setIsBranchModalOpen: (open: boolean) => void
   isLoading: boolean
   isSkillRunning: boolean
   isSyncing: boolean
@@ -28,6 +33,8 @@ interface AppContextType {
   error: string | null
   activeView: ViewMode
   setActiveView: (view: ViewMode) => void
+  boardGrouping: BoardGroupingMode
+  setBoardGrouping: (mode: BoardGroupingMode) => void
   searchQuery: string
   setSearchQuery: (query: string) => void
   statusFilter: Status | null
@@ -65,6 +72,7 @@ interface AppContextType {
   updateTask: (id: string, updates: Partial<Task>) => Promise<Task | null>
   convertTask: (id: string, target: 'linear' | 'github') => Promise<Task | null>
   moveTask: (id: string, newStatus: Status, newPosition: number) => Promise<void>
+  moveTaskWorkflowStage: (taskId: string, targetStage: WorkflowStage) => Promise<Task | null>
   deleteTask: (id: string) => Promise<boolean>
   runSkill: (taskId: string, skillId: string, prompt?: string) => Promise<TaskActivity | null>
   syncAll: () => Promise<void>
@@ -131,6 +139,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [runningSkillId, setRunningSkillId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [activeView, setActiveView] = useState<ViewMode>('board')
+  const [boardGrouping, setBoardGroupingState] = useState<BoardGroupingMode>(() => {
+    try {
+      return (localStorage.getItem('taskacao_board_grouping') as BoardGroupingMode) || 'workflow'
+    } catch {
+      return 'workflow'
+    }
+  })
+
+  const setBoardGrouping = useCallback((mode: BoardGroupingMode) => {
+    setBoardGroupingState(mode)
+    try {
+      localStorage.setItem('taskacao_board_grouping', mode)
+    } catch {}
+  }, [])
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<Status | null>(null)
   const [priorityFilter, setPriorityFilter] = useState<Priority | null>(null)
@@ -192,9 +214,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return projects.find(p => p.id === selectedProjectId || p.slug === selectedProjectId) || null
   }, [projects, selectedProjectId])
 
-  // Git Status State
+  // Git Status & Branches State
   const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null)
+  const [gitBranches, setGitBranches] = useState<GitBranchesInfo | null>(null)
   const [isFetchingGitStatus, setIsFetchingGitStatus] = useState(false)
+  const [isBranchModalOpen, setIsBranchModalOpen] = useState(false)
 
   // Activities & Queue State
   const [activities, setActivities] = useState<TaskActivity[]>([])
@@ -711,8 +735,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
       if (!res.ok) throw new Error('Update failed')
       const updated: Task = await res.json()
-      setTasks(prev => prev.map(t => (t.id === id ? updated : t)))
-      if (selectedTask && selectedTask.id === id) {
+      setTasks(prev => prev.map(t => (t.id === id || t.key === id || t.id === updated.id || t.key === updated.key ? updated : t)))
+      if (selectedTask && (selectedTask.id === id || selectedTask.key === id || selectedTask.id === updated.id)) {
         setSelectedTask(updated)
       }
       addToast({
@@ -796,6 +820,45 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         description: err.message,
       })
     }
+  }
+
+  const moveTaskWorkflowStage = async (taskId: string, targetStage: WorkflowStage): Promise<Task | null> => {
+    const task = tasks.find(t => t.id === taskId || t.key === taskId)
+    if (!task) return null
+
+    const currentLabels = task.labels || []
+    const cleanLabels = currentLabels.filter(
+      l => !['untouched', 'new', 'clarified', 'specified', 'implemented', 'reviewed', 'finished', 'closed', 'New', 'Clarified', 'Specified', 'Implemented', 'Reviewed', 'Finished', 'Untouched'].some(wl => wl.toLowerCase() === l.toLowerCase())
+    )
+    cleanLabels.push(targetStage)
+
+    // Determine mapped status using project stageMapping if configured
+    let mappedStatus: Status = task.status
+    const proj = projects.find(p => p.id === task.projectId) || currentProject
+    if (proj?.stageMapping && proj.stageMapping[targetStage]) {
+      mappedStatus = proj.stageMapping[targetStage] as Status
+    } else {
+      if (targetStage === 'untouched') mappedStatus = 'to_clarify'
+      else if (targetStage === 'clarified') mappedStatus = 'to_specify'
+      else if (targetStage === 'specified') mappedStatus = 'to_implement'
+      else if (targetStage === 'implemented') mappedStatus = 'to_test'
+      else if (targetStage === 'reviewed') mappedStatus = 'to_test'
+      else if (targetStage === 'finished') mappedStatus = 'to_close'
+    }
+
+    const updated = await updateTask(task.id, {
+      labels: cleanLabels,
+      status: mappedStatus,
+    })
+
+    if (updated) {
+      addToast({
+        type: 'info',
+        title: 'Étape Pipeline IA mise à jour',
+        description: `${updated.key} ➔ #${targetStage}`,
+      })
+    }
+    return updated
   }
 
   const runSkill = async (taskId: string, skillId: string, prompt?: string): Promise<TaskActivity | null> => {
@@ -1021,6 +1084,58 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [addToast, fetchTasks])
 
+  const fetchGitBranches = useCallback(async (projectIdOrPath?: string): Promise<GitBranchesInfo | null> => {
+    try {
+      const target = projectIdOrPath || selectedProjectId || ''
+      const res = await fetch(`${API_BASE}/git/branches?projectId=${encodeURIComponent(target)}`)
+      if (!res.ok) throw new Error('Failed to fetch branches')
+      const data: GitBranchesInfo = await res.json()
+      setGitBranches(data)
+      return data
+    } catch (err) {
+      console.error('Failed to fetch git branches', err)
+      return null
+    }
+  }, [selectedProjectId])
+
+  const switchGitBranch = useCallback(async (branch: string, create: boolean = false, projectIdOrPath?: string): Promise<boolean> => {
+    try {
+      const target = projectIdOrPath || selectedProjectId || ''
+      const res = await fetch(`${API_BASE}/git/checkout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          branch,
+          create,
+          projectId: target,
+        }),
+      })
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.error || 'Erreur lors du changement de branche')
+      }
+      const data = await res.json()
+      if (data.status) {
+        setGitStatus(data.status)
+      }
+      await fetchGitBranches(target)
+      await fetchGitStatus()
+      addToast({
+        type: 'success',
+        title: 'Branche Git active',
+        description: data.message || `Bascule effectuée sur '${branch}'`,
+      })
+      return true
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Échec de bascule de branche',
+        description: err.message,
+      })
+      return false
+    }
+  }, [selectedProjectId, fetchGitBranches, fetchGitStatus, addToast])
+
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1093,6 +1208,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         gitStatus,
         isFetchingGitStatus,
         fetchGitStatus,
+        gitBranches,
+        fetchGitBranches,
+        switchGitBranch,
+        isBranchModalOpen,
+        setIsBranchModalOpen,
         isLoading,
         isSkillRunning,
         isSyncing,
@@ -1100,6 +1220,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         error,
         activeView,
         setActiveView,
+        boardGrouping,
+        setBoardGrouping,
+        moveTaskWorkflowStage,
         searchQuery,
         setSearchQuery,
         statusFilter,

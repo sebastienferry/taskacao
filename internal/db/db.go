@@ -110,6 +110,7 @@ func (d *DB) initSchema() error {
 			github_repo TEXT NOT NULL DEFAULT '',
 			issue_tracker TEXT NOT NULL DEFAULT 'linear',
 			is_default INTEGER NOT NULL DEFAULT 0,
+			stage_mapping TEXT NOT NULL DEFAULT '{}',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
@@ -164,6 +165,7 @@ func (d *DB) initSchema() error {
 	}
 
 	// Migrations for existing database instances
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN stage_mapping TEXT NOT NULL DEFAULT '{}';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT 'fretzee-studio';")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN branch_name TEXT;")
@@ -549,6 +551,173 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 	return &t, nil
 }
 
+func (d *DB) EnsureGitIgnoreTasks(repoPath string) error {
+	gitignorePath := filepath.Join(repoPath, ".gitignore")
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.WriteFile(gitignorePath, []byte("# Taskacao worktrees\n.tasks/\n"), 0644)
+		}
+		return nil
+	}
+	content := string(data)
+	if !strings.Contains(content, ".tasks") {
+		newContent := strings.TrimRight(content, "\r\n") + "\n\n# Taskacao parallel agent worktrees\n.tasks/\n"
+		return os.WriteFile(gitignorePath, []byte(newContent), 0644)
+	}
+	return nil
+}
+
+func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string, string, error) {
+	if mainRepoPath == "" || task == nil {
+		return mainRepoPath, "", nil
+	}
+
+	mainRepoPath = strings.TrimSpace(mainRepoPath)
+	gitDir := filepath.Join(mainRepoPath, ".git")
+	if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() {
+		return mainRepoPath, "", nil
+	}
+
+	// Ensure .tasks/ is ignored by Git
+	_ = d.EnsureGitIgnoreTasks(mainRepoPath)
+
+	// Compute branch name if not set
+	if task.BranchName == nil || *task.BranchName == "" {
+		cleanTitle := strings.ToLower(task.Title)
+		cleanTitle = strings.ReplaceAll(cleanTitle, " ", "-")
+		cleanTitle = strings.ReplaceAll(cleanTitle, "'", "-")
+		cleanTitle = strings.ReplaceAll(cleanTitle, "\"", "")
+		cleanTitle = strings.ReplaceAll(cleanTitle, "/", "-")
+		cleanTitle = strings.ReplaceAll(cleanTitle, "\\", "-")
+		if len(cleanTitle) > 30 {
+			cleanTitle = cleanTitle[:30]
+		}
+		branch := fmt.Sprintf("%s-%s", task.Key, cleanTitle)
+		task.BranchName = &branch
+
+		d.mu.Lock()
+		_, _ = d.conn.Exec("UPDATE tasks SET branch_name = ? WHERE id = ?", branch, task.ID)
+		d.mu.Unlock()
+	}
+
+	targetBranch := *task.BranchName
+	worktreeBase := filepath.Join(mainRepoPath, ".tasks", "worktrees")
+	worktreePath := filepath.Join(worktreeBase, task.Key)
+
+	// Check if worktree directory already exists
+	if fi, err := os.Stat(worktreePath); err == nil && fi.IsDir() {
+		checkCmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--is-inside-work-tree")
+		if out, err := checkCmd.Output(); err == nil && strings.TrimSpace(string(out)) == "true" {
+			_ = exec.Command("git", "-C", worktreePath, "checkout", "-B", targetBranch).Run()
+			return worktreePath, targetBranch, nil
+		}
+		_ = exec.Command("git", "-C", mainRepoPath, "worktree", "remove", "--force", worktreePath).Run()
+		_ = os.RemoveAll(worktreePath)
+		_ = exec.Command("git", "-C", mainRepoPath, "worktree", "prune").Run()
+	}
+
+	_ = os.MkdirAll(worktreeBase, 0755)
+
+	// Check if target branch exists in repo
+	checkBranchCmd := exec.Command("git", "-C", mainRepoPath, "rev-parse", "--verify", targetBranch)
+	branchExists := checkBranchCmd.Run() == nil
+
+	if branchExists {
+		addCmd := exec.Command("git", "-C", mainRepoPath, "worktree", "add", worktreePath, targetBranch)
+		if _, err := addCmd.CombinedOutput(); err != nil {
+			addCmd2 := exec.Command("git", "-C", mainRepoPath, "worktree", "add", "--force", "-B", targetBranch, worktreePath, targetBranch)
+			if out2, err2 := addCmd2.CombinedOutput(); err2 != nil {
+				return mainRepoPath, targetBranch, fmt.Errorf("erreur git worktree add: %s (%w)", string(out2), err2)
+			}
+		}
+	} else {
+		baseBranch := "main"
+		if err := exec.Command("git", "-C", mainRepoPath, "rev-parse", "--verify", "main").Run(); err != nil {
+			if err2 := exec.Command("git", "-C", mainRepoPath, "rev-parse", "--verify", "master").Run(); err2 == nil {
+				baseBranch = "master"
+			}
+		}
+
+		addCmd := exec.Command("git", "-C", mainRepoPath, "worktree", "add", "-b", targetBranch, worktreePath, baseBranch)
+		if _, err := addCmd.CombinedOutput(); err != nil {
+			addCmd2 := exec.Command("git", "-C", mainRepoPath, "worktree", "add", "-B", targetBranch, worktreePath, baseBranch)
+			if out2, err2 := addCmd2.CombinedOutput(); err2 != nil {
+				return mainRepoPath, targetBranch, fmt.Errorf("erreur création worktree: %s (%w)", string(out2), err2)
+			}
+		}
+	}
+
+	// Symlink dependencies to speed up builds and avoid redundant node_modules downloads
+	mainNodeModules := filepath.Join(mainRepoPath, "node_modules")
+	wtNodeModules := filepath.Join(worktreePath, "node_modules")
+	if fi, err := os.Stat(mainNodeModules); err == nil && fi.IsDir() {
+		if _, err := os.Stat(wtNodeModules); os.IsNotExist(err) {
+			_ = os.Symlink(mainNodeModules, wtNodeModules)
+		}
+	}
+
+	mainWebNodeModules := filepath.Join(mainRepoPath, "web", "node_modules")
+	wtWebNodeModules := filepath.Join(worktreePath, "web", "node_modules")
+	if fi, err := os.Stat(mainWebNodeModules); err == nil && fi.IsDir() {
+		_ = os.MkdirAll(filepath.Join(worktreePath, "web"), 0755)
+		if _, err := os.Stat(wtWebNodeModules); os.IsNotExist(err) {
+			_ = os.Symlink(mainWebNodeModules, wtWebNodeModules)
+		}
+	}
+
+	return worktreePath, targetBranch, nil
+}
+
+func (d *DB) RemoveTaskWorktree(mainRepoPath string, taskKey string) error {
+	if mainRepoPath == "" || taskKey == "" {
+		return nil
+	}
+	worktreePath := filepath.Join(mainRepoPath, ".tasks", "worktrees", taskKey)
+	_ = exec.Command("git", "-C", mainRepoPath, "worktree", "remove", "--force", worktreePath).Run()
+	_ = exec.Command("git", "-C", mainRepoPath, "worktree", "prune").Run()
+	_ = os.RemoveAll(worktreePath)
+	return nil
+}
+
+func (d *DB) GetTaskWorktreeInfo(taskIDOrKey string) (*models.WorktreeInfo, error) {
+	task, err := d.GetTaskByID(taskIDOrKey)
+	if err != nil || task == nil {
+		return nil, fmt.Errorf("tâche non trouvée")
+	}
+
+	mainRepoPath := ""
+	if task.ProjectID != "" {
+		if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil && proj.RepoPath != "" {
+			mainRepoPath = proj.RepoPath
+		}
+	}
+	if mainRepoPath == "" {
+		if settings, _ := d.GetSettings(); settings != nil && settings.RepoPath != "" {
+			mainRepoPath = settings.RepoPath
+		}
+	}
+
+	branch := ""
+	if task.BranchName != nil {
+		branch = *task.BranchName
+	}
+
+	worktreePath := filepath.Join(mainRepoPath, ".tasks", "worktrees", task.Key)
+	exists := false
+	if fi, err := os.Stat(worktreePath); err == nil && fi.IsDir() {
+		exists = true
+	}
+
+	return &models.WorktreeInfo{
+		TaskKey:      task.Key,
+		Branch:       branch,
+		WorktreePath: worktreePath,
+		Exists:       exists,
+		MainRepoPath: mainRepoPath,
+	}, nil
+}
+
 func (d *DB) GetTaskGitDiff(taskIDOrKey string) (*models.GitDiffResult, error) {
 	task, err := d.GetTaskByID(taskIDOrKey)
 	if err != nil {
@@ -577,7 +746,17 @@ func (d *DB) GetTaskGitDiff(taskIDOrKey string) (*models.GitDiffResult, error) {
 		branchName = *task.BranchName
 	}
 
-	return d.runner.GetGitDiff(repoPath, branchName, task.Key, task.PrURL)
+	worktreePath := filepath.Join(repoPath, ".tasks", "worktrees", task.Key)
+	diffTargetDir := repoPath
+	if fi, err := os.Stat(worktreePath); err == nil && fi.IsDir() {
+		diffTargetDir = worktreePath
+	}
+
+	res, err := d.runner.GetGitDiff(diffTargetDir, branchName, task.Key, task.PrURL)
+	if res != nil && diffTargetDir != repoPath {
+		res.WorktreePath = worktreePath
+	}
+	return res, err
 }
 
 // EnsureTaskGitBranch ensures that the project git repository is switched to the task's dedicated branch.
@@ -676,6 +855,185 @@ func (d *DB) GetGitStatus(projectIDOrPath string) (*models.GitStatusInfo, error)
 	return d.runner.GetCwdGitStatus(repoPath)
 }
 
+func (d *DB) GetGitBranches(projectIDOrPath string) (*models.GitBranchesInfo, error) {
+	d.mu.RLock()
+	repoPath := projectIDOrPath
+	if projectIDOrPath != "" {
+		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
+			repoPath = proj.RepoPath
+		}
+	}
+	if repoPath == "" {
+		settings, _ := d.getSettingsUnsafe()
+		if settings != nil && settings.RepoPath != "" {
+			repoPath = settings.RepoPath
+		}
+	}
+	d.mu.RUnlock()
+
+	if repoPath == "" {
+		return nil, fmt.Errorf("aucun chemin de dépôt Git configuré")
+	}
+
+	if _, err := os.Stat(repoPath); err != nil {
+		return nil, fmt.Errorf("le dossier %s n'existe pas", repoPath)
+	}
+
+	// Current active branch
+	curCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	curOut, _ := curCmd.Output()
+	currentBranch := strings.TrimSpace(string(curOut))
+
+	// Get all branches (local + remote)
+	format := "%(HEAD)|%(refname:short)|%(objectname:short)|%(contents:subject)"
+	cmd := exec.Command("git", "-C", repoPath, "branch", "-a", "--format="+format)
+	out, err := cmd.Output()
+	if err != nil {
+		return &models.GitBranchesInfo{
+			RepoPath:      repoPath,
+			CurrentBranch: currentBranch,
+			Branches: []models.GitBranchItem{
+				{Name: currentBranch, IsCurrent: true},
+			},
+		}, nil
+	}
+
+	var branches []models.GitBranchItem
+	seen := make(map[string]bool)
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) < 2 {
+			continue
+		}
+		isHead := strings.TrimSpace(parts[0]) == "*"
+		rawName := strings.TrimSpace(parts[1])
+		commit := ""
+		if len(parts) >= 3 {
+			commit = strings.TrimSpace(parts[2])
+		}
+		message := ""
+		if len(parts) >= 4 {
+			message = strings.TrimSpace(parts[3])
+		}
+
+		if rawName == "" || strings.HasPrefix(rawName, "origin/HEAD") || strings.HasPrefix(rawName, "remotes/origin/HEAD") {
+			continue
+		}
+
+		isRemote := strings.HasPrefix(rawName, "origin/") || strings.HasPrefix(rawName, "remotes/")
+		cleanName := strings.TrimPrefix(rawName, "remotes/")
+		cleanName = strings.TrimPrefix(cleanName, "origin/")
+
+		if seen[cleanName] {
+			continue
+		}
+		seen[cleanName] = true
+
+		isCurrent := isHead || cleanName == currentBranch
+
+		branches = append(branches, models.GitBranchItem{
+			Name:      cleanName,
+			IsCurrent: isCurrent,
+			IsRemote:  isRemote,
+			Commit:    commit,
+			Message:   message,
+		})
+	}
+
+	if currentBranch != "" && !seen[currentBranch] {
+		branches = append([]models.GitBranchItem{{
+			Name:      currentBranch,
+			IsCurrent: true,
+		}}, branches...)
+	}
+
+	return &models.GitBranchesInfo{
+		RepoPath:      repoPath,
+		CurrentBranch: currentBranch,
+		Branches:      branches,
+	}, nil
+}
+
+func (d *DB) SwitchGitBranch(projectIDOrPath, targetBranch string, create bool) (*models.GitStatusInfo, error) {
+	d.mu.RLock()
+	repoPath := projectIDOrPath
+	if projectIDOrPath != "" {
+		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
+			repoPath = proj.RepoPath
+		}
+	}
+	if repoPath == "" {
+		settings, _ := d.getSettingsUnsafe()
+		if settings != nil && settings.RepoPath != "" {
+			repoPath = settings.RepoPath
+		}
+	}
+	d.mu.RUnlock()
+
+	if repoPath == "" {
+		return nil, fmt.Errorf("aucun chemin de dépôt Git configuré")
+	}
+
+	targetBranch = strings.TrimSpace(targetBranch)
+	if targetBranch == "" {
+		return nil, fmt.Errorf("nom de branche cible obligatoire")
+	}
+
+	// 1. Get current branch
+	curCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	curOut, _ := curCmd.Output()
+	currentBranch := strings.TrimSpace(string(curOut))
+
+	if currentBranch == targetBranch && !create {
+		return d.runner.GetCwdGitStatus(repoPath)
+	}
+
+	// 2. If uncommitted changes exist, safely commit them
+	statusOut, _ := exec.Command("git", "-C", repoPath, "status", "--porcelain").Output()
+	if len(strings.TrimSpace(string(statusOut))) > 0 {
+		_ = exec.Command("git", "-C", repoPath, "add", "-A").Run()
+		commitMsg := fmt.Sprintf("chore: auto-save work on '%s' before switching to '%s'", currentBranch, targetBranch)
+		_ = exec.Command("git", "-C", repoPath, "commit", "-m", commitMsg).Run()
+	}
+
+	// 3. Checkout branch
+	if create {
+		createCmd := exec.Command("git", "-C", repoPath, "checkout", "-b", targetBranch)
+		if _, err := createCmd.CombinedOutput(); err != nil {
+			createCmd2 := exec.Command("git", "-C", repoPath, "checkout", "-B", targetBranch)
+			if out2, err2 := createCmd2.CombinedOutput(); err2 != nil {
+				return nil, fmt.Errorf("erreur création branche %s: %s (%w)", targetBranch, string(out2), err2)
+			}
+		}
+	} else {
+		// Check if branch exists locally
+		if err := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", targetBranch).Run(); err == nil {
+			switchCmd := exec.Command("git", "-C", repoPath, "checkout", targetBranch)
+			if out, err := switchCmd.CombinedOutput(); err != nil {
+				return nil, fmt.Errorf("erreur bascule branche %s: %s (%w)", targetBranch, string(out), err)
+			}
+		} else {
+			// Try checkout remote or create
+			trackCmd := exec.Command("git", "-C", repoPath, "checkout", "--track", "origin/"+targetBranch)
+			if _, err := trackCmd.CombinedOutput(); err != nil {
+				// Fallback checkout -b
+				createCmd := exec.Command("git", "-C", repoPath, "checkout", "-b", targetBranch)
+				if out2, err2 := createCmd.CombinedOutput(); err2 != nil {
+					return nil, fmt.Errorf("erreur bascule branche %s: %s (%w)", targetBranch, string(out2), err2)
+				}
+			}
+		}
+	}
+
+	return d.runner.GetCwdGitStatus(repoPath)
+}
+
 func (d *DB) getNextTaskKey(prefix string) (string, error) {
 	if prefix == "" {
 		prefix = "TASK"
@@ -708,25 +1066,24 @@ func (d *DB) getNextTaskKey(prefix string) (string, error) {
 	return fmt.Sprintf("%s-%d", prefix, maxNum+1), nil
 }
 
-// Workflow labels following the lifecycle:
-// Create -> Clarify -> Specify -> Implement -> Review
-// Label after action: New -> Clarified -> Specified -> Implemented -> Reviewed
-var WorkflowLabels = []string{"New", "Clarified", "Specified", "Implemented", "Reviewed"}
+// Workflow labels following the AI lifecycle:
+// untouched -> clarified -> specified -> implemented -> reviewed -> finished
+var WorkflowLabels = []string{"untouched", "clarified", "specified", "implemented", "reviewed", "finished", "New", "Clarified", "Specified", "Implemented", "Reviewed", "Finished"}
 
 func GetStageLabelForStatus(status models.Status) string {
 	switch status {
 	case models.StatusToClarify, models.StatusBacklog:
-		return "New"
+		return "untouched"
 	case models.StatusToSpecify, models.StatusSpecified:
-		return "Clarified"
+		return "clarified"
 	case models.StatusToImplement, models.StatusInProgress:
-		return "Specified"
+		return "specified"
 	case models.StatusToTest, models.StatusToValidate:
-		return "Implemented"
+		return "implemented"
 	case models.StatusToClose, models.StatusDone:
-		return "Reviewed"
+		return "reviewed"
 	default:
-		return "New"
+		return "untouched"
 	}
 }
 
@@ -734,7 +1091,7 @@ func SetWorkflowLabel(existingLabels []string, targetLabel string) []string {
 	var result []string
 	for _, l := range existingLabels {
 		isWorkflow := false
-		for _, wl := range []string{"New", "Clarified", "Specified", "Implemented", "Reviewed", "new", "clarified", "specified", "implemented", "reviewed"} {
+		for _, wl := range []string{"untouched", "new", "clarified", "specified", "implemented", "reviewed", "finished", "closed", "New", "Clarified", "Specified", "Implemented", "Reviewed", "Finished", "Untouched"} {
 			if strings.EqualFold(l, wl) {
 				isWorkflow = true
 				break
@@ -963,8 +1320,8 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 	_, err = d.conn.Exec(`
 		UPDATE tasks
 		SET project_id = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?, assignee = ?, assignee_avatar = ?, position = ?, due_date = ?, branch_name = ?, pr_url = ?, source = ?, external_url = ?, updated_at = ?
-		WHERE id = ?
-	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, existing.Source, existing.ExternalURL, existing.UpdatedAt, id)
+		WHERE id = ? OR key = ?
+	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, existing.Source, existing.ExternalURL, existing.UpdatedAt, existing.ID, existing.Key)
 
 	if err != nil {
 		return nil, err
@@ -1106,8 +1463,8 @@ func (d *DB) MoveTask(id string, newStatus models.Status, newPosition int) (*mod
 	_, err = d.conn.Exec(`
 		UPDATE tasks
 		SET status = ?, labels = ?, position = ?, updated_at = ?
-		WHERE id = ?
-	`, string(newStatus), string(labelsJSON), newPosition, now, id)
+		WHERE id = ? OR key = ?
+	`, string(newStatus), string(labelsJSON), newPosition, now, existing.ID, existing.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -1139,8 +1496,15 @@ func (d *DB) DeleteTask(id string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	existing, _ := d.getTaskByIDUnsafe(id)
+	if existing != nil {
+		_, _ = d.conn.Exec("DELETE FROM task_activities WHERE task_id = ? OR task_id = ?", existing.ID, existing.Key)
+		_, err := d.conn.Exec("DELETE FROM tasks WHERE id = ? OR key = ?", existing.ID, existing.Key)
+		return err
+	}
+
 	_, _ = d.conn.Exec("DELETE FROM task_activities WHERE task_id = ?", id)
-	_, err := d.conn.Exec("DELETE FROM tasks WHERE id = ?", id)
+	_, err := d.conn.Exec("DELETE FROM tasks WHERE id = ? OR key = ?", id, id)
 	return err
 }
 
@@ -1685,23 +2049,31 @@ func (d *DB) processSkillJob(job SkillJob) {
 		}
 	}
 
-	// Safely ensure task Git branch (auto-saving any previous branch changes and creating/switching branch)
-	var branchSwitchStep string
-	if settings.RepoPath != "" {
-		switchedBranch, sErr := d.EnsureTaskGitBranch(settings.RepoPath, task)
-		if sErr != nil {
-			branchSwitchStep = fmt.Sprintf("⚠️ Avertissement Git branche : %v", sErr)
-		} else if switchedBranch != "" {
-			branchSwitchStep = fmt.Sprintf("🌿 Branche Git synchronisée et active : %s", switchedBranch)
+	mainRepoPath := settings.RepoPath
+
+	// 5. Dynamically acquire or create the dedicated Git Worktree for this task
+	executionDir := mainRepoPath
+	var worktreeStep string
+	if mainRepoPath != "" {
+		wtPath, branch, wtErr := d.EnsureTaskWorktree(mainRepoPath, task)
+		if wtErr != nil {
+			worktreeStep = fmt.Sprintf("⚠️ Avertissement Worktree : %v (repli sur %s)", wtErr, filepath.Base(mainRepoPath))
+		} else if wtPath != "" {
+			executionDir = wtPath
+			worktreeStep = fmt.Sprintf("🌳 Worktree Git isolé actif : .tasks/worktrees/%s (branche: %s)", task.Key, branch)
 		}
 	}
 
-	// Run AI execution via runner
-	realAIOutput, runnerSteps, execErr := d.runner.RunAI(settings, job.SkillID, task, job.Prompt)
+	// Override settings RepoPath with the isolated worktree directory for AI runner
+	runnerSettings := *settings
+	runnerSettings.RepoPath = executionDir
+
+	// Run AI execution via runner in the isolated worktree
+	realAIOutput, runnerSteps, execErr := d.runner.RunAI(&runnerSettings, job.SkillID, task, job.Prompt)
 	completedTime := time.Now()
 
-	if branchSwitchStep != "" {
-		runnerSteps = append([]string{branchSwitchStep}, runnerSteps...)
+	if worktreeStep != "" {
+		runnerSteps = append([]string{worktreeStep}, runnerSteps...)
 	}
 
 	// Check if canceled during execution
@@ -1739,44 +2111,56 @@ func (d *DB) processSkillJob(job SkillJob) {
 		return
 	}
 
+	// Determine project stage mapping
+	resolveMappedStatus := func(targetStage string, defaultStatus models.Status) models.Status {
+		if task.ProjectID != "" {
+			if proj, _ := d.getProjectByIDUnsafe(task.ProjectID); proj != nil && len(proj.StageMapping) > 0 {
+				if mapped, ok := proj.StageMapping[targetStage]; ok && mapped != "" {
+					return models.Status(mapped)
+				}
+			}
+		}
+		return defaultStatus
+	}
+
 	// Determine next status & workflow labels
 	switch skill.ID {
 	case "clarify":
-		task.Status = models.StatusToSpecify
-		task.Labels = SetWorkflowLabel(task.Labels, "Clarified")
+		task.Status = resolveMappedStatus("clarified", models.StatusToSpecify)
+		task.Labels = SetWorkflowLabel(task.Labels, "clarified")
 		action = fmt.Sprintf("Clarification exécutée avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
-		summary = fmt.Sprintf("Questions de cadrage générées ➔ Étape: À spécifier [Label: Clarified]")
+		summary = fmt.Sprintf("Questions de cadrage générées ➔ Étape: %s [Label: #clarified]", task.Status)
 
 	case "specify":
-		task.Status = models.StatusToImplement
-		task.Labels = SetWorkflowLabel(task.Labels, "Specified")
+		task.Status = resolveMappedStatus("specified", models.StatusToImplement)
+		task.Labels = SetWorkflowLabel(task.Labels, "specified")
 		action = fmt.Sprintf("Spécification Speckit rédigée avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
-		summary = fmt.Sprintf("Spec technique créée sur la branche %s ➔ Étape: À implémenter [Label: Specified]", *task.BranchName)
+		summary = fmt.Sprintf("Spec technique créée sur la branche %s ➔ Étape: %s [Label: #specified]", *task.BranchName, task.Status)
 
 	case "implement":
-		task.Status = models.StatusToTest
-		task.Labels = SetWorkflowLabel(task.Labels, "Implemented")
+		task.Status = resolveMappedStatus("implemented", models.StatusToTest)
+		task.Labels = SetWorkflowLabel(task.Labels, "implemented")
 		action = fmt.Sprintf("Implémentation exécutée avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
-		summary = fmt.Sprintf("Développement terminé sur la branche %s ➔ Étape: À tester [Label: Implemented]", *task.BranchName)
+		summary = fmt.Sprintf("Développement terminé sur la branche %s ➔ Étape: %s [Label: #implemented]", *task.BranchName, task.Status)
 
-		// Check if changes exist in project repository to stage
-		if settings.RepoPath != "" && task.BranchName != nil {
-			diffCheck := exec.Command("git", "-C", settings.RepoPath, "status", "--porcelain")
+		// Check if changes exist in worktree to stage and commit
+		if executionDir != "" && task.BranchName != nil {
+			diffCheck := exec.Command("git", "-C", executionDir, "status", "--porcelain")
 			if diffOut, err := diffCheck.Output(); err == nil && len(strings.TrimSpace(string(diffOut))) > 0 {
-				_ = exec.Command("git", "-C", settings.RepoPath, "add", "-A").Run()
+				_ = exec.Command("git", "-C", executionDir, "add", "-A").Run()
 				commitMsg := fmt.Sprintf("feat(%s): %s", task.Key, task.Title)
-				_ = exec.Command("git", "-C", settings.RepoPath, "commit", "-m", commitMsg).Run()
+				_ = exec.Command("git", "-C", executionDir, "commit", "-m", commitMsg).Run()
 			}
 		}
 
 	case "create_pr", "review":
-		task.Status = models.StatusToClose
-		task.Labels = SetWorkflowLabel(task.Labels, "Reviewed")
+		task.Status = resolveMappedStatus("reviewed", models.StatusToClose)
+		task.Labels = SetWorkflowLabel(task.Labels, "reviewed")
 
 		// Check if remote repository is configured
 		hasRemote := false
-		if settings.RepoPath != "" {
-			remotesCmd := exec.Command("git", "-C", settings.RepoPath, "remote")
+		if mainRepoPath != "" {
+			remotesCmd := exec.Command("git", "-C", mainRepoPath, "remote")
 			if remOut, err := remotesCmd.Output(); err == nil && len(strings.TrimSpace(string(remOut))) > 0 {
 				hasRemote = true
 			}
@@ -1788,21 +2172,21 @@ func (d *DB) processSkillJob(job SkillJob) {
 			action = fmt.Sprintf("Revue & Pull Request préparées avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
 			summary = fmt.Sprintf("PR prête pour revue : %s ➔ Étape: À fermer [Label: Reviewed]", prURL)
 		} else {
-			// No remote configured: Perform safe local git merge into main/master
+			// No remote configured: Perform safe local git merge into main/master in the main repository
 			baseBranch := "main"
-			if settings.RepoPath != "" {
-				if err := exec.Command("git", "-C", settings.RepoPath, "rev-parse", "--verify", "main").Run(); err != nil {
-					if err2 := exec.Command("git", "-C", settings.RepoPath, "rev-parse", "--verify", "master").Run(); err2 == nil {
+			if mainRepoPath != "" {
+				if err := exec.Command("git", "-C", mainRepoPath, "rev-parse", "--verify", "main").Run(); err != nil {
+					if err2 := exec.Command("git", "-C", mainRepoPath, "rev-parse", "--verify", "master").Run(); err2 == nil {
 						baseBranch = "master"
 					}
 				}
 
-				if task.BranchName != nil && *task.BranchName != "" && *task.BranchName != baseBranch {
-					_ = exec.Command("git", "-C", settings.RepoPath, "checkout", baseBranch).Run()
+				if task.BranchName != nil && *task.BranchName != "" {
+					_ = exec.Command("git", "-C", mainRepoPath, "checkout", baseBranch).Run()
 					mergeMsg := fmt.Sprintf("Merge branch '%s' for %s: %s", *task.BranchName, task.Key, task.Title)
-					mergeCmd := exec.Command("git", "-C", settings.RepoPath, "merge", "--no-ff", *task.BranchName, "-m", mergeMsg)
+					mergeCmd := exec.Command("git", "-C", mainRepoPath, "merge", "--no-ff", *task.BranchName, "-m", mergeMsg)
 					if _, mErr := mergeCmd.CombinedOutput(); mErr != nil {
-						_ = exec.Command("git", "-C", settings.RepoPath, "merge", *task.BranchName).Run()
+						_ = exec.Command("git", "-C", mainRepoPath, "merge", *task.BranchName).Run()
 					}
 				}
 			}
@@ -1812,6 +2196,11 @@ func (d *DB) processSkillJob(job SkillJob) {
 			}
 			action = fmt.Sprintf("Fusion locale Git (%s ➔ %s) exécutée avec %s", branchDisplay, baseBranch, strings.ToUpper(settings.AIProvider))
 			summary = fmt.Sprintf("Branche '%s' fusionnée localement dans '%s' (aucun remote configuré) ➔ Étape: À fermer [Label: Reviewed]", branchDisplay, baseBranch)
+		}
+
+		// Clean up temporary worktree after PR / review
+		if mainRepoPath != "" && task.Key != "" {
+			_ = d.RemoveTaskWorktree(mainRepoPath, task.Key)
 		}
 
 	case "pick":
@@ -1838,8 +2227,8 @@ func (d *DB) processSkillJob(job SkillJob) {
 	_, _ = d.conn.Exec(`
 		UPDATE tasks
 		SET status = ?, labels = ?, branch_name = ?, pr_url = ?, updated_at = ?
-		WHERE id = ?
-	`, string(task.Status), string(labelsJSON), task.BranchName, task.PrURL, completedTime, task.ID)
+		WHERE id = ? OR key = ?
+	`, string(task.Status), string(labelsJSON), task.BranchName, task.PrURL, completedTime, task.ID, task.Key)
 
 	stepsJSON, _ := json.Marshal(steps)
 	_, _ = d.conn.Exec(`
@@ -2587,12 +2976,23 @@ func (d *DB) ConvertTaskToRemote(taskID string, target string) (*models.Task, er
 // PROJECTS CRUD & MANAGEMENT
 // -------------------------------------------------------------
 
+func defaultStageMapping() map[string]string {
+	return map[string]string{
+		"untouched":   "to_clarify",
+		"clarified":   "to_specify",
+		"specified":   "to_implement",
+		"implemented": "to_test",
+		"reviewed":    "to_test",
+		"finished":    "to_close",
+	}
+}
+
 func (d *DB) GetProjects() ([]models.Project, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	rows, err := d.conn.Query(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.linear_team, p.github_repo, p.issue_tracker, p.is_default, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.linear_team, p.github_repo, p.issue_tracker, p.is_default, p.stage_mapping, p.created_at, p.updated_at,
 		       COUNT(t.id) as task_count
 		FROM projects p
 		LEFT JOIN tasks t ON t.project_id = p.id
@@ -2608,13 +3008,18 @@ func (d *DB) GetProjects() ([]models.Project, error) {
 	for rows.Next() {
 		var p models.Project
 		var isDefault int
+		var stageMappingJSON string
 		err := rows.Scan(
-			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &isDefault, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &isDefault, &stageMappingJSON, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 		)
 		if err != nil {
 			return nil, err
 		}
 		p.IsDefault = isDefault == 1
+		p.StageMapping = defaultStageMapping()
+		if stageMappingJSON != "" && stageMappingJSON != "{}" {
+			_ = json.Unmarshal([]byte(stageMappingJSON), &p.StageMapping)
+		}
 		projects = append(projects, p)
 	}
 	if projects == nil {
@@ -2632,13 +3037,14 @@ func (d *DB) GetProjectByID(id string) (*models.Project, error) {
 func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	var p models.Project
 	var isDefault int
+	var stageMappingJSON string
 	err := d.conn.QueryRow(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.linear_team, p.github_repo, p.issue_tracker, p.is_default, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.linear_team, p.github_repo, p.issue_tracker, p.is_default, p.stage_mapping, p.created_at, p.updated_at,
 		       (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count
 		FROM projects p
 		WHERE p.id = ? OR p.slug = ?
 	`, id, id).Scan(
-		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &isDefault, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &isDefault, &stageMappingJSON, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -2647,6 +3053,10 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 		return nil, err
 	}
 	p.IsDefault = isDefault == 1
+	p.StageMapping = defaultStageMapping()
+	if stageMappingJSON != "" && stageMappingJSON != "{}" {
+		_ = json.Unmarshal([]byte(stageMappingJSON), &p.StageMapping)
+	}
 	return &p, nil
 }
 
@@ -2687,10 +3097,16 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 		_, _ = d.conn.Exec("UPDATE projects SET is_default = 0")
 	}
 
+	stageMapping := req.StageMapping
+	if stageMapping == nil || len(stageMapping) == 0 {
+		stageMapping = defaultStageMapping()
+	}
+	stageMappingBytes, _ := json.Marshal(stageMapping)
+
 	_, err := d.conn.Exec(`
-		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, linear_team, github_repo, issue_tracker, is_default, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, name, slug, req.Description, icon, color, req.RepoPath, req.LinearTeam, req.GithubRepo, issueTracker, isDefInt, now, now)
+		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, linear_team, github_repo, issue_tracker, is_default, stage_mapping, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, name, slug, req.Description, icon, color, req.RepoPath, req.LinearTeam, req.GithubRepo, issueTracker, isDefInt, string(stageMappingBytes), now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -2737,6 +3153,9 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if req.IssueTracker != nil {
 		p.IssueTracker = *req.IssueTracker
 	}
+	if req.StageMapping != nil {
+		p.StageMapping = *req.StageMapping
+	}
 	if req.IsDefault != nil {
 		p.IsDefault = *req.IsDefault
 		if p.IsDefault {
@@ -2749,11 +3168,16 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 		isDefInt = 1
 	}
 
+	if p.StageMapping == nil || len(p.StageMapping) == 0 {
+		p.StageMapping = defaultStageMapping()
+	}
+	stageMappingBytes, _ := json.Marshal(p.StageMapping)
+
 	_, err = d.conn.Exec(`
 		UPDATE projects
-		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, linear_team = ?, github_repo = ?, issue_tracker = ?, is_default = ?, updated_at = ?
+		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, linear_team = ?, github_repo = ?, issue_tracker = ?, is_default = ?, stage_mapping = ?, updated_at = ?
 		WHERE id = ?
-	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, p.LinearTeam, p.GithubRepo, p.IssueTracker, isDefInt, p.UpdatedAt, p.ID)
+	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, p.LinearTeam, p.GithubRepo, p.IssueTracker, isDefInt, string(stageMappingBytes), p.UpdatedAt, p.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -3151,6 +3575,139 @@ tmp/
 		Message:     msg,
 		Initialized: true,
 	}, nil
+}
+
+func (d *DB) DetectTrackerStatuses(projectID, tracker, linearTeam, githubRepo string) ([]models.DetectedStatus, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var results []models.DetectedStatus
+	seen := make(map[string]bool)
+
+	addStatus := func(name, sType, color, source string) {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return
+		}
+		lower := strings.ToLower(trimmed)
+		if seen[lower] {
+			return
+		}
+		seen[lower] = true
+		results = append(results, models.DetectedStatus{
+			ID:     trimmed,
+			Name:   trimmed,
+			Type:   sType,
+			Color:  color,
+			Source: source,
+		})
+	}
+
+	// 1. If projectID provided, load project info
+	if projectID != "" && projectID != "detect-statuses" {
+		if proj, _ := d.getProjectByIDUnsafe(projectID); proj != nil {
+			if tracker == "" {
+				tracker = proj.IssueTracker
+			}
+			if linearTeam == "" {
+				linearTeam = proj.LinearTeam
+			}
+			if githubRepo == "" {
+				githubRepo = proj.GithubRepo
+			}
+		}
+	}
+
+	// 2. Try Linear API if tracker is linear (or team provided)
+	if tracker == "linear" || linearTeam != "" {
+		linearPath, err := exec.LookPath("linear")
+		if err != nil {
+			linearPath = "/opt/homebrew/bin/linear"
+		}
+		if _, err := os.Stat(linearPath); err == nil {
+			query := `query { teams { nodes { key name states { nodes { id name color type position } } } } }`
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			cmd := exec.CommandContext(ctx, linearPath, "api", query)
+			out, err := cmd.Output()
+			cancel()
+			if err == nil && len(out) > 0 {
+				var gqlResp struct {
+					Data struct {
+						Teams struct {
+							Nodes []struct {
+								Key    string `json:"key"`
+								Name   string `json:"name"`
+								States struct {
+									Nodes []struct {
+										ID       string  `json:"id"`
+										Name     string  `json:"name"`
+										Color    string  `json:"color"`
+										Type     string  `json:"type"`
+										Position float64 `json:"position"`
+									} `json:"nodes"`
+								} `json:"states"`
+							} `json:"nodes"`
+						} `json:"teams"`
+					} `json:"data"`
+				}
+				if jErr := json.Unmarshal(out, &gqlResp); jErr == nil {
+					for _, t := range gqlResp.Data.Teams.Nodes {
+						if linearTeam == "" || strings.EqualFold(t.Key, linearTeam) {
+							for _, st := range t.States.Nodes {
+								addStatus(st.Name, st.Type, st.Color, "linear")
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Scan existing tasks in SQLite database for project / tracker
+	query := "SELECT DISTINCT status FROM tasks WHERE 1=1"
+	var args []interface{}
+	if projectID != "" && projectID != "detect-statuses" {
+		query += " AND project_id = ?"
+		args = append(args, projectID)
+	}
+	if rows, err := d.conn.Query(query, args...); err == nil {
+		for rows.Next() {
+			var st string
+			if sErr := rows.Scan(&st); sErr == nil && st != "" {
+				addStatus(st, "db", "", "db")
+			}
+		}
+		rows.Close()
+	}
+
+	// 4. If tracker is github, add github states
+	if tracker == "github" {
+		addStatus("open", "unstarted", "#3fb950", "github")
+		addStatus("closed", "completed", "#8250df", "github")
+	}
+
+	// 5. Standard fallback presets if list is short or empty
+	for _, def := range []struct {
+		name  string
+		sType string
+		color string
+	}{
+		{"Backlog", "backlog", "#bec2c8"},
+		{"Todo", "unstarted", "#e2e2e2"},
+		{"In Progress", "started", "#f2c94c"},
+		{"In Review", "started", "#5e6ad2"},
+		{"Done", "completed", "#27ae60"},
+		{"Canceled", "canceled", "#eb5757"},
+		{"to_clarify", "backlog", "#06b6d4"},
+		{"to_specify", "unstarted", "#f59e0b"},
+		{"to_implement", "started", "#3b82f6"},
+		{"to_test", "started", "#6366f1"},
+		{"to_close", "completed", "#10b981"},
+	} {
+		addStatus(def.name, def.sType, def.color, "preset")
+	}
+
+	return results, nil
 }
 
 

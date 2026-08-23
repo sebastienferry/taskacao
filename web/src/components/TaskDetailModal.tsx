@@ -47,11 +47,16 @@ export const TaskDetailModal: React.FC = () => {
     skills,
     projects,
     activities: globalActivities,
+    gitStatus,
+    checkoutTaskBranch,
+    switchGitBranch,
     settings,
     updateSettings,
     addToast,
     t,
   } = useApp()
+
+  const [isSwitchingBranch, setIsSwitchingBranch] = useState(false)
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -92,6 +97,38 @@ export const TaskDetailModal: React.FC = () => {
     }
   }, [selectedTask])
 
+  const handleClose = async () => {
+    if (selectedTask && title.trim()) {
+      const isModified =
+        title.trim() !== selectedTask.title ||
+        description.trim() !== (selectedTask.description || '').trim() ||
+        status !== selectedTask.status ||
+        priority !== selectedTask.priority ||
+        taskProjectId !== (selectedTask.projectId || '') ||
+        branchName.trim() !== (selectedTask.branchName || '').trim() ||
+        prUrl.trim() !== (selectedTask.prUrl || '').trim() ||
+        assignee.trim() !== (selectedTask.assignee || '').trim() ||
+        (dueDate || '') !== (selectedTask.dueDate || '') ||
+        JSON.stringify(labels) !== JSON.stringify(selectedTask.labels || [])
+
+      if (isModified) {
+        await updateTask(selectedTask.id, {
+          title: title.trim(),
+          description: description.trim(),
+          status,
+          priority,
+          projectId: taskProjectId,
+          labels,
+          assignee: assignee.trim(),
+          dueDate: dueDate || null,
+          branchName: branchName.trim() || undefined,
+          prUrl: prUrl.trim() || undefined,
+        })
+      }
+    }
+    setSelectedTask(null)
+  }
+
   useEffect(() => {
     if (!selectedTask) return
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -101,13 +138,13 @@ export const TaskDetailModal: React.FC = () => {
         } else if (isExpandedSpec) {
           setIsExpandedSpec(false)
         } else {
-          setSelectedTask(null)
+          handleClose()
         }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedTask, setSelectedTask, isExpandedQA, isExpandedSpec])
+  }, [selectedTask, isExpandedQA, isExpandedSpec, title, description, status, priority, taskProjectId, branchName, prUrl, assignee, dueDate, labels])
 
   if (!selectedTask) return null
 
@@ -645,20 +682,54 @@ export const TaskDetailModal: React.FC = () => {
           {/* Git Branch Field */}
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
-                Branche Git
+              <label className="text-[10px] font-medium text-[var(--text-secondary)] flex items-center gap-1.5">
+                <span>Branche Git</span>
+                {branchName && gitStatus?.branch === branchName && (
+                  <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.2 rounded">
+                    Active
+                  </span>
+                )}
               </label>
-              {branchName && (
-                <button
-                  type="button"
-                  onClick={() => copyBranchCommand(branchName)}
-                  className="text-[9px] font-mono font-bold text-indigo-400 hover:underline flex items-center gap-1"
-                  title="Copier la commande git checkout"
-                >
-                  {copiedBranch ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
-                  <span>{copiedBranch ? 'Copié !' : 'git checkout'}</span>
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {branchName && (
+                  <button
+                    type="button"
+                    disabled={isSwitchingBranch}
+                    onClick={async () => {
+                      setIsSwitchingBranch(true)
+                      try {
+                        if (selectedTask?.id) {
+                          await checkoutTaskBranch(selectedTask.id)
+                        } else if (branchName) {
+                          await switchGitBranch(branchName)
+                        }
+                      } finally {
+                        setIsSwitchingBranch(false)
+                      }
+                    }}
+                    className={`text-[9px] font-mono font-bold flex items-center gap-1 px-1.5 py-0.5 rounded cursor-pointer transition-colors ${
+                      gitStatus?.branch === branchName
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                        : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30'
+                    }`}
+                    title="Basculer le projet sur cette branche"
+                  >
+                    <GitBranch size={10} className={isSwitchingBranch ? 'animate-spin text-cyan-400' : ''} />
+                    <span>{gitStatus?.branch === branchName ? '✓ Active' : isSwitchingBranch ? 'Bascule...' : 'Basculer'}</span>
+                  </button>
+                )}
+                {branchName && (
+                  <button
+                    type="button"
+                    onClick={() => copyBranchCommand(branchName)}
+                    className="text-[9px] font-mono font-bold text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    title="Copier la commande git checkout"
+                  >
+                    {copiedBranch ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+                    <span>{copiedBranch ? 'Copié !' : 'Copier'}</span>
+                  </button>
+                )}
+              </div>
             </div>
             <div className="relative">
               <input
@@ -730,11 +801,12 @@ export const TaskDetailModal: React.FC = () => {
           {labels.map(lbl => {
             const lower = lbl.toLowerCase()
             let badgeStyle = 'bg-[var(--accent-light)] accent-text'
-            if (lower === 'new') badgeStyle = 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold'
+            if (lower === 'new' || lower === 'untouched') badgeStyle = 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold'
             else if (lower === 'clarified') badgeStyle = 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold'
             else if (lower === 'specified') badgeStyle = 'bg-blue-500/20 text-blue-300 border border-blue-500/40 font-bold'
             else if (lower === 'implemented') badgeStyle = 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-bold'
-            else if (lower === 'reviewed') badgeStyle = 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold'
+            else if (lower === 'reviewed') badgeStyle = 'bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold'
+            else if (lower === 'finished' || lower === 'closed') badgeStyle = 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold'
 
             return (
               <span
@@ -859,7 +931,7 @@ export const TaskDetailModal: React.FC = () => {
 
       {/* Main Recommended Action Callout */}
       {nextSkill && (
-        <div className="flex items-center justify-between p-3 rounded-xl bg-linear-to-r from-[var(--accent-light)] to-[var(--bg-tertiary)] border border-[var(--accent-color)]/40 shadow-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-linear-to-r from-[var(--accent-light)] to-[var(--bg-tertiary)] border border-[var(--accent-color)]/40 shadow-xs">
           <div className="flex items-center gap-2">
             <span className="text-amber-400 animate-bounce">⚡</span>
             <div>
@@ -871,23 +943,38 @@ export const TaskDetailModal: React.FC = () => {
               </div>
             </div>
           </div>
-          <button
-            onClick={() => handleTriggerSkill(nextSkill.id)}
-            disabled={isSkillRunning}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white accent-bg shadow-md hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
-          >
-            {isSkillRunning && runningSkillId === nextSkill.id ? (
-              <>
-                <Loader2 size={13} className="animate-spin" />
-                <span>Exécution {settings.aiProvider}...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles size={13} className="text-amber-300" />
-                <span>Lancer {nextSkill.name}</span>
-              </>
+          <div className="flex items-center gap-2 flex-wrap">
+            {(status === 'to_clarify' || status === 'backlog' || status === 'to_specify' || status === 'specified') && (
+              <button
+                type="button"
+                onClick={() => handleTriggerSkill('implement')}
+                disabled={isSkillRunning}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-linear-to-r from-blue-600 to-indigo-600 shadow hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
+                title="Sauter directement le cadrage et lancer l'implémentation du code"
+              >
+                <Flame size={13} className="text-amber-300" />
+                <span>🚀 Passer direct au Code</span>
+              </button>
             )}
-          </button>
+
+            <button
+              onClick={() => handleTriggerSkill(nextSkill.id)}
+              disabled={isSkillRunning}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white accent-bg shadow-md hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
+            >
+              {isSkillRunning && runningSkillId === nextSkill.id ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" />
+                  <span>Exécution {settings.aiProvider}...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles size={13} className="text-amber-300" />
+                  <span>Lancer {nextSkill.name}</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       )}
 
@@ -974,7 +1061,7 @@ export const TaskDetailModal: React.FC = () => {
       <div className="fixed inset-0 z-50 overflow-hidden select-none">
         {/* Backdrop overlay */}
         <div
-          onClick={() => setSelectedTask(null)}
+          onClick={handleClose}
           className="absolute inset-0 bg-black/40 backdrop-blur-2xs animate-in fade-in duration-200"
         />
 
@@ -1047,7 +1134,7 @@ export const TaskDetailModal: React.FC = () => {
                 </button>
 
                 <button
-                  onClick={() => setSelectedTask(null)}
+                  onClick={handleClose}
                   className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                 >
                   <X size={17} />
@@ -1072,7 +1159,7 @@ export const TaskDetailModal: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setSelectedTask(null)}
+                  onClick={handleClose}
                   className="px-3.5 py-1.5 rounded-xl text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                 >
                   {t.taskModal.cancel}
@@ -1160,7 +1247,7 @@ export const TaskDetailModal: React.FC = () => {
             </button>
 
             <button
-              onClick={() => setSelectedTask(null)}
+              onClick={handleClose}
               className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
             >
               <X size={18} />
@@ -1211,7 +1298,7 @@ export const TaskDetailModal: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setSelectedTask(null)}
+              onClick={handleClose}
               className="px-4 py-2 rounded-xl text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
             >
               {t.taskModal.cancel}
