@@ -1144,6 +1144,32 @@ func (d *DB) getNextTaskKey(prefix string) (string, error) {
 	return fmt.Sprintf("%s-%d", prefix, maxNum+1), nil
 }
 
+func (d *DB) getNextGithubTaskKey() string {
+	rows, err := d.conn.Query("SELECT key FROM tasks WHERE key LIKE '#%' OR key LIKE 'GH-%'")
+	if err != nil {
+		return "#1"
+	}
+	defer rows.Close()
+
+	maxNum := 0
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err == nil {
+			s := strings.TrimSpace(k)
+			s = strings.TrimPrefix(s, "GH-#")
+			s = strings.TrimPrefix(s, "gh-")
+			s = strings.TrimPrefix(s, "GH-")
+			s = strings.TrimPrefix(s, "#")
+			if num, err := strconv.Atoi(s); err == nil {
+				if num > maxNum {
+					maxNum = num
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("#%d", maxNum+1)
+}
+
 // Workflow labels following the AI lifecycle:
 // new -> clarified -> specified -> implemented -> reviewed -> finished
 var WorkflowLabels = []string{"new", "clarified", "specified", "implemented", "reviewed", "finished", "untouched", "New", "Clarified", "Specified", "Implemented", "Reviewed", "Finished", "Untouched"}
@@ -1282,7 +1308,7 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 			key = created.Key
 			extURL = created.ExternalURL
 		} else {
-			key, _ = d.getNextTaskKey("GH")
+			key = d.getNextGithubTaskKey()
 		}
 	} else {
 		// Local project tracker

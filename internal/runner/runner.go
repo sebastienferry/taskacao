@@ -533,23 +533,54 @@ type GithubIssueItem struct {
 	} `json:"assignees"`
 }
 
-func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, error) {
-	if repo == "" {
-		repo = "sebastienferry/fretzee-studio"
-	}
+// ResolveGithubRepo attempts to determine the target repository and path dynamically.
+func ResolveGithubRepo(repo string, repoPath string) (string, string) {
 	if repoPath == "" {
-		repoPath = "/Users/sferry/Sources/fretzee-studio"
+		repoPath = "."
 	}
+	if repo != "" {
+		return repo, repoPath
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "--get", "remote.origin.url")
+	if out, err := cmd.Output(); err == nil {
+		raw := strings.TrimSpace(string(out))
+		raw = strings.TrimSuffix(raw, ".git")
+		if strings.Contains(raw, "github.com/") {
+			parts := strings.Split(raw, "github.com/")
+			if len(parts) > 1 {
+				return parts[1], repoPath
+			}
+		} else if strings.Contains(raw, "github.com:") {
+			parts := strings.Split(raw, "github.com:")
+			if len(parts) > 1 {
+				return parts[1], repoPath
+			}
+		}
+	}
+	return "", repoPath
+}
+
+func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, error) {
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	ghPath, err := exec.LookPath("gh")
-	if err != nil {
-		ghPath = "/opt/homebrew/bin/gh"
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
 	}
 
-	output, err := r.runCommand(ctx, repoPath, ghPath, "issue", "list", "-R", repo, "--limit", "100", "--json", "number,title,labels,body,url,state,assignees")
+	var args []string
+	if repo != "" {
+		args = []string{"issue", "list", "-R", repo, "--limit", "100", "--json", "number,title,labels,body,url,state,assignees"}
+	} else {
+		args = []string{"issue", "list", "--limit", "100", "--json", "number,title,labels,body,url,state,assignees"}
+	}
+
+	output, err := r.runCommand(ctx, repoPath, ghPath, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GitHub issues: %w (output: %s)", err, output)
 	}
@@ -611,22 +642,23 @@ func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, er
 }
 
 func (r *Runner) CreateGithubIssue(repo string, repoPath string, title string, description string, labels []string) (*models.Task, error) {
-	if repo == "" {
-		repo = "sebastienferry/fretzee-studio"
-	}
-	if repoPath == "" {
-		repoPath = "/Users/sferry/Sources/fretzee-studio"
-	}
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	ghPath, err := exec.LookPath("gh")
-	if err != nil {
-		ghPath = "/opt/homebrew/bin/gh"
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
 	}
 
-	args := []string{"issue", "create", "-R", repo, "--title", title}
+	var args []string
+	if repo != "" {
+		args = []string{"issue", "create", "-R", repo, "--title", title}
+	} else {
+		args = []string{"issue", "create", "--title", title}
+	}
+
 	if description != "" {
 		args = append(args, "--body", description)
 	} else {
@@ -674,12 +706,7 @@ func cleanGithubIssueNum(keyOrNumber string) (int, error) {
 }
 
 func (r *Runner) UpdateGithubIssueState(repo string, repoPath string, keyOrNumber string, status models.Status) error {
-	if repo == "" {
-		repo = "sebastienferry/fretzee-studio"
-	}
-	if repoPath == "" {
-		repoPath = "/Users/sferry/Sources/fretzee-studio"
-	}
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
 
 	num, err := cleanGithubIssueNum(keyOrNumber)
 	if err != nil {
@@ -689,26 +716,32 @@ func (r *Runner) UpdateGithubIssueState(repo string, repoPath string, keyOrNumbe
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	ghPath, err := exec.LookPath("gh")
-	if err != nil {
-		ghPath = "/opt/homebrew/bin/gh"
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
 	}
 
-	if status == models.StatusDone {
-		_, err = r.runCommand(ctx, repoPath, ghPath, "issue", "close", strconv.Itoa(num), "-R", repo)
+	var args []string
+	if status == models.StatusDone || status == models.StatusFinished || status == models.StatusToClose {
+		if repo != "" {
+			args = []string{"issue", "close", strconv.Itoa(num), "-R", repo}
+		} else {
+			args = []string{"issue", "close", strconv.Itoa(num)}
+		}
 	} else {
-		_, err = r.runCommand(ctx, repoPath, ghPath, "issue", "reopen", strconv.Itoa(num), "-R", repo)
+		if repo != "" {
+			args = []string{"issue", "reopen", strconv.Itoa(num), "-R", repo}
+		} else {
+			args = []string{"issue", "reopen", strconv.Itoa(num)}
+		}
 	}
+
+	_, err = r.runCommand(ctx, repoPath, ghPath, args...)
 	return err
 }
 
 func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber string, title *string, description *string, status *models.Status, labels []string, removedLabels []string) error {
-	if repo == "" {
-		repo = "sebastienferry/fretzee-studio"
-	}
-	if repoPath == "" {
-		repoPath = "/Users/sferry/Sources/fretzee-studio"
-	}
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
 
 	num, err := cleanGithubIssueNum(keyOrNumber)
 	if err != nil {
@@ -718,22 +751,34 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	ghPath, err := exec.LookPath("gh")
-	if err != nil {
-		ghPath = "/opt/homebrew/bin/gh"
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
 	}
 
 	// 1. Update State (close / reopen)
 	if status != nil {
 		if *status == models.StatusFinished || *status == models.StatusDone || *status == models.StatusToClose {
-			output, err := r.runCommand(ctx, repoPath, ghPath, "issue", "close", strconv.Itoa(num), "-R", repo)
+			var args []string
+			if repo != "" {
+				args = []string{"issue", "close", strconv.Itoa(num), "-R", repo}
+			} else {
+				args = []string{"issue", "close", strconv.Itoa(num)}
+			}
+			output, err := r.runCommand(ctx, repoPath, ghPath, args...)
 			if err != nil {
 				log.Printf("[CLI] gh issue close %d failed: %v (output: %s)", num, err, output)
 			} else {
 				log.Printf("[CLI] Closed GitHub issue #%d in %s", num, repo)
 			}
 		} else {
-			output, err := r.runCommand(ctx, repoPath, ghPath, "issue", "reopen", strconv.Itoa(num), "-R", repo)
+			var args []string
+			if repo != "" {
+				args = []string{"issue", "reopen", strconv.Itoa(num), "-R", repo}
+			} else {
+				args = []string{"issue", "reopen", strconv.Itoa(num)}
+			}
+			output, err := r.runCommand(ctx, repoPath, ghPath, args...)
 			if err != nil {
 				log.Printf("[CLI] gh issue reopen %d failed: %v (output: %s)", num, err, output)
 			} else {
@@ -836,13 +881,13 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 		return err
 
 	} else if source == "github" || strings.HasPrefix(key, "#") || strings.HasPrefix(key, "GH-#") || strings.HasPrefix(key, "gh-") {
-		ghPath, err := exec.LookPath("gh")
-		if err != nil {
-			ghPath = "/opt/homebrew/bin/gh"
+		repo, repoPath = ResolveGithubRepo(repo, repoPath)
+
+		ghPath, _ := FindCliTool("gh")
+		if ghPath == "" {
+			ghPath = "gh"
 		}
-		if repo == "" {
-			repo = "sebastienferry/fretzee-studio"
-		}
+
 		num, err := cleanGithubIssueNum(key)
 		if err != nil {
 			return fmt.Errorf("invalid github issue number: %s", key)
@@ -856,7 +901,13 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 			_, _ = tmpFile.WriteString(body)
 			_ = tmpFile.Close()
 
-			output, err := r.runCommand(ctx, repoPath, ghPath, "issue", "comment", cleanNum, "-R", repo, "--body-file", tmpPath)
+			var args []string
+			if repo != "" {
+				args = []string{"issue", "comment", cleanNum, "-R", repo, "--body-file", tmpPath}
+			} else {
+				args = []string{"issue", "comment", cleanNum, "--body-file", tmpPath}
+			}
+			output, err := r.runCommand(ctx, repoPath, ghPath, args...)
 			if err == nil {
 				log.Printf("[CLI] Comment added to GitHub %s: %s", key, strings.TrimSpace(output))
 				return nil
@@ -864,7 +915,13 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 			log.Printf("[CLI] gh issue comment --body-file failed: %v (output: %s), trying direct --body flag...", err, output)
 		}
 
-		output, err := r.runCommand(ctx, repoPath, ghPath, "issue", "comment", cleanNum, "-R", repo, "--body", body)
+		var args []string
+		if repo != "" {
+			args = []string{"issue", "comment", cleanNum, "-R", repo, "--body", body}
+		} else {
+			args = []string{"issue", "comment", cleanNum, "--body", body}
+		}
+		output, err := r.runCommand(ctx, repoPath, ghPath, args...)
 		if err != nil {
 			log.Printf("[CLI] gh issue comment %s failed: %v (output: %s)", key, err, output)
 		}
