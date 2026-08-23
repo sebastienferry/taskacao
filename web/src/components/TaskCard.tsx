@@ -12,6 +12,8 @@ import {
   FolderGit2,
   Folder,
   MessageSquare,
+  CheckCircle2,
+  Clock,
 } from 'lucide-react'
 import type { Task, Priority } from '../types'
 import { useApp } from '../context/AppContext'
@@ -23,7 +25,31 @@ interface TaskCardProps {
 }
 
 export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStart }) => {
-  const { setSelectedTask, setChatTask, setDiffTask, runSkill, isSkillRunning, runningSkillId, t } = useApp()
+  const { setSelectedTask, setChatTask, setDiffTask, runSkill, isSkillRunning, runningSkillId, activities, t } = useApp()
+
+  const formatRelativeTime = (dateStr?: string) => {
+    if (!dateStr) return ''
+    try {
+      const diff = Math.max(0, (Date.now() - new Date(dateStr).getTime()) / 1000)
+      if (diff < 60) return "à l'instant"
+      if (diff < 3600) return `${Math.floor(diff / 60)}m`
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h`
+      return `${Math.floor(diff / 86400)}j`
+    } catch {
+      return ''
+    }
+  }
+
+  const latestActivity = React.useMemo(() => {
+    if (!activities || activities.length === 0) return null
+    const taskActs = activities.filter(a => a.taskId === task.id)
+    if (taskActs.length === 0) return null
+    // Prioritize active (running/queued/pending)
+    const running = taskActs.find(a => a.status === 'running' || a.status === 'queued' || a.status === 'pending')
+    if (running) return running
+    // Otherwise the most recently finished or started
+    return taskActs[0]
+  }, [activities, task.id])
 
   const getPriorityBadge = (priority: Priority) => {
     switch (priority) {
@@ -226,6 +252,54 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
               <ExternalLink size={8} className="opacity-70" />
             </a>
           )}
+        </div>
+      )}
+
+      {/* Latest Activity on this task (Started / Running / Completed / Failed) */}
+      {latestActivity && (
+        <div
+          onClick={(e) => {
+            e.stopPropagation()
+            setChatTask(task)
+          }}
+          className={`flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-xl text-[10.5px] mb-2 transition-all cursor-pointer border shadow-2xs group/activity ${
+            latestActivity.status === 'running'
+              ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300 ring-1 ring-indigo-500/20 animate-pulse'
+              : latestActivity.status === 'failed'
+              ? 'bg-rose-500/10 border-rose-500/25 text-rose-300 hover:border-rose-500/40'
+              : latestActivity.status === 'queued' || latestActivity.status === 'pending'
+              ? 'bg-amber-500/10 border-amber-500/25 text-amber-300 hover:border-amber-500/40'
+              : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300 hover:border-emerald-500/40'
+          }`}
+          title={`Dernière activité: ${latestActivity.skillName || latestActivity.action} (${latestActivity.status}) - Cliquer pour ouvrir la discussion`}
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            {latestActivity.status === 'running' ? (
+              <Loader2 size={11} className="animate-spin text-indigo-400 shrink-0" />
+            ) : latestActivity.status === 'failed' ? (
+              <AlertCircle size={11} className="text-rose-400 shrink-0" />
+            ) : latestActivity.status === 'queued' || latestActivity.status === 'pending' ? (
+              <Clock size={11} className="text-amber-400 shrink-0" />
+            ) : (
+              <CheckCircle2 size={11} className="text-emerald-400 shrink-0" />
+            )}
+            <span className="font-bold truncate max-w-[130px]">
+              {latestActivity.skillName || latestActivity.action || 'Activité Agent'}
+            </span>
+            {latestActivity.status === 'running' && (
+              <span className="text-[9.5px] text-indigo-400/80 truncate hidden sm:inline">• en cours</span>
+            )}
+            {latestActivity.status === 'completed' && latestActivity.summary && (
+              <span className="text-[9.5px] text-emerald-400/80 truncate hidden sm:inline max-w-[130px]" title={latestActivity.summary}>
+                • {latestActivity.summary}
+              </span>
+            )}
+          </div>
+          <span className="text-[9.5px] font-mono opacity-80 shrink-0">
+            {latestActivity.status === 'running'
+              ? 'Live'
+              : formatRelativeTime(latestActivity.completedAt || latestActivity.startedAt || latestActivity.createdAt)}
+          </span>
         </div>
       )}
 

@@ -34,10 +34,24 @@ export const ListView: React.FC = () => {
     runSkill,
     isSkillRunning,
     runningSkillId,
+    activities,
     hideDone,
     toggleHideDone,
     t,
   } = useApp()
+
+  const formatRelativeTime = (dateStr?: string) => {
+    if (!dateStr) return ''
+    try {
+      const diff = Math.max(0, (Date.now() - new Date(dateStr).getTime()) / 1000)
+      if (diff < 60) return "à l'instant"
+      if (diff < 3600) return `${Math.floor(diff / 60)}m`
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h`
+      return `${Math.floor(diff / 86400)}j`
+    } catch {
+      return ''
+    }
+  }
 
   const [sortField, setSortField] = useState<'key' | 'title' | 'status' | 'priority' | 'dueDate' | 'createdAt'>('createdAt')
   const [sortAsc, setSortAsc] = useState(false)
@@ -140,6 +154,8 @@ export const ListView: React.FC = () => {
 
   const renderTaskRow = (task: Task) => {
     const nextSkill = getNextSkillForTask(task.status)
+    const taskActs = activities?.filter(a => a.taskId === task.id) || []
+    const latestActivity = taskActs.find(a => a.status === 'running' || a.status === 'queued' || a.status === 'pending') || taskActs[0]
 
     return (
       <tr
@@ -183,12 +199,49 @@ export const ListView: React.FC = () => {
           </div>
         </td>
 
-        {/* Title */}
+        {/* Title & Activity */}
         <td className="py-2.5 px-3 max-w-[280px]">
-          <div className="text-xs font-semibold text-[var(--text-primary)] truncate group-hover:text-[var(--accent-color)] transition-colors">
-            {task.title}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-semibold text-[var(--text-primary)] truncate group-hover:text-[var(--accent-color)] transition-colors">
+              {task.title}
+            </span>
           </div>
-          {task.description && (
+
+          {/* Activity badge if exists */}
+          {latestActivity && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation()
+                setChatTask(task)
+              }}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] mt-1 border transition-colors ${
+                latestActivity.status === 'running'
+                  ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300 animate-pulse'
+                  : latestActivity.status === 'failed'
+                  ? 'bg-rose-500/10 border-rose-500/25 text-rose-300'
+                  : latestActivity.status === 'queued' || latestActivity.status === 'pending'
+                  ? 'bg-amber-500/10 border-amber-500/25 text-amber-300'
+                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+              }`}
+              title={`Activité: ${latestActivity.skillName || latestActivity.action} (${latestActivity.status}) - Cliquer pour ouvrir`}
+            >
+              {latestActivity.status === 'running' ? (
+                <Loader2 size={9} className="animate-spin text-indigo-400" />
+              ) : latestActivity.status === 'failed' ? (
+                <AlertCircle size={9} className="text-rose-400" />
+              ) : latestActivity.status === 'queued' || latestActivity.status === 'pending' ? (
+                <Clock size={9} className="text-amber-400" />
+              ) : (
+                <CheckCircle2 size={9} className="text-emerald-400" />
+              )}
+              <span className="font-bold">{latestActivity.skillName || latestActivity.action}</span>
+              <span className="opacity-70 font-mono text-[9px]">
+                • {latestActivity.status === 'running' ? 'en cours' : formatRelativeTime(latestActivity.completedAt || latestActivity.startedAt || latestActivity.createdAt)}
+              </span>
+            </div>
+          )}
+
+          {task.description && !latestActivity && (
             <div className="text-[11px] text-[var(--text-muted)] line-clamp-1 mt-0.5">
               {task.description}
             </div>

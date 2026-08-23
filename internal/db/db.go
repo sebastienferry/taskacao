@@ -1194,20 +1194,16 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 	settings, _ := d.getSettingsUnsafe()
 	if settings == nil {
 		settings = &models.Settings{
-			LinearTeam: "FRE",
-			GithubRepo: "sebastienferry/fretzee-studio",
-			RepoPath:   "/Users/sferry/Sources/fretzee-studio",
+			LinearTeam: "TASK",
+			GithubRepo: "",
+			RepoPath:   ".",
 		}
 	}
 
 	projID := req.ProjectID
-	if projID == "" {
-		projID = "fretzee-studio"
-	}
-
 	proj, _ := d.getProjectByIDUnsafe(projID)
 	if proj == nil {
-		projects, _ := d.GetProjects()
+		projects, _ := d.getProjectsUnsafe()
 		if len(projects) > 0 {
 			proj = &projects[0]
 			projID = proj.ID
@@ -3385,10 +3381,7 @@ func ParseGitRepoFromURL(rawURL string) string {
 	return raw
 }
 
-func (d *DB) GetProjects() ([]models.Project, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
+func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 	rows, err := d.conn.Query(`
 		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.git_remote_url, p.linear_team, p.github_repo, p.issue_tracker, p.tracker_url, p.is_default, p.stage_mapping, p.skill_overrides, p.created_at, p.updated_at,
 		       COUNT(t.id) as task_count
@@ -3428,6 +3421,12 @@ func (d *DB) GetProjects() ([]models.Project, error) {
 		projects = []models.Project{}
 	}
 	return projects, nil
+}
+
+func (d *DB) GetProjects() ([]models.Project, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.getProjectsUnsafe()
 }
 
 func (d *DB) GetProjectByID(id string) (*models.Project, error) {
