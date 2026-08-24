@@ -14,4 +14,3 @@ Revoir les changements, valider la qualité du code, commiter avec des messages 
    - **Si remote présent** : Pousser la branche ('git push -u origin <branch>') et créer la Pull Request ('gh pr create' ou 'glab mr create').
    - **Si aucun remote configuré** : Basculer sur la branche principale ('git checkout main') et fusionner la branche ('git merge --no-ff <branch>').
 4. Produire un compte-rendu clair des actions réalisées.
-

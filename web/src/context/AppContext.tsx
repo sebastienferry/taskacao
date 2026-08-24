@@ -20,7 +20,7 @@ interface AppContextType {
   cliStatuses: CliStatus[]
   gitStatus: GitStatusInfo | null
   isFetchingGitStatus: boolean
-  fetchGitStatus: (targetPathOrProject?: string) => Promise<GitStatusInfo | null>
+  fetchGitStatus: (targetPathOrProject?: string, isManual?: boolean) => Promise<GitStatusInfo | null>
   gitBranches: GitBranchesInfo | null
   fetchGitBranches: (projectIdOrPath?: string) => Promise<GitBranchesInfo | null>
   switchGitBranch: (branch: string, create?: boolean, projectIdOrPath?: string) => Promise<boolean>
@@ -261,7 +261,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setToasts(prev => prev.filter(t => t.id !== id))
   }, [])
 
-  const t = translations[settings.language] || translations.fr
+  const t = useMemo(() => translations[settings.language] || translations.fr, [settings.language])
 
   useEffect(() => {
     const root = document.documentElement
@@ -406,13 +406,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [selectedProjectId])
 
-  const fetchGitStatus = useCallback(async (targetPathOrProject?: string): Promise<GitStatusInfo | null> => {
+  const fetchGitStatus = useCallback(async (targetPathOrProject?: string, isManual = false): Promise<GitStatusInfo | null> => {
     try {
-      setIsFetchingGitStatus(true)
+      if (isManual) setIsFetchingGitStatus(true)
       const params = new URLSearchParams()
       if (targetPathOrProject) {
         params.append('path', targetPathOrProject)
-      } else if (currentProject && currentProject.repoPath) {
+      } else if (currentProject?.repoPath) {
         params.append('path', currentProject.repoPath)
       } else if (settings.repoPath) {
         params.append('path', settings.repoPath)
@@ -421,7 +421,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const res = await fetch(`${API_BASE}/git-status?${params.toString()}`)
       if (res.ok) {
         const data: GitStatusInfo = await res.json()
-        setGitStatus(data)
+        setGitStatus(prev => {
+          if (
+            prev &&
+            prev.branch === data.branch &&
+            prev.isClean === data.isClean &&
+            prev.modifiedCount === data.modifiedCount &&
+            prev.untrackedCount === data.untrackedCount &&
+            prev.repoPath === data.repoPath
+          ) {
+            return prev
+          }
+          return data
+        })
         return data
       }
       return null
@@ -429,9 +441,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       console.warn('Failed to load git status', err)
       return null
     } finally {
-      setIsFetchingGitStatus(false)
+      if (isManual) setIsFetchingGitStatus(false)
     }
-  }, [currentProject, settings.repoPath])
+  }, [currentProject?.repoPath, settings.repoPath])
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -457,6 +469,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [searchQuery, statusFilter, priorityFilter, labelFilter, selectedProjectId])
 
+  // Initial load on mount
   useEffect(() => {
     fetchSettings()
     fetchSkills()
@@ -464,12 +477,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     fetchProjects()
   }, [fetchSettings, fetchSkills, fetchCliStatus, fetchProjects])
 
+  // Data reload on filter / project change
   useEffect(() => {
     fetchTasks()
     fetchActivities()
     fetchActivityStats()
+  }, [fetchTasks, fetchActivities, fetchActivityStats])
+
+  // Git status reload when active repo path changes
+  useEffect(() => {
     fetchGitStatus()
-  }, [fetchTasks, fetchActivities, fetchActivityStats, fetchGitStatus])
+  }, [fetchGitStatus])
 
   // Active Job Count (queued or running)
   const activeJobCount = activities.filter(
@@ -478,7 +496,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Smart background polling for queue execution & tasks
   useEffect(() => {
-    const pollInterval = activeJobCount > 0 ? 2500 : 20000
+    const pollInterval = activeJobCount > 0 ? 3000 : 25000
 
     const interval = setInterval(async () => {
       try {
@@ -493,7 +511,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         if (actRes.ok) {
           const newActivities: TaskActivity[] = await actRes.json()
-          setActivities(newActivities)
 
           // Detect finished activities
           const prevMap = prevActiveActivitiesRef.current
@@ -525,6 +542,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           newActivities.forEach(a => nextMap.set(a.id, a.status))
           prevActiveActivitiesRef.current = nextMap
 
+          // Only update activities state if changed
+          setActivities(prev => {
+            if (
+              prev.length === newActivities.length &&
+              prev.every(
+                (a, i) =>
+                  a.id === newActivities[i]?.id &&
+                  a.status === newActivities[i]?.status &&
+                  a.output?.length === newActivities[i]?.output?.length
+              )
+            ) {
+              return prev
+            }
+            return newActivities
+          })
+
           if (needTaskRefresh) {
             const taskRes = await fetch(`${API_BASE}/tasks`)
             if (taskRes.ok) {
@@ -539,8 +572,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
 
         if (statsRes.ok) {
-          const newStats = await statsRes.json()
-          setActivityStats(newStats)
+          const newStats: ActivityStats = await statsRes.json()
+          setActivityStats(prev => {
+            if (
+              prev.total === newStats.total &&
+              prev.queued === newStats.queued &&
+              prev.running === newStats.running &&
+              prev.completed === newStats.completed &&
+              prev.failed === newStats.failed &&
+              prev.canceled === newStats.canceled
+            ) {
+              return prev
+            }
+            return newStats
+          })
         }
       } catch (err) {
         console.warn('Queue polling error', err)
@@ -548,7 +593,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }, pollInterval)
 
     return () => clearInterval(interval)
-  }, [activeJobCount, t, addToast])
+  }, [activeJobCount, selectedProjectId, t, addToast])
 
   const updateSettings = async (newSettings: Partial<UserSettings>) => {
     const merged = { ...settings, ...newSettings }
@@ -997,7 +1042,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (updated) {
       addToast({
         type: 'info',
-        title: 'Étape Pipeline IA mise à jour',
+        title: 'Étape Workflow Agentic mise à jour',
         description: `${updated.key} ➔ #${targetStage}`,
       })
     }
@@ -1524,6 +1569,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         e.preventDefault()
         setIsQuickAddOpen(true)
         return
+      }
+
+      if (!isInputActive && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const key = e.key.toLowerCase()
+        if (key === 'b') {
+          e.preventDefault()
+          setActiveView('board')
+          return
+        }
+        if (key === 'l') {
+          e.preventDefault()
+          setActiveView('list')
+          return
+        }
+        if (key === 'a') {
+          e.preventDefault()
+          setActiveView('activities')
+          return
+        }
+        if (key === 's' && !e.shiftKey) {
+          e.preventDefault()
+          setActiveView('sync')
+          return
+        }
+        if (key === 'o') {
+          e.preventDefault()
+          openInEditor()
+          return
+        }
       }
 
       if (e.key === 'Escape') {

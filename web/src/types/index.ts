@@ -75,6 +75,9 @@ export interface Project {
   taskCount?: number
   stageMapping?: Record<WorkflowStage, string>
   skillOverrides?: Record<string, string>
+  aiProvider?: AIProvider
+  aiCommandTemplate?: string
+  specFramework?: SpecFramework
   createdAt: string
   updatedAt: string
 }
@@ -198,9 +201,11 @@ export type WorkflowStage = 'new' | 'clarified' | 'specified' | 'implemented' | 
 
 export type DetailMode = 'modal' | 'panel'
 
-export type AIProvider = 'agy' | 'vibe' | 'claude' | 'gemini' | 'codex' | 'custom'
+export type AIProvider = 'agy' | 'vibe' | 'claude' | 'gemini' | 'codex' | 'cursor' | 'custom'
 
 export type IssueTracker = 'linear' | 'github' | 'jira' | 'local'
+
+export type SpecFramework = 'speckit' | 'openfeature'
 
 export interface UserSettings {
   id: number
@@ -225,6 +230,7 @@ export interface UserSettings {
   promptCreatePr: string
   promptPick: string
   editorCommand: string
+  specFramework?: SpecFramework
   updatedAt: string
 }
 
@@ -260,6 +266,9 @@ export interface ProjectSkillsStatus {
   isGitRepo?: boolean
   gitBranch?: string
   installedAll: boolean
+  specFramework?: SpecFramework
+  worktreesCount?: number
+  worktreePaths?: string[]
   skills: InstalledSkillInfo[]
 }
 

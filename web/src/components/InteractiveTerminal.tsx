@@ -11,6 +11,9 @@ import {
   AlertCircle,
   GitBranch,
   Code2,
+  Maximize2,
+  Minimize2,
+  X,
 } from 'lucide-react'
 import type { Task } from '../types'
 import { useApp } from '../context/AppContext'
@@ -18,10 +21,19 @@ import { useApp } from '../context/AppContext'
 interface InteractiveTerminalProps {
   task: Task
   isExpanded?: boolean
+  initialCommand?: string
+  onToggleExpand?: () => void
+  onClose?: () => void
 }
 
-export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ task, isExpanded }) => {
-  const { settings, openInEditor } = useApp()
+export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
+  task,
+  isExpanded,
+  initialCommand,
+  onToggleExpand,
+  onClose,
+}) => {
+  const { settings, openInEditor, projects } = useApp()
   const terminalContainerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -54,6 +66,14 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ task, 
           fitAddonRef.current.fit()
           const { cols, rows } = termRef.current
           ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+        }
+        if (initialCommand) {
+          setTimeout(() => {
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: 'input', data: `${initialCommand}\n` }))
+              termRef.current?.focus()
+            }
+          }, 400)
         }
       }
 
@@ -193,24 +213,53 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ task, 
   }
 
   // Quick Action commands
-  const aiCmd = settings.aiProvider || 'agy'
+  const proj = projects.find(p => p.id === task.projectId)
+  const provider = proj?.aiProvider || settings.aiProvider || 'agy'
+  const cmdTemplate = proj?.aiCommandTemplate || settings.aiCommandTemplate
+
+  const buildCliCommand = (prompt: string): string => {
+    if (cmdTemplate && cmdTemplate.includes('{prompt}')) {
+      return cmdTemplate
+        .replace('{prompt}', prompt)
+        .replace('{issueKey}', task.key)
+        .replace('{issueTitle}', task.title)
+        .replace('{branchName}', task.branchName || '')
+        .replace('{repoPath}', proj?.repoPath || settings.repoPath || '')
+        .replace('{tracker}', proj?.issueTracker || task.source || 'github')
+        .replace('{repo}', proj?.githubRepo || proj?.name || 'repo')
+    }
+    if (provider === 'agy') {
+      return `agy --dangerously-skip-permissions -p "${prompt}"`
+    }
+    if (provider === 'claude') {
+      return `claude --dangerously-skip-permissions -p "${prompt}"`
+    }
+    if (provider === 'vibe') {
+      return `vibe -p "${prompt}" --auto-approve`
+    }
+    return `${provider} -p "${prompt}"`
+  }
+
   const handleLaunchAgent = () => {
-    sendCommand(`${aiCmd}\n`)
+    sendCommand(`${provider}\n`)
   }
 
   const handleRunSkill = (skill: string) => {
+    const trackerStr = proj?.issueTracker || task.source || 'github'
+    const repoStr = proj?.githubRepo || proj?.name || settings.repoPath?.split('/').pop() || 'repo'
+
     switch (skill) {
       case 'clarify':
-        sendCommand(`${aiCmd} -p "/clarify-issue"\n`)
+        sendCommand(`${buildCliCommand(`/clarify-issue ${task.key} tracked on ${trackerStr} in ${repoStr}`)}\n`)
         break
       case 'specify':
-        sendCommand(`${aiCmd} -p "/specify-issue"\n`)
+        sendCommand(`${buildCliCommand(`/specify-issue`)}\n`)
         break
       case 'implement':
-        sendCommand(`${aiCmd} -p "/code-issue"\n`)
+        sendCommand(`${buildCliCommand(`/code-issue`)}\n`)
         break
       case 'pr':
-        sendCommand(`${aiCmd} -p "/create-pr"\n`)
+        sendCommand(`${buildCliCommand(`/create-pr`)}\n`)
         break
       case 'test':
         sendCommand(`npm test || go test ./...\n`)
@@ -321,6 +370,28 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ task, 
               <RotateCcw size={10} />
               <span>Reset</span>
             </button>
+
+            {onToggleExpand && (
+              <button
+                type="button"
+                onClick={onToggleExpand}
+                title={isExpanded ? 'Réduire la console' : 'Agrandir en plein écran'}
+                className="p-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded transition-colors cursor-pointer"
+              >
+                {isExpanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+              </button>
+            )}
+
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                title="Fermer la console"
+                className="p-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-red-400 rounded transition-colors cursor-pointer"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -338,7 +409,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({ task, 
           className="flex items-center gap-1 px-2.5 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 rounded-md font-mono text-[11px] transition-all shrink-0 cursor-pointer shadow-sm hover:scale-[1.02]"
         >
           <Sparkles size={11} className="text-indigo-400" />
-          <span className="font-semibold">Lancer {aiCmd}</span>
+          <span className="font-semibold">Lancer {provider}</span>
         </button>
 
         <button

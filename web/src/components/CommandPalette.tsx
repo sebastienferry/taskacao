@@ -10,6 +10,8 @@ import {
   Globe,
   Settings,
   RotateCcw,
+  RefreshCw,
+  Code2,
   ArrowRight,
   Sparkles,
   HelpCircle,
@@ -40,6 +42,8 @@ export const CommandPalette: React.FC = () => {
     reseedDemo,
     skills,
     runSkill,
+    openInEditor,
+    syncCurrentProject,
     t,
   } = useApp()
 
@@ -92,6 +96,7 @@ export const CommandPalette: React.FC = () => {
       title: t.commandPalette.createTask,
       icon: <Plus size={16} className="text-emerald-400" />,
       shortcut: 'N',
+      keywords: ['creer', 'nouvelle', 'tache', 'task', 'new', 'add', '+'],
       action: () => {
         setIsCommandPaletteOpen(false)
         setIsQuickAddOpen(true)
@@ -99,9 +104,10 @@ export const CommandPalette: React.FC = () => {
     },
     {
       id: 'switch_board',
-      title: t.commandPalette.switchBoard,
+      title: '📊 Vue Board (Tableau Kanban & Workflow)',
       icon: <Columns size={16} className="text-indigo-400" />,
       shortcut: 'B',
+      keywords: ['board', 'tableau', 'kanban', 'sprint', 'colonnes', 'workflow', 'cards'],
       action: () => {
         setActiveView('board')
         setIsCommandPaletteOpen(false)
@@ -109,9 +115,10 @@ export const CommandPalette: React.FC = () => {
     },
     {
       id: 'switch_list',
-      title: t.commandPalette.switchList,
+      title: '📋 Vue Liste (Toutes les tâches)',
       icon: <ListFilter size={16} className="text-blue-400" />,
       shortcut: 'L',
+      keywords: ['liste', 'list', 'table', 'lignes', 'taches', 'tasks', 'vue'],
       action: () => {
         setActiveView('list')
         setIsCommandPaletteOpen(false)
@@ -119,9 +126,10 @@ export const CommandPalette: React.FC = () => {
     },
     {
       id: 'switch_activities',
-      title: t.nav.activities,
+      title: '⚡ Vue Activités (File d\'exécution & IA)',
       icon: <Activity size={16} className="text-cyan-400" />,
       shortcut: 'A',
+      keywords: ['activites', 'activities', 'ia', 'jobs', 'runner', 'logs', 'file', 'agents', 'historique'],
       action: () => {
         setActiveView('activities')
         setIsCommandPaletteOpen(false)
@@ -129,12 +137,35 @@ export const CommandPalette: React.FC = () => {
     },
     {
       id: 'switch_sync',
-      title: t.nav.sync || 'Synchronisation',
-      icon: <RotateCcw size={16} className="text-indigo-400" />,
+      title: '🔄 Vue Synchronisation (Linear / GitHub / Jira)',
+      icon: <RefreshCw size={16} className="text-indigo-400" />,
       shortcut: 'S',
+      keywords: ['synchronisation', 'synchro', 'sync', 'linear', 'github', 'jira', 'tracker', 'integration'],
       action: () => {
         setActiveView('sync')
         setIsCommandPaletteOpen(false)
+      },
+    },
+    {
+      id: 'sync_now',
+      title: '🚀 Lancer la synchronisation du projet actif',
+      icon: <RefreshCw size={16} className="text-emerald-400" />,
+      shortcut: 'Shift+S',
+      keywords: ['synchroniser', 'sync now', 'refresh', 'actualiser', 'telecharger', 'linear', 'github'],
+      action: () => {
+        setIsCommandPaletteOpen(false)
+        syncCurrentProject()
+      },
+    },
+    {
+      id: 'open_editor',
+      title: `💻 Ouvrir le code dans l'éditeur (${settings.editorCommand || 'code'})`,
+      icon: <Code2 size={16} className="text-cyan-400" />,
+      shortcut: 'O',
+      keywords: ['code', 'editeur', 'editor', 'vscode', 'cursor', 'zed', 'sublime', 'idea', 'ouvrir', 'worktree'],
+      action: () => {
+        setIsCommandPaletteOpen(false)
+        openInEditor()
       },
     },
     {
@@ -142,6 +173,7 @@ export const CommandPalette: React.FC = () => {
       title: '📁 Créer un nouveau projet...',
       icon: <Plus size={16} className="text-indigo-400" />,
       shortcut: 'Shift+P',
+      keywords: ['projet', 'nouveau', 'project', 'new'],
       action: () => {
         setEditingProject(null)
         setIsProjectModalOpen(true)
@@ -153,6 +185,7 @@ export const CommandPalette: React.FC = () => {
       title: `Basculer sur le projet: ${p.name}${p.linearTeam ? ` (${p.linearTeam})` : ''}`,
       icon: <Layers size={16} className={`text-${p.color || 'indigo'}-400`} />,
       shortcut: p.slug.substring(0, 3).toUpperCase(),
+      keywords: ['projet', 'project', p.name.toLowerCase(), p.slug.toLowerCase(), p.linearTeam?.toLowerCase() || '', p.githubRepo?.toLowerCase() || ''],
       action: () => {
         setSelectedProjectId(p.id)
         setIsCommandPaletteOpen(false)
@@ -163,6 +196,7 @@ export const CommandPalette: React.FC = () => {
       title: 'Voir tous les projets combinés',
       icon: <Layers size={16} className="text-slate-400" />,
       shortcut: 'ALL',
+      keywords: ['tous', 'all', 'projets', 'combiné', 'vue globale'],
       action: () => {
         setSelectedProjectId('all')
         setIsCommandPaletteOpen(false)
@@ -173,6 +207,7 @@ export const CommandPalette: React.FC = () => {
       title: `${t.commandPalette.toggleTheme} (${settings.theme === 'dark' ? 'Light' : 'Dark'})`,
       icon: settings.theme === 'dark' ? <Sun size={16} className="text-amber-400" /> : <Moon size={16} className="text-indigo-400" />,
       shortcut: 'T',
+      keywords: ['theme', 'dark', 'light', 'sombre', 'clair'],
       action: () => {
         updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
         setIsCommandPaletteOpen(false)
@@ -183,6 +218,7 @@ export const CommandPalette: React.FC = () => {
       title: `${t.commandPalette.changeLanguage} (${settings.language.toUpperCase()})`,
       icon: <Globe size={16} className="text-cyan-400" />,
       shortcut: 'G',
+      keywords: ['langue', 'language', 'fr', 'en', 'anglais', 'francais'],
       action: () => {
         updateSettings({ language: settings.language === 'fr' ? 'en' : 'fr' })
         setIsCommandPaletteOpen(false)
@@ -193,6 +229,7 @@ export const CommandPalette: React.FC = () => {
       title: t.commandPalette.openProfile,
       icon: <Settings size={16} className="text-slate-400" />,
       shortcut: 'P',
+      keywords: ['profil', 'profile', 'parametres', 'settings', 'config', 'editeur'],
       action: () => {
         setIsCommandPaletteOpen(false)
         setIsProfileOpen(true)
@@ -203,6 +240,7 @@ export const CommandPalette: React.FC = () => {
       title: t.commandPalette.reseed,
       icon: <RotateCcw size={16} className="text-rose-400" />,
       shortcut: 'R',
+      keywords: ['reseed', 'demo', 'reinitialiser', 'reset', 'donnees'],
       action: () => {
         reseedDemo()
         setIsCommandPaletteOpen(false)
@@ -216,6 +254,7 @@ export const CommandPalette: React.FC = () => {
     title: `⚡ Lancer ${sk.name} (${sk.command})`,
     icon: getSkillIcon(sk.icon),
     shortcut: sk.command.replace('/', ''),
+    keywords: ['skill', sk.name.toLowerCase(), sk.command.toLowerCase(), sk.description?.toLowerCase() || ''],
     action: () => {
       setIsCommandPaletteOpen(false)
       // Pick first task matching this skill input or first active task
@@ -227,12 +266,20 @@ export const CommandPalette: React.FC = () => {
     },
   }))
 
+  const qLower = query.toLowerCase().trim()
+
   const filteredGeneral = generalActions.filter(a =>
-    a.title.toLowerCase().includes(query.toLowerCase())
+    !qLower ||
+    a.title.toLowerCase().includes(qLower) ||
+    a.shortcut?.toLowerCase().includes(qLower) ||
+    a.keywords?.some(k => k.toLowerCase().includes(qLower))
   )
 
   const filteredSkills = skillActions.filter(s =>
-    s.title.toLowerCase().includes(query.toLowerCase())
+    !qLower ||
+    s.title.toLowerCase().includes(qLower) ||
+    s.shortcut?.toLowerCase().includes(qLower) ||
+    s.keywords?.some(k => k.toLowerCase().includes(qLower))
   )
 
   const matchingTasks = tasks.filter(t =>

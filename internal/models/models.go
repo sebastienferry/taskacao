@@ -71,58 +71,67 @@ type ActivityStats struct {
 }
 
 type Project struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Slug           string            `json:"slug"`
-	Description    string            `json:"description"`
-	Icon           string            `json:"icon"`         // "Folder", "Terminal", "Flame", "Zap", "Layers", "Code2", "Box", "Cpu"
-	Color          string            `json:"color"`        // "indigo", "emerald", "purple", "amber", "blue", "rose", "cyan", "orange", "neon-cyan", etc.
-	RepoPath       string            `json:"repoPath"`     // CWD for AI skills
-	GitRemoteUrl   string            `json:"gitRemoteUrl"` // e.g. "git@github.com:owner/repo.git"
-	LinearTeam     string            `json:"linearTeam"`   // Key / prefix (optionnel)
-	GithubRepo     string            `json:"githubRepo"`   // e.g. "owner/repo"
-	IssueTracker   string            `json:"issueTracker"` // "linear", "github", "local"
-	TrackerUrl     string            `json:"trackerUrl"`   // e.g. "https://linear.app/my-team/project/xxx"
-	IsDefault      bool              `json:"isDefault"`
-	StageMapping   map[string]string `json:"stageMapping,omitempty"`   // mapping AI workflow labels to tracker statuses
-	SkillOverrides map[string]string `json:"skillOverrides,omitempty"` // skillId -> custom skill name override
-	TaskCount      int               `json:"taskCount"`
-	CreatedAt      time.Time         `json:"createdAt"`
-	UpdatedAt      time.Time         `json:"updatedAt"`
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	Slug               string            `json:"slug"`
+	Description        string            `json:"description"`
+	Icon               string            `json:"icon"`         // "Folder", "Terminal", "Flame", "Zap", "Layers", "Code2", "Box", "Cpu"
+	Color              string            `json:"color"`        // "indigo", "emerald", "purple", "amber", "blue", "rose", "cyan", "orange", "neon-cyan", etc.
+	RepoPath           string            `json:"repoPath"`     // CWD for AI skills
+	GitRemoteUrl       string            `json:"gitRemoteUrl"` // e.g. "git@github.com:owner/repo.git"
+	LinearTeam         string            `json:"linearTeam"`   // Key / prefix (optionnel)
+	GithubRepo         string            `json:"githubRepo"`   // e.g. "owner/repo"
+	IssueTracker       string            `json:"issueTracker"` // "linear", "github", "local"
+	TrackerUrl         string            `json:"trackerUrl"`   // e.g. "https://linear.app/my-team/project/xxx"
+	IsDefault          bool              `json:"isDefault"`
+	StageMapping       map[string]string `json:"stageMapping,omitempty"`   // mapping AI workflow labels to tracker statuses
+	SkillOverrides     map[string]string `json:"skillOverrides,omitempty"` // skillId -> custom skill name override
+	AIProvider         string            `json:"aiProvider,omitempty"`        // "agy", "claude", "vibe", "gemini", "cursor", "custom"
+	AICommandTemplate  string            `json:"aiCommandTemplate,omitempty"` // e.g. 'agy -p "{prompt}"'
+	SpecFramework      string            `json:"specFramework,omitempty"`      // "speckit", "openfeature"
+	TaskCount          int               `json:"taskCount"`
+	CreatedAt          time.Time         `json:"createdAt"`
+	UpdatedAt          time.Time         `json:"updatedAt"`
 }
 
 type CreateProjectRequest struct {
-	Name           string            `json:"name"`
-	Slug           string            `json:"slug,omitempty"`
-	Description    string            `json:"description,omitempty"`
-	Icon           string            `json:"icon,omitempty"`
-	Color          string            `json:"color,omitempty"`
-	RepoPath       string            `json:"repoPath,omitempty"`
-	GitRemoteUrl   string            `json:"gitRemoteUrl,omitempty"`
-	LinearTeam     string            `json:"linearTeam,omitempty"`
-	GithubRepo     string            `json:"githubRepo,omitempty"`
-	IssueTracker   string            `json:"issueTracker,omitempty"`
-	TrackerUrl     string            `json:"trackerUrl,omitempty"`
-	IsDefault      bool              `json:"isDefault,omitempty"`
-	StageMapping   map[string]string `json:"stageMapping,omitempty"`
-	SkillOverrides map[string]string `json:"skillOverrides,omitempty"`
+	Name               string            `json:"name"`
+	Slug               string            `json:"slug,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	Icon               string            `json:"icon,omitempty"`
+	Color              string            `json:"color,omitempty"`
+	RepoPath           string            `json:"repoPath,omitempty"`
+	GitRemoteUrl       string            `json:"gitRemoteUrl,omitempty"`
+	LinearTeam         string            `json:"linearTeam,omitempty"`
+	GithubRepo         string            `json:"githubRepo,omitempty"`
+	IssueTracker       string            `json:"issueTracker,omitempty"`
+	TrackerUrl         string            `json:"trackerUrl,omitempty"`
+	IsDefault          bool              `json:"isDefault,omitempty"`
+	StageMapping       map[string]string `json:"stageMapping,omitempty"`
+	SkillOverrides     map[string]string `json:"skillOverrides,omitempty"`
+	AIProvider         string            `json:"aiProvider,omitempty"`
+	AICommandTemplate  string            `json:"aiCommandTemplate,omitempty"`
+	SpecFramework      string            `json:"specFramework,omitempty"`
 }
 
 type UpdateProjectRequest struct {
-	Name           *string            `json:"name,omitempty"`
-	Slug           *string            `json:"slug,omitempty"`
-	Description    *string            `json:"description,omitempty"`
-	Icon           *string            `json:"icon,omitempty"`
-	Color          *string            `json:"color,omitempty"`
-	RepoPath       *string            `json:"repoPath,omitempty"`
-	GitRemoteUrl   *string            `json:"gitRemoteUrl,omitempty"`
-	LinearTeam     *string            `json:"linearTeam,omitempty"`
-	GithubRepo     *string            `json:"githubRepo,omitempty"`
-	IssueTracker   *string            `json:"issueTracker,omitempty"`
-	TrackerUrl     *string            `json:"trackerUrl,omitempty"`
-	IsDefault      *bool              `json:"isDefault,omitempty"`
-	StageMapping   *map[string]string `json:"stageMapping,omitempty"`
-	SkillOverrides *map[string]string `json:"skillOverrides,omitempty"`
+	Name               *string            `json:"name,omitempty"`
+	Slug               *string            `json:"slug,omitempty"`
+	Description        *string            `json:"description,omitempty"`
+	Icon               *string            `json:"icon,omitempty"`
+	Color              *string            `json:"color,omitempty"`
+	RepoPath           *string            `json:"repoPath,omitempty"`
+	GitRemoteUrl       *string            `json:"gitRemoteUrl,omitempty"`
+	LinearTeam         *string            `json:"linearTeam,omitempty"`
+	GithubRepo         *string            `json:"githubRepo,omitempty"`
+	IssueTracker       *string            `json:"issueTracker,omitempty"`
+	TrackerUrl         *string            `json:"trackerUrl,omitempty"`
+	IsDefault          *bool              `json:"isDefault,omitempty"`
+	StageMapping       *map[string]string `json:"stageMapping,omitempty"`
+	SkillOverrides     *map[string]string `json:"skillOverrides,omitempty"`
+	AIProvider         *string            `json:"aiProvider,omitempty"`
+	AICommandTemplate  *string            `json:"aiCommandTemplate,omitempty"`
+	SpecFramework      *string            `json:"specFramework,omitempty"`
 }
 
 type InstalledSkillInfo struct {
@@ -134,14 +143,17 @@ type InstalledSkillInfo struct {
 }
 
 type ProjectSkillsStatus struct {
-	ProjectID    string               `json:"projectId"`
-	ProjectName  string               `json:"projectName"`
-	RepoPath     string               `json:"repoPath"`
-	PathExists   bool                 `json:"pathExists"`
-	IsGitRepo    bool                 `json:"isGitRepo"`
-	GitBranch    string               `json:"gitBranch,omitempty"`
-	InstalledAll bool                 `json:"installedAll"`
-	Skills       []InstalledSkillInfo `json:"skills"`
+	ProjectID      string               `json:"projectId"`
+	ProjectName    string               `json:"projectName"`
+	RepoPath       string               `json:"repoPath"`
+	PathExists     bool                 `json:"pathExists"`
+	IsGitRepo      bool                 `json:"isGitRepo"`
+	GitBranch      string               `json:"gitBranch,omitempty"`
+	InstalledAll   bool                 `json:"installedAll"`
+	SpecFramework  string               `json:"specFramework,omitempty"`
+	WorktreesCount int                  `json:"worktreesCount,omitempty"`
+	WorktreePaths  []string             `json:"worktreePaths,omitempty"`
+	Skills         []InstalledSkillInfo `json:"skills"`
 }
 
 type ProjectGitInitResult struct {
@@ -276,6 +288,7 @@ type Settings struct {
 	PromptCreatePR     string    `json:"promptCreatePr"`
 	PromptPick         string    `json:"promptPick"`
 	EditorCommand      string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
+	SpecFramework      string    `json:"specFramework"` // "speckit", "openfeature"
 	UpdatedAt          time.Time `json:"updatedAt"`
 }
 

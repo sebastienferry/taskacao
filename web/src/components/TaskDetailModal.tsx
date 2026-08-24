@@ -22,7 +22,6 @@ import {
   Check,
   Copy,
   MessageSquare,
-  Send,
   ArrowRight,
   Folder,
   FolderGit2,
@@ -33,6 +32,7 @@ import {
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Status, Priority, DetailMode } from '../types'
+import { InteractiveTerminal } from './InteractiveTerminal'
 
 export const TaskDetailModal: React.FC = () => {
   const {
@@ -72,15 +72,16 @@ export const TaskDetailModal: React.FC = () => {
   const [assignee, setAssignee] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'details' | 'skills' | 'history'>('details')
+  const [activeTab, setActiveTab] = useState<'details' | 'cadrage' | 'skills' | 'history'>('details')
   const [customPrompt, setCustomPrompt] = useState('')
   const [copiedBranch, setCopiedBranch] = useState(false)
-  const [clarificationInput, setClarificationInput] = useState('')
-  const [isPostingComment, setIsPostingComment] = useState(false)
-  const [isEnrichingDesc, setIsEnrichingDesc] = useState(false)
-  const [isExpandedQA, setIsExpandedQA] = useState(false)
+  const [specFramework, setSpecFramework] = useState<'speckit' | 'openfeature'>(settings.specFramework || 'speckit')
   const [isExpandedSpec, setIsExpandedSpec] = useState(false)
   const [copiedSpec, setCopiedSpec] = useState(false)
+  const [isMaximized, setIsMaximized] = useState(false)
+  const [isTtyOpen, setIsTtyOpen] = useState(false)
+  const [isTtyExpanded, setIsTtyExpanded] = useState(false)
+  const [ttyCommand, setTtyCommand] = useState('')
 
   const detailMode: DetailMode = settings.detailMode || 'panel'
 
@@ -96,8 +97,17 @@ export const TaskDetailModal: React.FC = () => {
       setLabels(selectedTask.labels || [])
       setAssignee(selectedTask.assignee || '')
       setDueDate(selectedTask.dueDate || '')
+      setSpecFramework(settings.specFramework || 'speckit')
     }
-  }, [selectedTask])
+  }, [selectedTask, projects, settings.specFramework])
+
+  const currentTaskProject = projects.find(p => p.id === (selectedTask?.projectId || taskProjectId))
+  const targetGithubRepo = (currentTaskProject?.githubRepo || settings.githubRepo || '').replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
+  const externalUrl = selectedTask?.externalUrl || (
+    selectedTask?.source === 'github' && targetGithubRepo && selectedTask?.key?.startsWith('#')
+      ? `https://github.com/${targetGithubRepo}/issues/${selectedTask.key.replace('#', '')}`
+      : undefined
+  )
 
   const handleClose = async () => {
     if (selectedTask && title.trim()) {
@@ -135,8 +145,8 @@ export const TaskDetailModal: React.FC = () => {
     if (!selectedTask) return
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (isExpandedQA) {
-          setIsExpandedQA(false)
+        if (isTtyExpanded) {
+          setIsTtyExpanded(false)
         } else if (isExpandedSpec) {
           setIsExpandedSpec(false)
         } else {
@@ -146,7 +156,7 @@ export const TaskDetailModal: React.FC = () => {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedTask, isExpandedQA, isExpandedSpec, title, description, status, priority, taskProjectId, branchName, prUrl, assignee, dueDate, labels])
+  }, [selectedTask, isTtyExpanded, isExpandedSpec, title, description, status, priority, taskProjectId, branchName, prUrl, assignee, dueDate, labels])
 
   if (!selectedTask) return null
 
@@ -181,85 +191,6 @@ export const TaskDetailModal: React.FC = () => {
     setPriority(newPriority)
     if (selectedTask) {
       await updateTask(selectedTask.id, { priority: newPriority })
-    }
-  }
-
-  const handleSaveAnswersToDescription = async () => {
-    if (!clarificationInput.trim() || !selectedTask) return
-    setIsEnrichingDesc(true)
-    const updatedDesc = description
-      ? `${description}\n\n### 💬 Réponses aux questions de cadrage (Inputs) :\n${clarificationInput.trim()}`
-      : `### 💬 Réponses aux questions de cadrage (Inputs) :\n${clarificationInput.trim()}`
-    setDescription(updatedDesc)
-    await updateTask(selectedTask.id, { description: updatedDesc })
-    setClarificationInput('')
-    setIsEnrichingDesc(false)
-    addToast({
-      type: 'success',
-      title: 'Description enrichie',
-      description: 'Les réponses ont été ajoutées à la story.',
-    })
-  }
-
-  const handlePostAnswersComment = async () => {
-    if (!clarificationInput.trim() || !selectedTask) return
-    setIsPostingComment(true)
-    try {
-      const commentBody = `### 💬 [Taskacao] Réponses aux questions de cadrage (Inputs)\n\n${clarificationInput.trim()}`
-      const res = await fetch(`/api/tasks/${encodeURIComponent(selectedTask.id)}/comment`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: commentBody }),
-      })
-      if (!res.ok) throw new Error('Comment failed')
-      const trackerName = selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Tracker'
-      addToast({
-        type: 'success',
-        title: 'Commentaire posté',
-        description: `Le commentaire a été publié sur ${trackerName}.`,
-      })
-      setClarificationInput('')
-    } catch (err: any) {
-      addToast({
-        type: 'error',
-        title: 'Erreur',
-        description: err.message,
-      })
-    } finally {
-      setIsPostingComment(false)
-    }
-  }
-
-  const handleSaveAndSpecify = async () => {
-    if (!selectedTask) return
-    const userAnswers = clarificationInput.trim()
-    if (userAnswers) {
-      const updatedDesc = description
-        ? `${description}\n\n### 💬 Réponses aux questions de cadrage (Inputs) :\n${userAnswers}`
-        : `### 💬 Réponses aux questions de cadrage (Inputs) :\n${userAnswers}`
-      setDescription(updatedDesc)
-      await updateTask(selectedTask.id, { description: updatedDesc, status: 'to_specify' })
-      
-      // Also post comment on remote tracker if applicable
-      if (selectedTask.source === 'linear' || selectedTask.source === 'github' || selectedTask.source === 'jira') {
-        try {
-          await fetch(`/api/tasks/${encodeURIComponent(selectedTask.id)}/comment`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ body: `### 💬 [Taskacao] Réponses aux questions de cadrage\n\n${userAnswers}` }),
-          })
-        } catch (e) {
-          console.error('Failed to post comment', e)
-        }
-      }
-
-      setClarificationInput('')
-      setStatus('to_specify')
-      await runSkill(selectedTask.id, 'specify', `Réponses de cadrage fournies par l'utilisateur :\n${userAnswers}`)
-    } else {
-      await updateTask(selectedTask.id, { status: 'to_specify' })
-      setStatus('to_specify')
-      await runSkill(selectedTask.id, 'specify', customPrompt)
     }
   }
 
@@ -314,10 +245,11 @@ export const TaskDetailModal: React.FC = () => {
     }
   }
 
-  const handleTriggerSkill = async (skillId: string) => {
+  const handleTriggerSkill = async (skillId: string, overridePrompt?: string) => {
     if (!selectedTask || isSkillRunning) return
-    const activity = await runSkill(selectedTask.id, skillId, customPrompt)
-    if (activity) {
+    const promptToUse = overridePrompt || customPrompt
+    const activity = await runSkill(selectedTask.id, skillId, promptToUse)
+    if (activity && !overridePrompt) {
       setCustomPrompt('')
     }
   }
@@ -364,152 +296,34 @@ export const TaskDetailModal: React.FC = () => {
     })
   }
 
-  // Interactive Clarification Q&A / Inputs Box
-  const renderClarificationQASection = () => {
-    const shouldShow = Boolean(
-      clarifyActivity ||
-      status === 'to_clarify' ||
-      status === 'to_specify' ||
-      status === 'backlog' ||
-      labels.some(l => {
-        const low = l.toLowerCase()
-        return low === 'clarified' || low === 'to-clarify' || low === 'new'
-      })
-    )
-
-    if (!shouldShow) return null
-
-    return (
-      <div className="p-4 rounded-2xl bg-linear-to-b from-[var(--bg-tertiary)] to-[var(--bg-secondary)] border border-amber-500/40 shadow-md space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <MessageSquare size={16} className="text-amber-400" />
-            <h4 className="text-xs font-bold text-[var(--text-primary)]">
-              Réponses aux questions de cadrage (Inputs)
-            </h4>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold uppercase border border-amber-500/30">
-              Alignement Produit & Tech
-            </span>
-            <button
-              type="button"
-              onClick={() => setIsExpandedQA(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 transition-all shadow-2xs hover:scale-105"
-              title="Agrandir en mode grand format / plein écran"
-            >
-              <Maximize2 size={11} />
-              <span>Agrandir</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Display questions from clarifyActivity if available */}
-        {clarifyActivity?.output && (
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 font-mono text-[11px] max-h-72 overflow-y-auto space-y-1.5 shadow-inner leading-relaxed">
-            <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center justify-between pb-1 border-b border-slate-800">
-              <span className="flex items-center gap-1">
-                <HelpCircle size={12} />
-                <span>Questions de cadrage posées par l'agent Clarify :</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  navigator.clipboard?.writeText(clarifyActivity.output)
-                  addToast({ type: 'success', title: 'Questions copiées', description: 'Les questions ont été copiées.' })
-                }}
-                className="text-[9px] text-slate-400 hover:text-white flex items-center gap-1 font-mono"
-              >
-                <Copy size={10} />
-                <span>Copier</span>
-              </button>
-            </div>
-            <div className="whitespace-pre-wrap pt-1">
-              {clarifyActivity.output}
-            </div>
-          </div>
-        )}
-
-        <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-          Renseignez vos arbitrages produit & technique aux questions posées par l'agent Clarify pour alimenter l'étape de spécification.
-        </p>
-
-        <textarea
-          value={clarificationInput}
-          onChange={e => setClarificationInput(e.target.value)}
-          rows={6}
-          placeholder={`Saisissez vos réponses aux questions (ex :\n1. Mode Serverless avec scale-to-zero uniquement en Staging/Dev\n2. minConnections=0 et idleTimeout=30s pour libérer les connexions\n3. Neutraliser les sondes healthcheck périodiques vers la DB...)`}
-          className="w-full p-3.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] placeholder-[var(--text-muted)]/70 focus:outline-none focus:border-[var(--accent-color)] focus:ring-1 focus:ring-[var(--accent-color)] font-mono leading-relaxed resize-y min-h-[130px]"
-        />
-
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleSaveAnswersToDescription}
-              disabled={!clarificationInput.trim() || isEnrichingDesc}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] transition-all disabled:opacity-40"
-              title="Ajouter ces réponses à la description de la story"
-            >
-              {isEnrichingDesc ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-              <span>Enrichir la description</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handlePostAnswersComment}
-              disabled={!clarificationInput.trim() || isPostingComment}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] transition-all disabled:opacity-40"
-              title={`Poster ce commentaire directement sur ${selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'le tracker'}`}
-            >
-              {isPostingComment ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-              <span className="hidden sm:inline">Commenter ({selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Tracker'})</span>
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleSaveAndSpecify}
-            disabled={isSkillRunning}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-white shadow-md accent-bg hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
-            title="Sauvegarder les réponses, passer en statut Spécifié et lancer le skill Specify"
-          >
-            {isSkillRunning && runningSkillId === 'specify' ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <>
-                <Sparkles size={13} className="text-amber-300" />
-                <span>Enregistrer & Lancer Specify</span>
-                <ArrowRight size={13} />
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // Technical Specification (Speckit) Section Box
+  // Technical Specification (SpecKit / Open Feature) Section Box
   const renderSpecificationSection = () => {
     if (!specifyActivity?.output) return null
+
+    const isOF = specFramework === 'openfeature'
+    const frameworkLabel = isOF ? 'Open Feature' : 'SpecKit'
 
     return (
       <div className="p-4 rounded-2xl bg-linear-to-b from-[var(--bg-tertiary)] to-[var(--bg-secondary)] border border-blue-500/40 shadow-md space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <FileCode size={16} className="text-blue-400" />
+            <FileCode size={16} className={isOF ? 'text-emerald-400' : 'text-blue-400'} />
             <h4 className="text-xs font-bold text-[var(--text-primary)]">
-              Spécification Technique Speckit
+              Spécification Technique ({frameworkLabel})
             </h4>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-bold uppercase border border-blue-500/30">
-              Spécifié
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase border ${
+              isOF
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                : 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+            }`}>
+              {frameworkLabel} SDD
             </span>
             <button
               type="button"
               onClick={handleCopySpec}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-mono font-bold bg-[var(--bg-primary)] hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-[var(--border-color)] transition-colors"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-mono font-bold bg-[var(--bg-primary)] hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-[var(--border-color)] transition-colors cursor-pointer"
               title="Copier la spec complète"
             >
               {copiedSpec ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
@@ -518,7 +332,11 @@ export const TaskDetailModal: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsExpandedSpec(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold text-blue-300 bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30 transition-all shadow-2xs hover:scale-105"
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all shadow-2xs hover:scale-105 cursor-pointer ${
+                isOF
+                  ? 'text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30'
+                  : 'text-blue-300 bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30'
+              }`}
               title="Agrandir la spécification en mode grand format / plein écran"
             >
               <Maximize2 size={11} />
@@ -541,7 +359,7 @@ export const TaskDetailModal: React.FC = () => {
             type="button"
             onClick={() => handleTriggerSkill('implement')}
             disabled={isSkillRunning}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-white shadow-md bg-linear-to-r from-blue-600 to-indigo-600 hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-white shadow-md bg-linear-to-r from-blue-600 to-indigo-600 hover:opacity-90 active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
             title="Lancer l'implémentation du code conformément à cette spécification"
           >
             {isSkillRunning && runningSkillId === 'implement' ? (
@@ -555,6 +373,397 @@ export const TaskDetailModal: React.FC = () => {
             )}
           </button>
         </div>
+      </div>
+    )
+  }
+
+  // -------------------------------------------------------------
+  // DEDICATED TAB: Cadrage & Spécifications
+  // -------------------------------------------------------------
+  const renderCadrageSection = () => {
+    if (!selectedTask) return null
+
+    const currentProject = projects.find(p => p.id === (selectedTask.projectId || taskProjectId))
+    const issueTracker = currentProject?.issueTracker || selectedTask.source || 'github'
+    const repoName = currentProject?.githubRepo || currentProject?.name || settings.repoPath?.split('/').pop() || 'repo'
+    const provider = currentProject?.aiProvider || settings.aiProvider || 'agy'
+    const cmdTemplate = currentProject?.aiCommandTemplate || settings.aiCommandTemplate
+
+    const buildCliCommand = (prompt: string): string => {
+      if (cmdTemplate && cmdTemplate.includes('{prompt}')) {
+        return cmdTemplate
+          .replace('{prompt}', prompt)
+          .replace('{issueKey}', selectedTask.key)
+          .replace('{issueTitle}', selectedTask.title)
+          .replace('{branchName}', selectedTask.branchName || '')
+          .replace('{repoPath}', currentProject?.repoPath || settings.repoPath || '')
+          .replace('{tracker}', issueTracker)
+          .replace('{repo}', repoName)
+      }
+      if (provider === 'agy') {
+        return `agy --dangerously-skip-permissions -p "${prompt}"`
+      }
+      if (provider === 'claude') {
+        return `claude --dangerously-skip-permissions -p "${prompt}"`
+      }
+      if (provider === 'vibe') {
+        return `vibe -p "${prompt}" --auto-approve`
+      }
+      return `${provider} -p "${prompt}"`
+    }
+
+    const clarifyPrompt = `/clarify-issue ${selectedTask.key} tracked on ${issueTracker} in ${repoName}`
+    const clarifyCliCommand = buildCliCommand(clarifyPrompt)
+
+    const specifyPrompt = `/specify-issue ${selectedTask.key} --framework ${specFramework}`
+    const specifyCliCommand = buildCliCommand(specifyPrompt)
+
+    return (
+      <div className="space-y-6">
+        {/* Cadrage Header & Stage Banner */}
+        <div className="p-4 rounded-2xl bg-linear-to-r from-amber-500/10 via-blue-500/10 to-[var(--bg-tertiary)] border border-[var(--border-color)] flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-bold shrink-0 shadow-2xs">
+              <HelpCircle size={20} />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2">
+                <span>Cadrage Produit & Spécifications ({specFramework === 'openfeature' ? 'Open Feature' : 'SpecKit'})</span>
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  {status === 'to_clarify' || status === 'backlog' ? '#new' : status === 'to_specify' ? '#clarified' : status === 'to_implement' ? '#specified' : `#${status}`}
+                </span>
+              </h3>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                Clarification interactive en console TTY et génération de spécifications formelles (SpecKit ou Open Feature).
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-[10px] font-mono px-2 py-1 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-muted)]">
+              {repoName}
+            </span>
+          </div>
+        </div>
+
+        {/* 1. Interactive TTY Cadrage Runner Card */}
+        <div className="p-4 rounded-2xl bg-[var(--bg-tertiary)]/70 border border-amber-500/30 shadow-md space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Terminal size={16} className="text-amber-400" />
+              <h4 className="text-xs font-bold text-[var(--text-primary)]">
+                1. Cadrage Interactif TTY (/clarify-issue)
+              </h4>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-300 font-bold border border-amber-500/30">
+                {settings.aiProvider?.toUpperCase() || 'AGY'} CLI
+              </span>
+            </div>
+          </div>
+
+          {/* Code block with exact prompt */}
+          <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3 text-xs font-mono">
+            <div className="flex items-center gap-2 truncate min-w-0">
+              <span className="text-amber-400 font-bold">$</span>
+              <span className="text-slate-200 select-all truncate">
+                {clarifyPrompt}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(clarifyPrompt)
+                  addToast({
+                    type: 'success',
+                    title: 'Prompt copié',
+                    description: `Prompt copié : ${clarifyPrompt}`,
+                  })
+                }}
+                className="px-2 py-1 rounded-lg text-[10.5px] font-medium text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-700 transition-colors flex items-center gap-1 cursor-pointer"
+                title="Copier le prompt"
+              >
+                <Copy size={11} />
+                <span>Copier prompt</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(clarifyCliCommand)
+                  addToast({
+                    type: 'success',
+                    title: 'Commande CLI copiée',
+                    description: `Commande copiée : ${clarifyCliCommand}`,
+                  })
+                }}
+                className="px-2 py-1 rounded-lg text-[10.5px] font-medium text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-700 transition-colors flex items-center gap-1 cursor-pointer"
+                title="Copier la commande CLI complète"
+              >
+                <Code2 size={11} />
+                <span>Copier CLI</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Action trigger buttons */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+            <div className="text-[11px] text-[var(--text-muted)]">
+              Pose les questions d'arbitrage et clarifie le périmètre en direct dans la console TTY.
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const willOpen = !isTtyOpen || ttyCommand !== clarifyCliCommand
+                  setIsTtyOpen(willOpen)
+                  setTtyCommand(clarifyCliCommand)
+                }}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs active:scale-95 ${
+                  isTtyOpen && ttyCommand === clarifyCliCommand
+                    ? 'bg-amber-600 text-white hover:bg-amber-500'
+                    : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30'
+                }`}
+                title="Ouvrir la console TTY interactive intégrée et exécuter /clarify-issue"
+              >
+                <Terminal size={13} className={isTtyOpen && ttyCommand === clarifyCliCommand ? 'text-white' : 'text-amber-400'} />
+                <span>{isTtyOpen && ttyCommand === clarifyCliCommand ? 'Masquer TTY' : 'Lancer Console TTY Cadrage'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleTriggerSkill('clarify', clarifyPrompt)}
+                disabled={isSkillRunning}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-white bg-amber-600 hover:bg-amber-500 transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                title="Lancer le prompt /clarify-issue via l'agent en arrière-plan"
+              >
+                {isSkillRunning && runningSkillId === 'clarify' ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Sparkles size={13} className="text-amber-200" />
+                )}
+                <span>Lancer en tâche de fond</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* 2. Spec-Driven Design Framework & Specification Runner Card */}
+        <div className="p-4 rounded-2xl bg-[var(--bg-tertiary)]/70 border border-blue-500/30 shadow-md space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <FileCode size={16} className="text-blue-400" />
+              <h4 className="text-xs font-bold text-[var(--text-primary)]">
+                2. Framework Spec-Driven Design & Spécification (/specify-issue)
+              </h4>
+            </div>
+
+            {/* Framework Toggle Buttons: SpecKit vs Open Feature */}
+            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+              <button
+                type="button"
+                onClick={() => setSpecFramework('speckit')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  specFramework === 'speckit'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
+                }`}
+              >
+                <span>📑</span>
+                <span>SpecKit</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSpecFramework('openfeature')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  specFramework === 'openfeature'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
+                }`}
+              >
+                <span>🚩</span>
+                <span>Open Feature</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="text-[11px] text-[var(--text-muted)] flex items-center gap-2">
+            {specFramework === 'openfeature' ? (
+              <span>
+                <strong className="text-emerald-400">Framework Open Feature :</strong> Spécification axée sur les Feature Flags, contextes d'évaluation, hooks SDK et cycle de vie.
+              </span>
+            ) : (
+              <span>
+                <strong className="text-blue-400">Framework SpecKit :</strong> Spécification technique standard avec user stories, architecture et critères BDD (Given/When/Then).
+              </span>
+            )}
+          </div>
+
+          {/* Code block with exact specify prompt */}
+          <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3 text-xs font-mono">
+            <div className="flex items-center gap-2 truncate min-w-0">
+              <span className={specFramework === 'openfeature' ? 'text-emerald-400 font-bold' : 'text-blue-400 font-bold'}>$</span>
+              <span className="text-slate-200 select-all truncate">
+                {specifyPrompt}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(specifyPrompt)
+                  addToast({
+                    type: 'success',
+                    title: 'Prompt copié',
+                    description: `Prompt copié : ${specifyPrompt}`,
+                  })
+                }}
+                className="px-2 py-1 rounded-lg text-[10.5px] font-medium text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-700 transition-colors flex items-center gap-1 cursor-pointer"
+                title="Copier le prompt specify"
+              >
+                <Copy size={11} />
+                <span>Copier prompt</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(specifyCliCommand)
+                  addToast({
+                    type: 'success',
+                    title: 'Commande CLI copiée',
+                    description: `Commande copiée : ${specifyCliCommand}`,
+                  })
+                }}
+                className="px-2 py-1 rounded-lg text-[10.5px] font-medium text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-700 transition-colors flex items-center gap-1 cursor-pointer"
+                title="Copier la commande CLI complète"
+              >
+                <Code2 size={11} />
+                <span>Copier CLI</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Action trigger buttons */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+            <div className="text-[11px] text-[var(--text-muted)]">
+              Génère la spécification formelle selon la norme <span className="font-bold text-[var(--text-primary)]">{specFramework === 'openfeature' ? 'Open Feature' : 'SpecKit'}</span>.
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const willOpen = !isTtyOpen || ttyCommand !== specifyCliCommand
+                  setIsTtyOpen(willOpen)
+                  setTtyCommand(specifyCliCommand)
+                }}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs active:scale-95 ${
+                  isTtyOpen && ttyCommand === specifyCliCommand
+                    ? specFramework === 'openfeature' ? 'bg-emerald-600 text-white hover:bg-emerald-500' : 'bg-blue-600 text-white hover:bg-blue-500'
+                    : specFramework === 'openfeature'
+                      ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30'
+                      : 'bg-blue-500/15 text-blue-300 hover:bg-blue-500/25 border border-blue-500/30'
+                }`}
+                title="Ouvrir la console TTY interactive intégrée et exécuter /specify-issue"
+              >
+                <Terminal size={13} />
+                <span>{isTtyOpen && ttyCommand === specifyCliCommand ? 'Masquer TTY' : 'Lancer Console TTY Spécifier'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  if (status === 'to_clarify' || status === 'backlog') {
+                    await updateTask(selectedTask.id, { status: 'to_specify' })
+                    setStatus('to_specify')
+                  }
+                  await handleTriggerSkill('specify', specifyPrompt)
+                }}
+                disabled={isSkillRunning}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-white transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50 ${
+                  specFramework === 'openfeature'
+                    ? 'bg-emerald-600 hover:bg-emerald-500'
+                    : 'bg-blue-600 hover:bg-blue-500'
+                }`}
+                title="Lancer la génération de spécification en arrière-plan"
+              >
+                {isSkillRunning && runningSkillId === 'specify' ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Sparkles size={13} className="text-blue-200" />
+                )}
+                <span>Lancer en tâche de fond</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Embedded Interactive Terminal if toggled */}
+        {isTtyOpen && !isTtyExpanded && (
+          <div className="pt-1">
+            <div className="h-96 w-full rounded-xl overflow-hidden border border-slate-800 shadow-xl">
+              <InteractiveTerminal
+                task={selectedTask}
+                isExpanded={false}
+                initialCommand={ttyCommand}
+                onToggleExpand={() => setIsTtyExpanded(true)}
+                onClose={() => setIsTtyOpen(false)}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Fullscreen Expanded Interactive Terminal Modal Overlay */}
+        {isTtyOpen && isTtyExpanded && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+            <div className="relative w-full h-[92vh] rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/40 bg-[#070b14] flex flex-col">
+              <InteractiveTerminal
+                task={selectedTask}
+                isExpanded={true}
+                initialCommand={ttyCommand}
+                onToggleExpand={() => setIsTtyExpanded(false)}
+                onClose={() => {
+                  setIsTtyExpanded(false)
+                  setIsTtyOpen(false)
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 3. Technical Specification (Speckit / Open Feature) Section Box */}
+        {renderSpecificationSection()}
+
+        {/* 4. Empty state helper if no clarification or spec yet */}
+        {!clarifyActivity && !specifyActivity && (
+          <div className="p-8 rounded-2xl border border-dashed border-[var(--border-color)] bg-[var(--bg-tertiary)]/20 text-center space-y-3">
+            <div className="w-12 h-12 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center mx-auto">
+              <Sparkles size={24} />
+            </div>
+            <div className="max-w-md mx-auto space-y-1">
+              <h4 className="text-xs font-bold text-[var(--text-primary)]">
+                Prêt pour le cadrage assisté par IA
+              </h4>
+              <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                Lancez l'agent Clarify en mode interactif TTY pour cadrer les besoins, ou démarrez directement la rédaction de la spécification technique ({specFramework === 'openfeature' ? 'Open Feature' : 'SpecKit'}).
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTtyOpen(true)
+                  setTtyCommand(clarifyCliCommand)
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-amber-600 hover:bg-amber-500 transition-all shadow-xs cursor-pointer active:scale-95"
+              >
+                <Terminal size={14} />
+                <span>Ouvrir Console TTY Cadrage</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -761,7 +970,7 @@ export const TaskDetailModal: React.FC = () => {
                   title={`Ouvrir le dossier / worktree dans ${settings.editorCommand || 'VS Code'}`}
                 >
                   <Code2 size={10} className="text-cyan-400" />
-                  <span>Ouvrir éditeur</span>
+                  <span>Code</span>
                 </button>
               </div>
             </div>
@@ -875,12 +1084,6 @@ export const TaskDetailModal: React.FC = () => {
           </div>
         </div>
       </div>
-
-      {/* Interactive Clarification Section directly in Info Tab */}
-      {renderClarificationQASection()}
-
-      {/* Technical Specification (Speckit) Section in Info Tab */}
-      {renderSpecificationSection()}
     </div>
   )
 
@@ -1054,9 +1257,6 @@ export const TaskDetailModal: React.FC = () => {
         </div>
       )}
 
-      {/* Interactive Clarification Q&A / Inputs Box */}
-      {renderClarificationQASection()}
-
       {/* Past Activity Accordion if multiple runs */}
       {activities.length > 1 && (
         <div className="space-y-1.5 pt-2">
@@ -1100,8 +1300,8 @@ export const TaskDetailModal: React.FC = () => {
         />
 
         {/* Sliding Panel */}
-        <div className="absolute inset-y-0 right-0 max-w-full flex pl-10">
-          <div className="w-screen max-w-2xl bg-[var(--bg-secondary)] border-l border-[var(--border-color)] shadow-2xl flex flex-col h-full animate-in slide-in-from-right duration-200">
+        <div className="absolute inset-y-0 right-0 max-w-full flex pl-6 sm:pl-10">
+          <div className="w-screen max-w-3xl 2xl:max-w-4xl bg-[var(--bg-secondary)] border-l border-[var(--border-color)] shadow-2xl flex flex-col h-full animate-in slide-in-from-right duration-200">
             {/* Panel Header */}
             <div className="flex items-center justify-between px-6 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 shrink-0">
               {/* Left: Key & External Link */}
@@ -1114,9 +1314,9 @@ export const TaskDetailModal: React.FC = () => {
                   {selectedTask.key}
                 </span>
 
-                {selectedTask.externalUrl && (
+                {externalUrl && (
                   <a
-                    href={selectedTask.externalUrl}
+                    href={externalUrl}
                     target="_blank"
                     rel="noreferrer"
                     className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all shadow-2xs hover:scale-105 ${
@@ -1161,7 +1361,7 @@ export const TaskDetailModal: React.FC = () => {
                   title={`Ouvrir le code / worktree dans ${settings.editorCommand || 'VS Code'}`}
                 >
                   <Code2 size={12} className="text-cyan-400" />
-                  <span className="hidden sm:inline">Éditeur</span>
+                  <span className="hidden sm:inline">Code</span>
                 </button>
 
                 {/* Switch to Modal Button */}
@@ -1205,13 +1405,56 @@ export const TaskDetailModal: React.FC = () => {
               </div>
             </div>
 
+            {/* Panel Tab Navigation Header */}
+            <div className="flex items-center gap-2 px-6 pt-2.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] shrink-0 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setActiveTab('details')}
+                className={`pb-2 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'details'
+                    ? 'border-[var(--accent-color)] accent-text font-bold'
+                    : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <FileCode size={13} />
+                <span>Story</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('cadrage')}
+                className={`pb-2 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'cadrage'
+                    ? 'border-amber-400 text-amber-400 font-bold'
+                    : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <HelpCircle size={13} className="text-amber-400" />
+                <span>Cadrage & Specs</span>
+                {Boolean(clarifyActivity || specifyActivity) && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('skills')}
+                className={`pb-2 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'skills'
+                    ? 'border-[var(--accent-color)] accent-text font-bold'
+                    : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Sparkles size={13} className="text-purple-400" />
+                <span>Skills & Copilot</span>
+              </button>
+            </div>
+
             {/* Panel Scrollable Content Body */}
             <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
-              {/* 1. TOP: Story Infos */}
-              {renderStoryInfoSection()}
-
-              {/* 2. BOTTOM: Skills & Copilot Pipeline */}
-              {renderSkillsCopilotSection()}
+              {activeTab === 'details' && renderStoryInfoSection()}
+              {activeTab === 'cadrage' && renderCadrageSection()}
+              {activeTab === 'skills' && renderSkillsCopilotSection()}
             </div>
 
             {/* Panel Sticky Footer */}
@@ -1249,8 +1492,14 @@ export const TaskDetailModal: React.FC = () => {
   // With tab navigation & switcher back to right panel
   // -------------------------------------------------------------
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200 select-none">
-      <div className="relative w-full max-w-3xl rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200 select-none">
+      <div
+        className={`relative w-full transition-all duration-200 bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col ${
+          isMaximized
+            ? 'w-full h-full max-w-none max-h-none rounded-2xl'
+            : 'max-w-5xl 2xl:max-w-6xl h-[90vh] max-h-[92vh] rounded-2xl'
+        }`}
+      >
         {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30 shrink-0">
           <div className="flex items-center gap-3">
@@ -1262,9 +1511,9 @@ export const TaskDetailModal: React.FC = () => {
               {selectedTask.key}
             </span>
             <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-              {selectedTask.externalUrl && (
+              {externalUrl && (
                 <a
-                  href={selectedTask.externalUrl}
+                  href={externalUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="flex items-center gap-1 text-[11px] font-semibold text-[var(--accent-color)] hover:underline"
@@ -1301,7 +1550,7 @@ export const TaskDetailModal: React.FC = () => {
               title={`Ouvrir le code / worktree dans ${settings.editorCommand || 'VS Code'}`}
             >
               <Code2 size={13} className="text-cyan-400" />
-              <span>Éditeur ({settings.editorCommand || 'code'})</span>
+              <span>Code</span>
             </button>
 
             {/* Switch to Right Panel Button */}
@@ -1330,15 +1579,25 @@ export const TaskDetailModal: React.FC = () => {
 
             <button
               onClick={handleDelete}
-              className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10 transition-colors"
+              className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
               title={t.taskModal.delete}
             >
               <Trash2 size={16} />
             </button>
 
+            {/* Maximize / Minimize toggle */}
+            <button
+              type="button"
+              onClick={() => setIsMaximized(prev => !prev)}
+              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+              title={isMaximized ? "Réduire" : "Plein écran"}
+            >
+              {isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
+
             <button
               onClick={handleClose}
-              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
             >
               <X size={18} />
             </button>
@@ -1347,10 +1606,11 @@ export const TaskDetailModal: React.FC = () => {
 
         {/* Tab Navigation Header */}
         <div className="flex items-center justify-between px-6 pt-3 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] shrink-0">
-          <div className="flex items-center gap-4 text-xs font-semibold">
+          <div className="flex items-center gap-5 text-xs font-semibold">
             <button
+              type="button"
               onClick={() => setActiveTab('details')}
-              className={`pb-2.5 flex items-center gap-1.5 border-b-2 transition-all ${
+              className={`pb-2.5 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
                 activeTab === 'details'
                   ? 'border-[var(--accent-color)] accent-text font-bold'
                   : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
@@ -1361,14 +1621,31 @@ export const TaskDetailModal: React.FC = () => {
             </button>
 
             <button
+              type="button"
+              onClick={() => setActiveTab('cadrage')}
+              className={`pb-2.5 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+                activeTab === 'cadrage'
+                  ? 'border-amber-400 text-amber-400 font-bold'
+                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <HelpCircle size={14} className="text-amber-400" />
+              <span>Cadrage & Spécifications</span>
+              {Boolean(clarifyActivity || specifyActivity) && (
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse ml-0.5" />
+              )}
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('skills')}
-              className={`pb-2.5 flex items-center gap-1.5 border-b-2 transition-all ${
+              className={`pb-2.5 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
                 activeTab === 'skills'
                   ? 'border-[var(--accent-color)] accent-text font-bold'
                   : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
               }`}
             >
-              <Sparkles size={14} className="text-amber-400" />
+              <Sparkles size={14} className="text-purple-400" />
               <span>Skills & Agent Copilot</span>
             </button>
           </div>
@@ -1377,6 +1654,7 @@ export const TaskDetailModal: React.FC = () => {
         {/* Modal Scrollable Body */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
           {activeTab === 'details' && renderStoryInfoSection()}
+          {activeTab === 'cadrage' && renderCadrageSection()}
           {activeTab === 'skills' && renderSkillsCopilotSection()}
         </div>
 
@@ -1406,149 +1684,7 @@ export const TaskDetailModal: React.FC = () => {
         </div>
       </div>
 
-      {/* Fullscreen Expanded Q&A Alignment Modal */}
-      {isExpandedQA && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="relative w-full max-w-5xl h-[88vh] rounded-2xl bg-[var(--bg-secondary)] border border-amber-500/40 shadow-2xl flex flex-col overflow-hidden">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/70 shrink-0">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-bold">
-                  <MessageSquare size={16} />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                      {selectedTask.key}
-                    </span>
-                    <h3 className="text-sm font-bold text-[var(--text-primary)]">
-                      Alignement & Réponses aux questions de cadrage (Mode Grand Format)
-                    </h3>
-                  </div>
-                  <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                    {selectedTask.title}
-                  </p>
-                </div>
-              </div>
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsExpandedQA(false)}
-                  className="p-2 rounded-xl hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
-                  title="Réduire (ESC)"
-                >
-                  <Minimize2 size={16} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsExpandedQA(false)}
-                  className="p-2 rounded-xl hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
-                  title="Fermer"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-
-            {/* Split Content: Questions on Left / Answers on Right */}
-            <div className="flex-1 flex flex-col sm:flex-row min-h-0 divide-y sm:divide-y-0 sm:divide-x divide-[var(--border-color)] overflow-hidden">
-              {/* Left Column: Questions */}
-              <div className="sm:w-1/2 flex flex-col p-4 bg-slate-950 text-slate-300 overflow-hidden">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-800 shrink-0">
-                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <HelpCircle size={13} />
-                    Questions posées par l'agent Clarify
-                  </span>
-                  {clarifyActivity?.output && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard?.writeText(clarifyActivity.output)
-                        addToast({ type: 'success', title: 'Questions copiées', description: 'Copié dans le presse-papiers.' })
-                      }}
-                      className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1 font-mono"
-                    >
-                      <Copy size={11} />
-                      <span>Copier</span>
-                    </button>
-                  )}
-                </div>
-                <div className="flex-1 overflow-y-auto pt-3 font-mono text-xs leading-relaxed whitespace-pre-wrap">
-                  {clarifyActivity?.output || "Aucune question générée par l'agent Clarify pour l'instant. Vous pouvez renseigner directement vos directives de cadrage ci-contre."}
-                </div>
-              </div>
-
-              {/* Right Column: User Answer Editor */}
-              <div className="sm:w-1/2 flex flex-col p-4 bg-[var(--bg-primary)] overflow-hidden">
-                <div className="flex items-center justify-between pb-2 border-b border-[var(--border-color)] shrink-0">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-primary)] flex items-center gap-1.5">
-                    <MessageSquare size={13} className="text-amber-400" />
-                    Vos Arbitrages & Réponses Techniques
-                  </span>
-                  <span className="text-[10px] font-mono text-[var(--text-muted)]">
-                    {clarificationInput.length} caractères
-                  </span>
-                </div>
-
-                <div className="flex-1 py-3 flex flex-col min-h-0">
-                  <textarea
-                    value={clarificationInput}
-                    onChange={e => setClarificationInput(e.target.value)}
-                    placeholder={`Saisissez vos réponses détaillées ici...\n\nExemple :\n1. Architecture : Stateless avec pool de connexions optimisé\n2. Timeout : 30 secondes pour libérer les connexions inactives\n3. Sécurité : Validation des tokens et rate-limiting...`}
-                    className="w-full flex-1 p-3.5 text-xs font-mono rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] placeholder-[var(--text-muted)]/60 focus:outline-none focus:border-[var(--accent-color)] leading-relaxed resize-none"
-                  />
-                </div>
-
-                {/* Actions Footer */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--border-color)] shrink-0">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleSaveAnswersToDescription}
-                      disabled={!clarificationInput.trim() || isEnrichingDesc}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] transition-all disabled:opacity-40"
-                    >
-                      {isEnrichingDesc ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                      <span>Enrichir description</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handlePostAnswersComment}
-                      disabled={!clarificationInput.trim() || isPostingComment}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] transition-all disabled:opacity-40"
-                    >
-                      {isPostingComment ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                      <span>Commenter ({selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Tracker'})</span>
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setIsExpandedQA(false)
-                      await handleSaveAndSpecify()
-                    }}
-                    disabled={isSkillRunning}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white shadow-md accent-bg hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
-                  >
-                    {isSkillRunning && runningSkillId === 'specify' ? (
-                      <Loader2 size={13} className="animate-spin" />
-                    ) : (
-                      <>
-                        <Sparkles size={13} className="text-amber-300" />
-                        <span>Enregistrer & Lancer Specify</span>
-                        <ArrowRight size={13} />
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Fullscreen Expanded Specification Reader Modal */}
       {isExpandedSpec && specifyActivity?.output && (

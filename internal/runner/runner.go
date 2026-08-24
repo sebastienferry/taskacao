@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -556,30 +557,43 @@ type GithubIssueItem struct {
 	} `json:"assignees"`
 }
 
+// CleanGithubRepo extracts the owner/repo string from a Git URL or plain repo identifier.
+func CleanGithubRepo(repo string) string {
+	raw := strings.TrimSpace(repo)
+	raw = strings.TrimSuffix(raw, ".git")
+	if strings.Contains(raw, "github.com/") {
+		parts := strings.Split(raw, "github.com/")
+		if len(parts) > 1 {
+			return strings.TrimSpace(parts[1])
+		}
+	} else if strings.Contains(raw, "github.com:") {
+		parts := strings.Split(raw, "github.com:")
+		if len(parts) > 1 {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	if strings.Contains(raw, "/") && !strings.Contains(raw, ":") && !strings.Contains(raw, " ") {
+		return raw
+	}
+	return raw
+}
+
 // ResolveGithubRepo attempts to determine the target repository and path dynamically.
 func ResolveGithubRepo(repo string, repoPath string) (string, string) {
 	if repoPath == "" {
 		repoPath = "."
 	}
 	if repo != "" {
-		return repo, repoPath
+		return CleanGithubRepo(repo), repoPath
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "--get", "remote.origin.url")
 	if out, err := cmd.Output(); err == nil {
 		raw := strings.TrimSpace(string(out))
-		raw = strings.TrimSuffix(raw, ".git")
-		if strings.Contains(raw, "github.com/") {
-			parts := strings.Split(raw, "github.com/")
-			if len(parts) > 1 {
-				return parts[1], repoPath
-			}
-		} else if strings.Contains(raw, "github.com:") {
-			parts := strings.Split(raw, "github.com:")
-			if len(parts) > 1 {
-				return parts[1], repoPath
-			}
+		cleaned := CleanGithubRepo(raw)
+		if cleaned != "" {
+			return cleaned, repoPath
 		}
 	}
 	return "", repoPath
@@ -667,12 +681,21 @@ func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, er
 func (r *Runner) CreateGithubIssue(repo string, repoPath string, title string, description string, labels []string) (*models.Task, error) {
 	repo, repoPath = ResolveGithubRepo(repo, repoPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
 	ghPath, _ := FindCliTool("gh")
 	if ghPath == "" {
 		ghPath = "gh"
+	}
+
+	// Filter internal workflow labels (like "New", "untouched") that don't exist as standard labels on GitHub repos
+	var filteredLabels []string
+	for _, l := range labels {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.EqualFold(l, "new") && !strings.EqualFold(l, "untouched") {
+			filteredLabels = append(filteredLabels, l)
+		}
 	}
 
 	var args []string
@@ -687,19 +710,47 @@ func (r *Runner) CreateGithubIssue(repo string, repoPath string, title string, d
 	} else {
 		args = append(args, "--body", "")
 	}
-	for _, l := range labels {
+	for _, l := range filteredLabels {
 		args = append(args, "--label", l)
 	}
 
 	output, err := r.runCommand(ctx, repoPath, ghPath, args...)
 	if err != nil {
-		return nil, fmt.Errorf("gh issue create failed: %w (output: %s)", err, output)
+		// Fallback retry without labels if a label doesn't exist on GitHub repo
+		fallbackArgs := []string{"issue", "create"}
+		if repo != "" {
+			fallbackArgs = append(fallbackArgs, "-R", repo)
+		}
+		fallbackArgs = append(fallbackArgs, "--title", title)
+		if description != "" {
+			fallbackArgs = append(fallbackArgs, "--body", description)
+		} else {
+			fallbackArgs = append(fallbackArgs, "--body", "")
+		}
+		retryOutput, retryErr := r.runCommand(ctx, repoPath, ghPath, fallbackArgs...)
+		if retryErr != nil {
+			return nil, fmt.Errorf("gh issue create failed: %w (output: %s)", err, output)
+		}
+		output = retryOutput
 	}
 
-	// Output is typically the issue URL: https://github.com/owner/repo/issues/123
-	issueURL := strings.TrimSpace(output)
-	parts := strings.Split(issueURL, "/")
-	issueNum := parts[len(parts)-1]
+	// Extract issue URL and number via regex: https://github.com/owner/repo/issues/123
+	re := regexp.MustCompile(`https://github\.com/[^/\s]+/[^/\s]+/issues/(\d+)`)
+	matches := re.FindStringSubmatch(output)
+	var issueURL string
+	var issueNum string
+
+	if len(matches) > 1 {
+		issueURL = matches[0]
+		issueNum = matches[1]
+	} else {
+		lines := strings.Split(strings.TrimSpace(output), "\n")
+		lastLine := strings.TrimSpace(lines[len(lines)-1])
+		issueURL = lastLine
+		parts := strings.Split(issueURL, "/")
+		issueNum = parts[len(parts)-1]
+	}
+
 	key := fmt.Sprintf("#%s", issueNum)
 	id := fmt.Sprintf("gh-%s", issueNum)
 
@@ -709,7 +760,7 @@ func (r *Runner) CreateGithubIssue(repo string, repoPath string, title string, d
 		Key:         key,
 		Title:       title,
 		Description: description,
-		Status:      models.StatusBacklog,
+		Status:      models.StatusToClarify,
 		Priority:    models.PriorityMedium,
 		Labels:      labels,
 		Source:      "github",
@@ -922,6 +973,49 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 				log.Printf("[CLI] Successfully updated GitHub issue #%d in %s (fallback)", num, repo)
 			} else {
 				log.Printf("[CLI] Fallback gh issue edit #%d also failed: %v (output: %s)", num, err2, out2)
+				// Self-healing: if label was not found in repo, create it and retry
+				if activeStage != "" && (strings.Contains(output, "not found") || strings.Contains(out2, "not found")) {
+					labelColor := "1d76db"
+					switch activeStage {
+					case "new", "untouched":
+						labelColor = "0075ca"
+					case "clarified":
+						labelColor = "fbca04"
+					case "specified":
+						labelColor = "1d76db"
+					case "implemented":
+						labelColor = "5319e7"
+					case "reviewed":
+						labelColor = "6f42c1"
+					case "finished":
+						labelColor = "0e8a16"
+					}
+					var createArgs []string
+					if repo != "" {
+						createArgs = []string{"label", "create", activeStage, "--color", labelColor, "-R", repo}
+					} else {
+						createArgs = []string{"label", "create", activeStage, "--color", labelColor}
+					}
+					_, _ = r.runCommand(ctx, repoPath, ghPath, createArgs...)
+					if _, err3 := r.runCommand(ctx, repoPath, ghPath, fallbackArgs...); err3 == nil {
+						log.Printf("[CLI] Successfully updated GitHub issue #%d in %s after creating label '%s'", num, repo, activeStage)
+					} else {
+						// Final fallback: update title & body only without labels
+						var bodyOnlyArgs []string
+						if repo != "" {
+							bodyOnlyArgs = []string{"issue", "edit", strconv.Itoa(num), "-R", repo}
+						} else {
+							bodyOnlyArgs = []string{"issue", "edit", strconv.Itoa(num)}
+						}
+						if title != nil && *title != "" {
+							bodyOnlyArgs = append(bodyOnlyArgs, "--title", *title)
+						}
+						if description != nil {
+							bodyOnlyArgs = append(bodyOnlyArgs, "--body", *description)
+						}
+						_, _ = r.runCommand(ctx, repoPath, ghPath, bodyOnlyArgs...)
+					}
+				}
 			}
 		} else {
 			log.Printf("[CLI] Successfully updated GitHub issue #%d in %s", num, repo)
@@ -1261,28 +1355,56 @@ func (r *Runner) RunAI(settings *models.Settings, skillID string, task *models.T
 		steps = append(steps, fmt.Sprintf("📁 Project working directory (CWD): %s", repoDir))
 	}
 
+	trackerName := "github"
+	if task != nil && task.Source != "" {
+		trackerName = strings.ToLower(task.Source)
+	} else if settings != nil && settings.IssueTracker != "" {
+		trackerName = strings.ToLower(settings.IssueTracker)
+	}
+
+	repoName := filepath.Base(repoDir)
+	if settings != nil && settings.GithubRepo != "" {
+		repoName = settings.GithubRepo
+	}
+
 	var promptTemplate string
 	switch skillID {
 	case "clarify":
 		promptTemplate = settings.PromptClarify
 		if promptTemplate == "" {
-			promptTemplate = "Tu es l'agent de cadrage technique pour Taskacao. Analyse la tâche suivante :\nClé : {issueKey}\nTitre : {issueTitle}\nDescription : {issueDesc}\n\nIdentifie les ambiguïtés, les dépendances critiques, et formule 3 à 5 questions d'alignement précises et concises à destination de l'équipe produit / tech pour cadrer le développement."
+			promptTemplate = "/clarify-issue {issueKey} tracked on {tracker} in {repo}"
 		}
 	case "specify":
 		promptTemplate = settings.PromptSpecify
 		if promptTemplate == "" {
-			promptTemplate = `Tu es le Product Owner & Architecte technique pour Taskacao. Rédige une spécification technique Speckit complète pour la tâche :
+			if settings.SpecFramework == "openfeature" {
+				promptTemplate = `Tu es le Lead Architecte & Feature Engineer pour Taskacao. Rédige une spécification technique OpenFeature complète et standardisée pour la tâche :
 Clé : {issueKey}
 Titre : {issueTitle}
 Description : {issueDesc}
 Branche Git cible : {branchName}
 Dossier du projet : {repoPath}
 
-Contenu attendu :
+Contenu attendu (Framework Spec-Driven Design : OpenFeature) :
+1. Définition des Feature Flags (Flag Key, Types: boolean/string/number/object, Valeurs par défaut, Variations)
+2. Evaluation Context & Règles de ciblage (Attributs utilisateur, tenant, environnement)
+3. Intégration OpenFeature SDK (Provider, Evaluation Hooks, Fallbacks de sécurité)
+4. Cycle de vie du Flag (Création -> Rollout progressif -> Dépréciation & Nettoyage de code)
+5. Plan de tests et de validation (Scénarios Given / When / Then).`
+			} else {
+				promptTemplate = `Tu es le Product Owner & Architecte technique pour Taskacao. Rédige une spécification technique SpecKit complète pour la tâche :
+Clé : {issueKey}
+Titre : {issueTitle}
+Description : {issueDesc}
+Branche Git cible : {branchName}
+Dossier du projet : {repoPath}
+
+Contenu attendu (Framework Spec-Driven Design : SpecKit) :
 1. Contexte & User Stories
 2. Architecture et composants cibles (fichiers à créer / modifier)
 3. Critères d'acceptation détaillés (Scénarios Given / When / Then)
 4. Plan de tests et de validation.`
+			}
 		}
 	case "implement":
 		promptTemplate = settings.PromptImplement
@@ -1353,6 +1475,8 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 	finalPrompt = strings.ReplaceAll(finalPrompt, "{issueDesc}", task.Description)
 	finalPrompt = strings.ReplaceAll(finalPrompt, "{branchName}", branchName)
 	finalPrompt = strings.ReplaceAll(finalPrompt, "{repoPath}", repoDir)
+	finalPrompt = strings.ReplaceAll(finalPrompt, "{tracker}", trackerName)
+	finalPrompt = strings.ReplaceAll(finalPrompt, "{repo}", repoName)
 	finalPrompt = strings.ReplaceAll(finalPrompt, "{prompt}", customPrompt)
 
 	provider := strings.ToLower(settings.AIProvider)
@@ -1368,30 +1492,55 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 	var output string
 	var execErr error
 
-	switch provider {
-	case "agy":
-		agyPath, _ := FindCliTool("agy")
-		steps = append(steps, fmt.Sprintf("Exécution de : agy -p \"...\" dans %s", filepath.Base(repoDir)))
-		output, execErr = r.runCommand(ctx, repoDir, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
-
-	case "vibe":
-		vibePath, _ := FindCliTool("vibe")
-		steps = append(steps, fmt.Sprintf("Exécution de : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
-		output, execErr = r.runCommand(ctx, repoDir, vibePath, "-p", finalPrompt, "--auto-approve")
-
-	case "claude":
-		claudePath, _ := FindCliTool("claude")
-		steps = append(steps, fmt.Sprintf("Exécution de : claude -p \"...\" dans %s", filepath.Base(repoDir)))
-		output, execErr = r.runCommand(ctx, repoDir, claudePath, "-p", finalPrompt)
-
-	default: // Custom command
+	if settings.AICommandTemplate != "" && (provider == "custom" || strings.Contains(settings.AICommandTemplate, "{prompt}")) {
 		cmdStr := settings.AICommandTemplate
-		if cmdStr == "" {
-			cmdStr = "agy -p \"{prompt}\""
-		}
 		cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", finalPrompt)
-		steps = append(steps, fmt.Sprintf("Exécution de la commande personnalisée dans %s", filepath.Base(repoDir)))
+		cmdToRun = strings.ReplaceAll(cmdToRun, "{issueKey}", task.Key)
+		cmdToRun = strings.ReplaceAll(cmdToRun, "{issueTitle}", task.Title)
+		cmdToRun = strings.ReplaceAll(cmdToRun, "{issueDesc}", task.Description)
+		cmdToRun = strings.ReplaceAll(cmdToRun, "{branchName}", branchName)
+		cmdToRun = strings.ReplaceAll(cmdToRun, "{repoPath}", repoDir)
+		cmdToRun = strings.ReplaceAll(cmdToRun, "{tracker}", trackerName)
+		cmdToRun = strings.ReplaceAll(cmdToRun, "{repo}", repoName)
+
+		steps = append(steps, fmt.Sprintf("Exécution de la commande personnalisée : %s dans %s", cmdToRun, filepath.Base(repoDir)))
 		output, execErr = r.runCommand(ctx, repoDir, "sh", "-c", cmdToRun)
+	} else {
+		switch provider {
+		case "agy":
+			agyPath, _ := FindCliTool("agy")
+			steps = append(steps, fmt.Sprintf("Exécution de : agy -p \"...\" dans %s", filepath.Base(repoDir)))
+			output, execErr = r.runCommand(ctx, repoDir, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
+
+		case "vibe":
+			vibePath, _ := FindCliTool("vibe")
+			steps = append(steps, fmt.Sprintf("Exécution de : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
+			output, execErr = r.runCommand(ctx, repoDir, vibePath, "-p", finalPrompt, "--auto-approve")
+
+		case "claude":
+			claudePath, _ := FindCliTool("claude")
+			steps = append(steps, fmt.Sprintf("Exécution de : claude -p \"...\" dans %s", filepath.Base(repoDir)))
+			output, execErr = r.runCommand(ctx, repoDir, claudePath, "-p", finalPrompt)
+
+		case "gemini":
+			geminiPath, _ := FindCliTool("gemini")
+			steps = append(steps, fmt.Sprintf("Exécution de : gemini -p \"...\" dans %s", filepath.Base(repoDir)))
+			output, execErr = r.runCommand(ctx, repoDir, geminiPath, "-p", finalPrompt)
+
+		case "cursor":
+			cursorPath, _ := FindCliTool("cursor")
+			steps = append(steps, fmt.Sprintf("Exécution de : cursor agent -p \"...\" dans %s", filepath.Base(repoDir)))
+			output, execErr = r.runCommand(ctx, repoDir, cursorPath, "agent", "-p", finalPrompt)
+
+		default:
+			cmdStr := settings.AICommandTemplate
+			if cmdStr == "" {
+				cmdStr = "agy -p \"{prompt}\""
+			}
+			cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", finalPrompt)
+			steps = append(steps, fmt.Sprintf("Exécution de la commande personnalisée dans %s", filepath.Base(repoDir)))
+			output, execErr = r.runCommand(ctx, repoDir, "sh", "-c", cmdToRun)
+		}
 	}
 
 	if execErr != nil {
@@ -1504,27 +1653,42 @@ func (r *Runner) RunAIChatStream(
 	addStep(fmt.Sprintf("🤖 Moteur IA : %s", strings.ToUpper(provider)))
 
 	var cmd *exec.Cmd
-	switch provider {
-	case "agy":
-		agyPath, _ := FindCliTool("agy")
-		addStep(fmt.Sprintf("Exécution en direct : agy -p \"...\" dans %s", filepath.Base(repoDir)))
-		cmd = exec.CommandContext(ctx, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
-	case "vibe":
-		vibePath, _ := FindCliTool("vibe")
-		addStep(fmt.Sprintf("Exécution en direct : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
-		cmd = exec.CommandContext(ctx, vibePath, "-p", finalPrompt, "--auto-approve")
-	case "claude":
-		claudePath, _ := FindCliTool("claude")
-		addStep(fmt.Sprintf("Exécution en direct : claude -p \"...\" dans %s", filepath.Base(repoDir)))
-		cmd = exec.CommandContext(ctx, claudePath, "-p", finalPrompt)
-	default:
+	if settings.AICommandTemplate != "" && (provider == "custom" || strings.Contains(settings.AICommandTemplate, "{prompt}")) {
 		cmdStr := settings.AICommandTemplate
-		if cmdStr == "" {
-			cmdStr = "agy -p \"{prompt}\""
-		}
 		cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", finalPrompt)
 		addStep(fmt.Sprintf("Exécution de la commande personnalisée dans %s", filepath.Base(repoDir)))
 		cmd = exec.CommandContext(ctx, "sh", "-c", cmdToRun)
+	} else {
+		switch provider {
+		case "agy":
+			agyPath, _ := FindCliTool("agy")
+			addStep(fmt.Sprintf("Exécution en direct : agy -p \"...\" dans %s", filepath.Base(repoDir)))
+			cmd = exec.CommandContext(ctx, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
+		case "vibe":
+			vibePath, _ := FindCliTool("vibe")
+			addStep(fmt.Sprintf("Exécution en direct : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
+			cmd = exec.CommandContext(ctx, vibePath, "-p", finalPrompt, "--auto-approve")
+		case "claude":
+			claudePath, _ := FindCliTool("claude")
+			addStep(fmt.Sprintf("Exécution en direct : claude -p \"...\" dans %s", filepath.Base(repoDir)))
+			cmd = exec.CommandContext(ctx, claudePath, "-p", finalPrompt)
+		case "gemini":
+			geminiPath, _ := FindCliTool("gemini")
+			addStep(fmt.Sprintf("Exécution en direct : gemini -p \"...\" dans %s", filepath.Base(repoDir)))
+			cmd = exec.CommandContext(ctx, geminiPath, "-p", finalPrompt)
+		case "cursor":
+			cursorPath, _ := FindCliTool("cursor")
+			addStep(fmt.Sprintf("Exécution en direct : cursor agent -p \"...\" dans %s", filepath.Base(repoDir)))
+			cmd = exec.CommandContext(ctx, cursorPath, "agent", "-p", finalPrompt)
+		default:
+			cmdStr := settings.AICommandTemplate
+			if cmdStr == "" {
+				cmdStr = "agy -p \"{prompt}\""
+			}
+			cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", finalPrompt)
+			addStep(fmt.Sprintf("Exécution de la commande personnalisée dans %s", filepath.Base(repoDir)))
+			cmd = exec.CommandContext(ctx, "sh", "-c", cmdToRun)
+		}
 	}
 
 	cmd.Dir = repoDir
@@ -1946,6 +2110,81 @@ func (r *Runner) GetCwdGitStatus(repoDir string) (*models.GitStatusInfo, error) 
 	}, nil
 }
 
+// FindEditorBinary locates the binary or execution command for a given code editor on the host OS
+func FindEditorBinary(editor string) (string, []string) {
+	editor = strings.TrimSpace(editor)
+	base := strings.ToLower(editor)
+
+	// 1. Direct LookPath or standard CLI path
+	if p, err := FindCliTool(editor); err == nil && p != "" {
+		return p, nil
+	}
+
+	homeDir, _ := os.UserHomeDir()
+
+	// 2. Known application paths & fallbacks on macOS
+	if runtime.GOOS == "darwin" {
+		switch base {
+		case "code", "vscode":
+			macPaths := []string{
+				"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+				"/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code",
+				filepath.Join(homeDir, "Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"),
+			}
+			for _, mp := range macPaths {
+				if _, err := os.Stat(mp); err == nil {
+					return mp, nil
+				}
+			}
+			return "open", []string{"-a", "Visual Studio Code"}
+
+		case "cursor":
+			macPaths := []string{
+				"/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+				filepath.Join(homeDir, "Applications/Cursor.app/Contents/Resources/app/bin/cursor"),
+			}
+			for _, mp := range macPaths {
+				if _, err := os.Stat(mp); err == nil {
+					return mp, nil
+				}
+			}
+			return "open", []string{"-a", "Cursor"}
+
+		case "zed":
+			macPaths := []string{
+				"/Applications/Zed.app/Contents/MacOS/cli",
+				filepath.Join(homeDir, "Applications/Zed.app/Contents/MacOS/cli"),
+			}
+			for _, mp := range macPaths {
+				if _, err := os.Stat(mp); err == nil {
+					return mp, nil
+				}
+			}
+			return "open", []string{"-a", "Zed"}
+
+		case "subl", "sublime":
+			macPaths := []string{
+				"/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl",
+				filepath.Join(homeDir, "Applications/Sublime Text.app/Contents/SharedSupport/bin/subl"),
+			}
+			for _, mp := range macPaths {
+				if _, err := os.Stat(mp); err == nil {
+					return mp, nil
+				}
+			}
+			return "open", []string{"-a", "Sublime Text"}
+
+		case "idea", "intellij":
+			return "open", []string{"-a", "IntelliJ IDEA"}
+
+		case "webstorm":
+			return "open", []string{"-a", "WebStorm"}
+		}
+	}
+
+	return editor, nil
+}
+
 // OpenInEditor opens the specified directory or file in a code editor (defaults to 'code' for VS Code)
 func (r *Runner) OpenInEditor(editorCmd string, targetPath string) error {
 	if strings.TrimSpace(editorCmd) == "" {
@@ -1966,13 +2205,18 @@ func (r *Runner) OpenInEditor(editorCmd string, targetPath string) error {
 		parts = []string{"code"}
 	}
 
-	bin, err := FindCliTool(parts[0])
-	if err == nil && bin != "" {
-		parts[0] = bin
+	bin, prefixArgs := FindEditorBinary(parts[0])
+	var args []string
+	if len(prefixArgs) > 0 {
+		args = append(args, prefixArgs...)
+		args = append(args, parts[1:]...)
+		args = append(args, targetPath)
+	} else {
+		args = append(args, parts[1:]...)
+		args = append(args, targetPath)
 	}
 
-	args := append(parts[1:], targetPath)
-	cmd := exec.Command(parts[0], args...)
+	cmd := exec.Command(bin, args...)
 	cmd.Env = append(os.Environ(), "PATH="+GetDynamicCustomPath()+":"+os.Getenv("PATH"))
 
 	if err := cmd.Start(); err != nil {

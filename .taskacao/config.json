@@ -1,0 +1,18 @@
+{
+  "aiCommandTemplate": "agy -p \"{prompt}\" --yolo",
+  "aiProvider": "agy",
+  "githubRepo": "",
+  "issueTracker": "local",
+  "linearTeam": "TASK",
+  "projectId": "tasks",
+  "projectName": "Taskacao",
+  "skills": [
+    "clarify-issue",
+    "specify-issue",
+    "code-issue",
+    "create-pr",
+    "pick-issue"
+  ],
+  "specFramework": "openfeature",
+  "updatedAt": "2026-08-24T07:00:58+02:00"
+}

@@ -62,7 +62,7 @@ export const StatusBar: React.FC = () => {
 
   const handleRefresh = (e: React.MouseEvent) => {
     e.stopPropagation()
-    fetchGitStatus()
+    fetchGitStatus(undefined, true)
   }
 
   const latestRunningActivity = activities.find(

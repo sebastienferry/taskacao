@@ -2,31 +2,24 @@ import React, { useRef } from 'react'
 import {
   Search,
   Plus,
-  Command,
   Columns,
   ListFilter,
   Activity,
   X,
-  Sun,
-  Moon,
-  Globe,
-  SlidersHorizontal,
   RefreshCw,
-  Type,
-  Eye,
-  EyeOff,
   GitBranch,
   Code2,
+  Settings,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { Status, Priority, Density } from '../types'
+import type { Status, Priority } from '../types'
 
 export const Header: React.FC = () => {
   const {
     currentProject,
+    projects,
     setIsProjectModalOpen,
     setEditingProject,
-    tasks,
     gitStatus,
     activeJobCount,
     openInEditor,
@@ -42,15 +35,10 @@ export const Header: React.FC = () => {
     setLabelFilter,
     assigneeFilter,
     setAssigneeFilter,
-    hideDone,
-    toggleHideDone,
     setIsQuickAddOpen,
-    setIsCommandPaletteOpen,
-    setIsProfileOpen,
     setIsBranchModalOpen,
     isSyncing,
     settings,
-    updateSettings,
     t,
   } = useApp()
 
@@ -66,25 +54,6 @@ export const Header: React.FC = () => {
     setAssigneeFilter(null)
   }
 
-  const toggleTheme = () => {
-    const nextTheme = settings.theme === 'dark' ? 'light' : 'dark'
-    updateSettings({ theme: nextTheme })
-  }
-
-  const toggleLanguage = () => {
-    const nextLang = settings.language === 'fr' ? 'en' : 'fr'
-    updateSettings({ language: nextLang })
-  }
-
-  const cycleDensity = () => {
-    const nextDensity: Density =
-      settings.density === 'compact' ? 'standard' :
-      settings.density === 'standard' ? 'comfortable' : 'compact'
-    updateSettings({ density: nextDensity })
-  }
-
-  const isMac = typeof window !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
-
   return (
     <header
       className="h-14 border-b border-[var(--header-border)] px-4 flex items-center justify-between gap-3 shrink-0 z-10 select-none text-[var(--header-text)] shadow-xs"
@@ -92,26 +61,23 @@ export const Header: React.FC = () => {
         background: 'linear-gradient(90deg, var(--header-accent-tint) 0%, var(--header-bg) 100%)',
       }}
     >
-      {/* Left: Active Project Indicator Badge */}
-      {currentProject && (
-        <div
+      {/* Left: Project Configuration Button (Settings icon only) */}
+      <div className="flex items-center gap-2 shrink-0">
+        <button
+          type="button"
           onClick={() => {
-            setEditingProject(currentProject)
+            setEditingProject(currentProject || projects[0] || null)
             setIsProjectModalOpen(true)
           }}
-          className={`hidden md:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] hover:border-[var(--accent-color)]/60 text-xs font-bold text-[var(--text-primary)] transition-all cursor-pointer shadow-xs shrink-0 group`}
-          title={`Espace de travail actif : ${currentProject.name} — Cliquer pour configurer`}
+          className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] border border-transparent hover:border-[var(--border-color)] transition-all cursor-pointer shadow-2xs group"
+          title={`Configuration du projet : ${currentProject ? currentProject.name : 'Gérer les projets'}`}
         >
-          <span className={`w-2 h-2 rounded-full accent-bg shadow-[0_0_8px_var(--accent-glow)]`} />
-          <span className="truncate max-w-[140px]">{currentProject.name}</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-md bg-[var(--accent-light)] accent-text font-bold">
-            {tasks.length}
-          </span>
-        </div>
-      )}
+          <Settings size={16} className="group-hover:rotate-45 transition-transform duration-300" />
+        </button>
+      </div>
 
       {/* Center: Global Search Bar */}
-      <div className="flex-1 max-w-xl relative flex items-center">
+      <div className="flex-1 max-w-lg mx-2 relative flex items-center">
         <div className="absolute left-3 text-[var(--text-muted)] pointer-events-none flex items-center">
           <Search size={15} />
         </div>
@@ -140,60 +106,111 @@ export const Header: React.FC = () => {
       </div>
 
       {/* Middle: Active Filter Chips */}
-      <div className="hidden lg:flex items-center gap-1.5 overflow-x-auto max-w-xs">
-        {statusFilter && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[var(--accent-light)] accent-text border border-[var(--accent-color)]/30">
-            {t.status[statusFilter as Status]}
-            <button onClick={() => setStatusFilter(null)} className="hover:opacity-75 cursor-pointer">
-              <X size={11} />
-            </button>
-          </span>
-        )}
-        {priorityFilter && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">
-            {t.priority[priorityFilter as Priority]}
-            <button onClick={() => setPriorityFilter(null)} className="hover:opacity-75 cursor-pointer">
-              <X size={11} />
-            </button>
-          </span>
-        )}
-        {labelFilter && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
-            #{labelFilter}
-            <button onClick={() => setLabelFilter(null)} className="hover:opacity-75 cursor-pointer">
-              <X size={11} />
-            </button>
-          </span>
-        )}
-        {assigneeFilter && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-            {assigneeFilter}
-            <button onClick={() => setAssigneeFilter(null)} className="hover:opacity-75 cursor-pointer">
-              <X size={11} />
-            </button>
-          </span>
-        )}
-        {hasActiveFilters && (
+      {hasActiveFilters && (
+        <div className="hidden 2xl:flex items-center gap-1.5 overflow-x-auto max-w-xs">
+          {statusFilter && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[var(--accent-light)] accent-text border border-[var(--accent-color)]/30 shrink-0">
+              {t.status[statusFilter as Status]}
+              <button onClick={() => setStatusFilter(null)} className="hover:opacity-75 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {priorityFilter && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 shrink-0">
+              {t.priority[priorityFilter as Priority]}
+              <button onClick={() => setPriorityFilter(null)} className="hover:opacity-75 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {labelFilter && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shrink-0">
+              #{labelFilter}
+              <button onClick={() => setLabelFilter(null)} className="hover:opacity-75 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {assigneeFilter && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
+              {assigneeFilter}
+              <button onClick={() => setAssigneeFilter(null)} className="hover:opacity-75 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
           <button
             onClick={clearAllFilters}
-            className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] underline transition-colors px-1 cursor-pointer"
+            className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] underline transition-colors px-1 cursor-pointer shrink-0"
           >
             {t.header.clearFilters}
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Right Controls */}
-      <div className="flex items-center gap-2">
+      {/* Right Controls: View Switcher (Icons), Git Branch, Code, Quick Add (+) */}
+      <div className="flex items-center gap-2 shrink-0">
+        {/* View Mode Switcher (Icon-only) */}
+        <div className="flex items-center bg-[var(--bg-primary)] p-0.5 rounded-lg border border-[var(--border-color)] shadow-2xs">
+          <button
+            onClick={() => setActiveView('board')}
+            className={`p-1.5 rounded-md transition-all cursor-pointer ${
+              activeView === 'board'
+                ? 'bg-[var(--bg-secondary)] text-[var(--text-primary)] shadow-xs font-bold border border-[var(--border-color)]'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+            title={t.header.boardView}
+          >
+            <Columns size={15} />
+          </button>
+          <button
+            onClick={() => setActiveView('list')}
+            className={`p-1.5 rounded-md transition-all cursor-pointer ${
+              activeView === 'list'
+                ? 'bg-[var(--bg-secondary)] text-[var(--text-primary)] shadow-xs font-bold border border-[var(--border-color)]'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+            title={t.header.listView}
+          >
+            <ListFilter size={15} />
+          </button>
+          <button
+            onClick={() => setActiveView('activities')}
+            className={`p-1.5 rounded-md transition-all cursor-pointer relative ${
+              activeView === 'activities'
+                ? 'bg-[var(--bg-secondary)] text-cyan-300 shadow-xs font-bold border border-[var(--border-color)]'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+            title={t.header.activitiesView}
+          >
+            <Activity size={15} className={activeJobCount > 0 ? 'text-cyan-400 animate-pulse' : ''} />
+            {activeJobCount > 0 && (
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+            )}
+          </button>
+          <button
+            onClick={() => setActiveView('sync')}
+            className={`p-1.5 rounded-md transition-all cursor-pointer ${
+              activeView === 'sync'
+                ? 'bg-[var(--bg-secondary)] text-indigo-300 shadow-xs font-bold border border-[var(--border-color)]'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+            title={t.nav.sync || "Synchronisation"}
+          >
+            <RefreshCw size={14} className={isSyncing ? 'animate-spin text-indigo-400' : ''} />
+          </button>
+        </div>
+
         {/* Active Git Branch Badge */}
         {gitStatus?.branch && (
           <div
             onClick={() => setIsBranchModalOpen(true)}
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-cyan-500/50 hover:bg-cyan-500/15 cursor-pointer transition-all shadow-xs"
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono font-semibold bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-cyan-500/50 hover:bg-cyan-500/15 cursor-pointer transition-all shadow-xs"
             title={`Branche Git active : ${gitStatus.branch} (${gitStatus.isClean ? 'Clean' : '*' + (gitStatus.modifiedCount + gitStatus.untrackedCount)}) - Cliquer pour changer de branche`}
           >
             <GitBranch size={13} className="text-cyan-400 shrink-0" />
-            <span className="text-cyan-300 font-bold truncate max-w-[160px]">{gitStatus.branch}</span>
+            <span className="text-cyan-300 font-bold truncate max-w-[140px]">{gitStatus.branch}</span>
             {gitStatus.isClean ? (
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Arbre propre" />
             ) : (
@@ -208,142 +225,20 @@ export const Header: React.FC = () => {
         <button
           type="button"
           onClick={() => openInEditor({ projectId: currentProject?.id })}
-          className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-cyan-300 hover:border-cyan-500/40 hover:bg-cyan-500/10 transition-all cursor-pointer shadow-xs"
+          className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-cyan-300 hover:border-cyan-500/40 hover:bg-cyan-500/10 transition-all cursor-pointer shadow-xs"
           title={`Ouvrir le projet '${currentProject?.name || 'actuel'}' dans ${settings.editorCommand || 'VS Code'}`}
         >
           <Code2 size={13} className="text-cyan-400" />
-          <span className="hidden xl:inline">Éditeur ({settings.editorCommand || 'code'})</span>
+          <span>Code</span>
         </button>
 
-        {/* View Mode Switcher (Board / List / Activities / Sync) */}
-        <div className="flex items-center bg-[var(--bg-primary)] p-0.5 rounded-lg border border-[var(--border-color)]">
-          <button
-            onClick={() => setActiveView('board')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
-              activeView === 'board'
-                ? 'bg-[var(--bg-secondary)] text-[var(--text-primary)] shadow-xs font-bold border border-[var(--border-color)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-            }`}
-            title={t.header.boardView}
-          >
-            <Columns size={14} />
-            <span className="hidden sm:inline">{t.header.boardView}</span>
-          </button>
-          <button
-            onClick={() => setActiveView('list')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
-              activeView === 'list'
-                ? 'bg-[var(--bg-secondary)] text-[var(--text-primary)] shadow-xs font-bold border border-[var(--border-color)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-            }`}
-            title={t.header.listView}
-          >
-            <ListFilter size={14} />
-            <span className="hidden sm:inline">{t.header.listView}</span>
-          </button>
-          <button
-            onClick={() => setActiveView('activities')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
-              activeView === 'activities'
-                ? 'bg-[var(--bg-secondary)] text-cyan-300 shadow-xs font-bold border border-[var(--border-color)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-            }`}
-            title={t.header.activitiesView}
-          >
-            <Activity size={14} className={activeJobCount > 0 ? 'text-cyan-400 animate-pulse' : ''} />
-            <span className="hidden sm:inline">{t.header.activitiesView}</span>
-            {activeJobCount > 0 && (
-              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-            )}
-          </button>
-          <button
-            onClick={() => setActiveView('sync')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
-              activeView === 'sync'
-                ? 'bg-[var(--bg-secondary)] text-indigo-300 shadow-xs font-bold border border-[var(--border-color)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-            }`}
-            title={t.nav.sync || "Synchronisation"}
-          >
-            <RefreshCw size={13} className={isSyncing ? 'animate-spin text-indigo-400' : ''} />
-            <span className="hidden sm:inline">{t.nav.sync || "Synchro"}</span>
-          </button>
-        </div>
-
-        {/* Hide / Show Done Stories Toggle */}
-        <button
-          onClick={toggleHideDone}
-          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
-            hideDone
-              ? 'bg-[var(--bg-tertiary)]/70 border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
-              : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
-          }`}
-          title={hideDone ? t.header.showDone : t.header.hideDone}
-        >
-          {hideDone ? <EyeOff size={13} className="text-[var(--text-muted)]" /> : <Eye size={13} className="text-emerald-400" />}
-          <span className="hidden xl:inline text-[11px]">
-            {hideDone ? 'Terminées masquées' : `Terminées (${tasks.filter(t => t.status === 'done' || t.status === 'finished').length})`}
-          </span>
-        </button>
-
-        {/* Command Palette Button */}
-        <button
-          onClick={() => setIsCommandPaletteOpen(true)}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] transition-all cursor-pointer"
-          title={t.header.commandPalette}
-        >
-          <Command size={14} />
-          <kbd className="hidden sm:inline-block px-1 py-0.2 text-[10px] font-mono text-[var(--text-muted)] bg-[var(--bg-primary)] rounded border border-[var(--border-color)]">
-            {isMac ? '⌘K' : 'Ctrl+K'}
-          </kbd>
-        </button>
-
-        {/* Language quick toggle */}
-        <button
-          onClick={toggleLanguage}
-          className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] transition-all cursor-pointer"
-          title={`Langue: ${settings.language.toUpperCase()}`}
-        >
-          <Globe size={14} />
-          <span>{settings.language.toUpperCase()}</span>
-        </button>
-
-        {/* Theme quick toggle */}
-        <button
-          onClick={toggleTheme}
-          className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] transition-all cursor-pointer"
-          title={settings.theme === 'dark' ? 'Passer en mode clair' : 'Passer en mode sombre'}
-        >
-          {settings.theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-        </button>
-
-        {/* Density quick toggle */}
-        <button
-          onClick={cycleDensity}
-          className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-mono font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] transition-all cursor-pointer"
-          title={`Taille d'affichage : ${settings.density === 'compact' ? 'Compacte (13px)' : settings.density === 'standard' ? 'Standard (14px)' : 'Confortable (15.5px)'} - Cliquer pour changer`}
-        >
-          <Type size={13} className="text-cyan-400" />
-          <span className="text-[10px] uppercase font-bold">{settings.density.slice(0, 3)}</span>
-        </button>
-
-        {/* Settings modal trigger */}
-        <button
-          onClick={() => setIsProfileOpen(true)}
-          className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] transition-all cursor-pointer"
-          title="Configuration & Paramètres"
-        >
-          <SlidersHorizontal size={15} />
-        </button>
-
-        {/* Quick Add Button */}
+        {/* Quick Add Button (+) */}
         <button
           onClick={() => setIsQuickAddOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white shadow-md accent-bg hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+          className="flex items-center justify-center w-8 h-8 rounded-lg text-sm font-bold text-white shadow-md accent-bg hover:opacity-90 active:scale-95 transition-all cursor-pointer"
           title={`${t.header.quickAdd} (N)`}
         >
-          <Plus size={15} />
-          <span className="hidden sm:inline">{t.header.quickAdd}</span>
+          <Plus size={16} strokeWidth={2.5} />
         </button>
       </div>
     </header>

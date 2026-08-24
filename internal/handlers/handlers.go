@@ -404,8 +404,11 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 	if ((len(parts) >= 2 && parts[1] == "install-skills") || id == "install-skills") && r.Method == http.MethodPost {
 		target := id
 		var payload struct {
-			RepoPath  string `json:"repoPath"`
-			ProjectID string `json:"projectId"`
+			RepoPath          string `json:"repoPath"`
+			ProjectID         string `json:"projectId"`
+			SpecFramework     string `json:"specFramework"`
+			AIProvider        string `json:"aiProvider"`
+			AICommandTemplate string `json:"aiCommandTemplate"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&payload)
 		if payload.RepoPath != "" {
@@ -414,7 +417,7 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			target = payload.ProjectID
 		}
 
-		status, err := h.db.InstallProjectSkills(target)
+		status, err := h.db.InstallProjectSkills(target, payload.SpecFramework, payload.AIProvider, payload.AICommandTemplate)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -849,9 +852,30 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		runnerSettings := *settings
 		if task.ProjectID != "" {
-			if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil && proj.RepoPath != "" {
-				settings.RepoPath = proj.RepoPath
+			if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil {
+				if proj.RepoPath != "" {
+					settings.RepoPath = proj.RepoPath
+				}
+				if proj.AIProvider != "" {
+					runnerSettings.AIProvider = proj.AIProvider
+				}
+				if proj.AICommandTemplate != "" {
+					runnerSettings.AICommandTemplate = proj.AICommandTemplate
+				}
+				if proj.SpecFramework != "" {
+					runnerSettings.SpecFramework = proj.SpecFramework
+				}
+				if proj.GithubRepo != "" {
+					runnerSettings.GithubRepo = proj.GithubRepo
+				}
+				if proj.IssueTracker != "" {
+					runnerSettings.IssueTracker = proj.IssueTracker
+				}
+				if proj.LinearTeam != "" {
+					runnerSettings.LinearTeam = proj.LinearTeam
+				}
 			}
 		}
 
@@ -865,7 +889,6 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		runnerSettings := *settings
 		runnerSettings.RepoPath = executionDir
 
 		// Save User Message

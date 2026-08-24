@@ -44,7 +44,8 @@ func NewDB(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	conn.SetMaxOpenConns(1) // SQLite single-writer safety
+	conn.SetMaxOpenConns(25)
+	conn.SetMaxIdleConns(10)
 
 	db := &DB{
 		conn:      conn,
@@ -179,11 +180,13 @@ func (d *DB) initSchema() error {
 		}
 	}
 
-	// Migrations for existing database instances
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN stage_mapping TEXT NOT NULL DEFAULT '{}';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN git_remote_url TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN tracker_url TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN skill_overrides TEXT NOT NULL DEFAULT '{}';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN ai_provider TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN ai_command_template TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN spec_framework TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default';")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN branch_name TEXT;")
@@ -222,6 +225,7 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_create_pr TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_pick TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN editor_command TEXT NOT NULL DEFAULT 'code';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN spec_framework TEXT NOT NULL DEFAULT 'speckit';")
 
 	// Migrate legacy stage names to 5-stage workflow
 	_, _ = d.conn.Exec("UPDATE tasks SET status = 'to_clarify' WHERE status = 'backlog';")
@@ -1415,6 +1419,8 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 		}
 		if proj.GithubRepo != "" {
 			githubRepo = proj.GithubRepo
+		} else if proj.GitRemoteUrl != "" {
+			githubRepo = runner.CleanGithubRepo(proj.GitRemoteUrl)
 		}
 		if proj.RepoPath != "" {
 			repoPath = proj.RepoPath
@@ -1459,7 +1465,7 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 			key = created.Key
 			extURL = created.ExternalURL
 		} else {
-			// Fallback key with project prefix if CLI fails
+			log.Printf("[DB.CreateTask] Warning: Linear issue creation failed: %v. Using fallback key.", err)
 			key, _ = d.getNextTaskKey(prefix)
 		}
 	} else if req.Source == "github" {
@@ -1469,7 +1475,13 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 			key = created.Key
 			extURL = created.ExternalURL
 		} else {
+			log.Printf("[DB.CreateTask] Warning: GitHub issue creation failed: %v. Using fallback key.", err)
 			key = d.getNextGithubTaskKey()
+			if githubRepo != "" && strings.HasPrefix(key, "#") {
+				cleanNum := strings.TrimPrefix(key, "#")
+				url := fmt.Sprintf("https://github.com/%s/issues/%s", runner.CleanGithubRepo(githubRepo), cleanNum)
+				extURL = &url
+			}
 		}
 	} else {
 		// Local project tracker
@@ -1478,6 +1490,10 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 
 	if req.ExternalURL != nil && *req.ExternalURL != "" {
 		extURL = req.ExternalURL
+	} else if extURL == nil && req.Source == "github" && githubRepo != "" && strings.HasPrefix(key, "#") {
+		cleanNum := strings.TrimPrefix(key, "#")
+		url := fmt.Sprintf("https://github.com/%s/issues/%s", runner.CleanGithubRepo(githubRepo), cleanNum)
+		extURL = &url
 	}
 
 	var maxPos int
@@ -1993,12 +2009,12 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	defer d.mu.RUnlock()
 
 	var s models.Settings
-	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, pClar, pSpec, pImpl, pPR, pPick sql.NullString
+	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, pClar, pSpec, pImpl, pPR, pPick, specFw sql.NullString
 
 	err := d.conn.QueryRow(`
 		SELECT id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar,
 		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo,
-		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, updated_at
+		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
 		&s.ID,
@@ -2022,6 +2038,8 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 		&pImpl,
 		&pPR,
 		&pPick,
+		&s.EditorCommand,
+		&specFw,
 		&s.UpdatedAt,
 	)
 	if err != nil {
@@ -2038,7 +2056,7 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 				UserEmail:          "dev@example.com",
 				UserAvatar:         "",
 				AIProvider:         "agy",
-				AICommandTemplate:  "agy -p \"{prompt}\"",
+				AICommandTemplate:  "agy --dangerously-skip-permissions -p \"{prompt}\"",
 				RepoPath:           ".",
 				IssueTracker:       "local",
 				LinearTeam:         "",
@@ -2048,6 +2066,8 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 				PromptImplement:    "",
 				PromptCreatePR:     "",
 				PromptPick:         "",
+				EditorCommand:      "code",
+				SpecFramework:      "speckit",
 				UpdatedAt:          time.Now(),
 			}, nil
 		}
@@ -2064,10 +2084,10 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	} else {
 		s.AIProvider = "agy"
 	}
-	if aiCmd.Valid {
+	if aiCmd.Valid && aiCmd.String != "" {
 		s.AICommandTemplate = aiCmd.String
 	} else {
-		s.AICommandTemplate = "agy -p \"{prompt}\""
+		s.AICommandTemplate = "agy --dangerously-skip-permissions -p \"{prompt}\""
 	}
 	if repoP.Valid {
 		s.RepoPath = repoP.String
@@ -2104,6 +2124,11 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	if pPick.Valid {
 		s.PromptPick = pPick.String
 	}
+	if specFw.Valid && specFw.String != "" {
+		s.SpecFramework = specFw.String
+	} else {
+		s.SpecFramework = "speckit"
+	}
 
 	return &s, nil
 }
@@ -2134,6 +2159,7 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 		if s.PromptCreatePR == "" { s.PromptCreatePR = current.PromptCreatePR }
 		if s.PromptPick == "" { s.PromptPick = current.PromptPick }
 		if s.EditorCommand == "" { s.EditorCommand = current.EditorCommand }
+		if s.SpecFramework == "" { s.SpecFramework = current.SpecFramework }
 	}
 
 	if s.Theme == "" { s.Theme = "dark" }
@@ -2151,11 +2177,12 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 	if s.LinearTeam == "" { s.LinearTeam = "" }
 	if s.GithubRepo == "" { s.GithubRepo = "" }
 	if s.EditorCommand == "" { s.EditorCommand = "code" }
+	if s.SpecFramework == "" { s.SpecFramework = "speckit" }
 
 	now := time.Now()
 	_, err := d.conn.Exec(`
-		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			theme = excluded.theme,
 			accent_color = excluded.accent_color,
@@ -2178,8 +2205,9 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 			prompt_create_pr = excluded.prompt_create_pr,
 			prompt_pick = excluded.prompt_pick,
 			editor_command = excluded.editor_command,
+			spec_framework = excluded.spec_framework,
 			updated_at = excluded.updated_at
-	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, now)
+	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, s.SpecFramework, now)
 
 	if err != nil {
 		return nil, err
@@ -3725,7 +3753,7 @@ func ParseGitRepoFromURL(rawURL string) string {
 
 func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 	rows, err := d.conn.Query(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.git_remote_url, p.linear_team, p.github_repo, p.issue_tracker, p.tracker_url, p.is_default, p.stage_mapping, p.skill_overrides, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.git_remote_url, p.linear_team, p.github_repo, p.issue_tracker, p.tracker_url, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
 		       COUNT(t.id) as task_count
 		FROM projects p
 		LEFT JOIN tasks t ON t.project_id = p.id
@@ -3742,8 +3770,9 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		var p models.Project
 		var isDefault int
 		var stageMappingJSON, skillOverridesJSON string
+		var aiProv, aiCmd, specFw sql.NullString
 		err := rows.Scan(
-			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &p.TrackerUrl, &isDefault, &stageMappingJSON, &skillOverridesJSON, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &p.TrackerUrl, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 		)
 		if err != nil {
 			return nil, err
@@ -3756,6 +3785,17 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		p.SkillOverrides = map[string]string{}
 		if skillOverridesJSON != "" && skillOverridesJSON != "{}" {
 			_ = json.Unmarshal([]byte(skillOverridesJSON), &p.SkillOverrides)
+		}
+		if aiProv.Valid {
+			p.AIProvider = aiProv.String
+		}
+		if aiCmd.Valid {
+			p.AICommandTemplate = aiCmd.String
+		}
+		if specFw.Valid && specFw.String != "" {
+			p.SpecFramework = specFw.String
+		} else {
+			p.SpecFramework = "speckit"
 		}
 		projects = append(projects, p)
 	}
@@ -3781,13 +3821,14 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	var p models.Project
 	var isDefault int
 	var stageMappingJSON, skillOverridesJSON string
+	var aiProv, aiCmd, specFw sql.NullString
 	err := d.conn.QueryRow(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.git_remote_url, p.linear_team, p.github_repo, p.issue_tracker, p.tracker_url, p.is_default, p.stage_mapping, p.skill_overrides, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.git_remote_url, p.linear_team, p.github_repo, p.issue_tracker, p.tracker_url, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
 		       (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count
 		FROM projects p
 		WHERE p.id = ? OR p.slug = ?
 	`, id, id).Scan(
-		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &p.TrackerUrl, &isDefault, &stageMappingJSON, &skillOverridesJSON, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &p.IssueTracker, &p.TrackerUrl, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -3803,6 +3844,17 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	p.SkillOverrides = map[string]string{}
 	if skillOverridesJSON != "" && skillOverridesJSON != "{}" {
 		_ = json.Unmarshal([]byte(skillOverridesJSON), &p.SkillOverrides)
+	}
+	if aiProv.Valid {
+		p.AIProvider = aiProv.String
+	}
+	if aiCmd.Valid {
+		p.AICommandTemplate = aiCmd.String
+	}
+	if specFw.Valid && specFw.String != "" {
+		p.SpecFramework = specFw.String
+	} else {
+		p.SpecFramework = "speckit"
 	}
 	return &p, nil
 }
@@ -3844,6 +3896,13 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 		githubRepo = ParseGitRepoFromURL(gitRemote)
 	}
 
+	aiProvider := strings.TrimSpace(req.AIProvider)
+	aiCmd := strings.TrimSpace(req.AICommandTemplate)
+	specFramework := strings.TrimSpace(req.SpecFramework)
+	if specFramework == "" {
+		specFramework = "speckit"
+	}
+
 	now := time.Now()
 	isDefInt := 0
 	if req.IsDefault {
@@ -3864,9 +3923,9 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 	skillOverridesBytes, _ := json.Marshal(skillOverrides)
 
 	_, err := d.conn.Exec(`
-		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, git_remote_url, linear_team, github_repo, issue_tracker, tracker_url, is_default, stage_mapping, skill_overrides, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, name, slug, req.Description, icon, color, req.RepoPath, gitRemote, req.LinearTeam, githubRepo, issueTracker, req.TrackerUrl, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), now, now)
+		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, git_remote_url, linear_team, github_repo, issue_tracker, tracker_url, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, name, slug, req.Description, icon, color, req.RepoPath, gitRemote, req.LinearTeam, githubRepo, issueTracker, req.TrackerUrl, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -3928,6 +3987,15 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if req.SkillOverrides != nil {
 		p.SkillOverrides = *req.SkillOverrides
 	}
+	if req.AIProvider != nil {
+		p.AIProvider = *req.AIProvider
+	}
+	if req.AICommandTemplate != nil {
+		p.AICommandTemplate = *req.AICommandTemplate
+	}
+	if req.SpecFramework != nil {
+		p.SpecFramework = *req.SpecFramework
+	}
 	if req.IsDefault != nil {
 		p.IsDefault = *req.IsDefault
 		if p.IsDefault {
@@ -3952,9 +4020,9 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 
 	_, err = d.conn.Exec(`
 		UPDATE projects
-		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, issue_tracker = ?, tracker_url = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, updated_at = ?
+		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, issue_tracker = ?, tracker_url = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, updated_at = ?
 		WHERE id = ?
-	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.IssueTracker, p.TrackerUrl, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.UpdatedAt, p.ID)
+	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.IssueTracker, p.TrackerUrl, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.UpdatedAt, p.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -3992,13 +4060,15 @@ func (d *DB) DeleteProject(id string) error {
 // PROJECT SKILLS MANAGEMENT & PROVISIONING
 // -------------------------------------------------------------
 
-var DefaultProjectSkills = []struct {
+type ProjectSkillTemplate struct {
 	ID          string
 	Name        string
 	DirName     string
 	Description string
 	Content     string
-}{
+}
+
+var DefaultProjectSkills = []ProjectSkillTemplate{
 	{
 		ID:          "clarify",
 		Name:        "Clarify Issue",
@@ -4120,17 +4190,61 @@ Prendre en charge une tâche depuis la file d'attente, exécuter de manière aut
 	},
 }
 
+func getGitWorktreePaths(repoPath string) []string {
+	var paths []string
+	cleanRepo, err := filepath.Abs(filepath.Clean(repoPath))
+	if err != nil {
+		cleanRepo = filepath.Clean(repoPath)
+	}
+	paths = append(paths, cleanRepo)
+
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd.Dir = cleanRepo
+	out, err := cmd.Output()
+	if err != nil {
+		return paths
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "worktree ") {
+			wtPath := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+			if abs, err := filepath.Abs(filepath.Clean(wtPath)); err == nil {
+				wtPath = abs
+			}
+			if wtPath != "" {
+				already := false
+				for _, p := range paths {
+					if p == wtPath {
+						already = true
+						break
+					}
+				}
+				if !already {
+					paths = append(paths, wtPath)
+				}
+			}
+		}
+	}
+	return paths
+}
+
 func (d *DB) GetProjectSkillsStatus(projectIDOrPath string) (*models.ProjectSkillsStatus, error) {
 	d.mu.RLock()
 	repoPath := projectIDOrPath
 	projectID := projectIDOrPath
 	projectName := projectIDOrPath
+	specFramework := "speckit"
 
 	if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil {
 		projectID = proj.ID
 		projectName = proj.Name
 		if proj.RepoPath != "" {
 			repoPath = proj.RepoPath
+		}
+		if proj.SpecFramework != "" {
+			specFramework = proj.SpecFramework
 		}
 	}
 	d.mu.RUnlock()
@@ -4140,14 +4254,19 @@ func (d *DB) GetProjectSkillsStatus(projectIDOrPath string) (*models.ProjectSkil
 		repoPath = "."
 	}
 
+	worktreePaths := getGitWorktreePaths(repoPath)
+
 	res := &models.ProjectSkillsStatus{
-		ProjectID:    projectID,
-		ProjectName:  projectName,
-		RepoPath:     repoPath,
-		PathExists:   false,
-		IsGitRepo:    false,
-		InstalledAll: true,
-		Skills:       []models.InstalledSkillInfo{},
+		ProjectID:      projectID,
+		ProjectName:    projectName,
+		RepoPath:       repoPath,
+		PathExists:     false,
+		IsGitRepo:      false,
+		InstalledAll:   true,
+		SpecFramework:  specFramework,
+		WorktreesCount: len(worktreePaths),
+		WorktreePaths:  worktreePaths,
+		Skills:         []models.InstalledSkillInfo{},
 	}
 
 	fi, err := os.Stat(repoPath)
@@ -4201,9 +4320,18 @@ func (d *DB) GetProjectSkillsStatus(projectIDOrPath string) (*models.ProjectSkil
 			res.InstalledAll = false
 		}
 
+		skillName := s.Name
+		if s.ID == "specify" {
+			if specFramework == "openfeature" {
+				skillName = "Specify Issue (Open Feature SDD)"
+			} else {
+				skillName = "Specify Issue (SpecKit SDD)"
+			}
+		}
+
 		res.Skills = append(res.Skills, models.InstalledSkillInfo{
 			ID:          s.ID,
-			Name:        s.Name,
+			Name:        skillName,
 			Installed:   installed,
 			Path:        targetPath,
 			Description: s.Description,
@@ -4213,7 +4341,7 @@ func (d *DB) GetProjectSkillsStatus(projectIDOrPath string) (*models.ProjectSkil
 	return res, nil
 }
 
-func (d *DB) InstallProjectSkills(projectIDOrPath string) (*models.ProjectSkillsStatus, error) {
+func (d *DB) InstallProjectSkills(projectIDOrPath string, overrides ...string) (*models.ProjectSkillsStatus, error) {
 	d.mu.RLock()
 	repoPath := projectIDOrPath
 	projectID := projectIDOrPath
@@ -4221,6 +4349,9 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string) (*models.ProjectSkills
 	linearTeam := ""
 	githubRepo := ""
 	issueTracker := "local"
+	specFramework := "speckit"
+	aiProvider := "agy"
+	aiCommandTemplate := ""
 
 	if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil {
 		projectID = proj.ID
@@ -4237,8 +4368,27 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string) (*models.ProjectSkills
 		if proj.IssueTracker != "" {
 			issueTracker = proj.IssueTracker
 		}
+		if proj.SpecFramework != "" {
+			specFramework = proj.SpecFramework
+		}
+		if proj.AIProvider != "" {
+			aiProvider = proj.AIProvider
+		}
+		if proj.AICommandTemplate != "" {
+			aiCommandTemplate = proj.AICommandTemplate
+		}
 	}
 	d.mu.RUnlock()
+
+	if len(overrides) > 0 && strings.TrimSpace(overrides[0]) != "" {
+		specFramework = strings.TrimSpace(overrides[0])
+	}
+	if len(overrides) > 1 && strings.TrimSpace(overrides[1]) != "" {
+		aiProvider = strings.TrimSpace(overrides[1])
+	}
+	if len(overrides) > 2 && strings.TrimSpace(overrides[2]) != "" {
+		aiCommandTemplate = strings.TrimSpace(overrides[2])
+	}
 
 	repoPath = strings.TrimSpace(repoPath)
 	if repoPath == "" {
@@ -4250,36 +4400,92 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string) (*models.ProjectSkills
 		return nil, fmt.Errorf("impossible de créer le répertoire %s: %w", repoPath, err)
 	}
 
-	// Install skills into .agents/skills/, .gemini/skills/ and .agy/skills/
-	for _, s := range DefaultProjectSkills {
-		dirs := []string{
-			filepath.Join(repoPath, ".agents", "skills", s.DirName),
-			filepath.Join(repoPath, ".gemini", "skills", s.DirName),
-			filepath.Join(repoPath, ".agy", "skills", s.DirName),
-		}
+	// Get all worktree paths to scaffold skills into every worktree directory
+	targetPaths := getGitWorktreePaths(repoPath)
 
-		for _, dir := range dirs {
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				return nil, fmt.Errorf("erreur création dossier skill %s: %w", dir, err)
-			}
-			filePath := filepath.Join(dir, "SKILL.md")
-			if err := os.WriteFile(filePath, []byte(s.Content), 0644); err != nil {
-				return nil, fmt.Errorf("erreur écriture skill %s: %w", filePath, err)
+	// Build skills with framework-specific content for specify-issue
+	skillsToInstall := make([]ProjectSkillTemplate, len(DefaultProjectSkills))
+	copy(skillsToInstall, DefaultProjectSkills)
+
+	for i, s := range skillsToInstall {
+		if s.ID == "specify" {
+			if specFramework == "openfeature" {
+				skillsToInstall[i].Name = "Specify Issue (Open Feature SDD)"
+				skillsToInstall[i].Content = `---
+name: specify-issue
+description: Rédige la spécification technique selon la norme Open Feature (Feature Flags, Evaluation Contexts, Hooks, Variations & Lifecycle).
+---
+# Skill : Specify Issue (Open Feature SDD)
+
+## Objectif
+Générer une spécification technique standardisée selon le framework Open Feature Spec-Driven Design.
+
+## Instructions
+1. Vérifier les réponses de clarification et le contexte du projet.
+2. Créer ou basculer sur la branche Git de travail au format <KEY>-<titre-slug>.
+3. Rédiger la spécification technique OpenFeature complète incluant :
+   - Définition des Feature Flags (Flag Key, Type: boolean/string/number/object, Default Value, Variations)
+   - Evaluation Context & Règles de ciblage (Attributs utilisateur, tenant, environnement)
+   - Intégration OpenFeature SDK (Provider, Evaluation Hooks, Fallbacks de sécurité)
+   - Cycle de vie du Flag (Création -> Rollout progressif -> Dépréciation & Nettoyage de code)
+   - Plan de tests et scénarios de validation (Given / When / Then)
+`
+			} else {
+				skillsToInstall[i].Name = "Specify Issue (SpecKit SDD)"
+				skillsToInstall[i].Content = `---
+name: specify-issue
+description: Rédige la spécification technique standard SpecKit, définit les user stories, l'architecture et les critères d'acceptation Gherkin (Given/When/Then).
+---
+# Skill : Specify Issue (SpecKit SDD)
+
+## Objectif
+Générer une spécification technique exhaustive et actionnable selon le framework SpecKit Spec-Driven Design.
+
+## Instructions
+1. Vérifier les réponses de clarification et le contexte du projet.
+2. Créer ou basculer sur la branche Git de travail au format <KEY>-<titre-slug>.
+3. Rédiger la spécification technique SpecKit complète incluant :
+   - Contexte et User Stories
+   - Architecture, Diagrammes de flux (Mermaid) et Fichiers cibles
+   - Critères d'acceptation BDD (Scénarios Given / When / Then)
+   - Plan de tests et critères de validation
+`
 			}
 		}
 	}
 
-	// Create .taskacao/config.json in project root
-	taskacaoDir := filepath.Join(repoPath, ".taskacao")
-	_ = os.MkdirAll(taskacaoDir, 0755)
-	configFile := filepath.Join(taskacaoDir, "config.json")
-	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+	// Install skills into each target path (root repo and all worktrees)
+	for _, targetDir := range targetPaths {
+		for _, s := range skillsToInstall {
+			dirs := []string{
+				filepath.Join(targetDir, ".agents", "skills", s.DirName),
+				filepath.Join(targetDir, ".gemini", "skills", s.DirName),
+				filepath.Join(targetDir, ".agy", "skills", s.DirName),
+				filepath.Join(targetDir, ".skills", s.DirName),
+			}
+
+			for _, dir := range dirs {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					continue
+				}
+				filePath := filepath.Join(dir, "SKILL.md")
+				_ = os.WriteFile(filePath, []byte(s.Content), 0644)
+			}
+		}
+
+		// Create .taskacao/config.json in each worktree/root
+		taskacaoDir := filepath.Join(targetDir, ".taskacao")
+		_ = os.MkdirAll(taskacaoDir, 0755)
+		configFile := filepath.Join(taskacaoDir, "config.json")
 		cfgData := map[string]interface{}{
-			"projectId":    projectID,
-			"projectName":  projectName,
-			"linearTeam":   linearTeam,
-			"githubRepo":   githubRepo,
-			"issueTracker": issueTracker,
+			"projectId":         projectID,
+			"projectName":       projectName,
+			"linearTeam":        linearTeam,
+			"githubRepo":        githubRepo,
+			"issueTracker":      issueTracker,
+			"specFramework":     specFramework,
+			"aiProvider":        aiProvider,
+			"aiCommandTemplate": aiCommandTemplate,
 			"skills": []string{
 				"clarify-issue",
 				"specify-issue",
@@ -4287,7 +4493,7 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string) (*models.ProjectSkills
 				"create-pr",
 				"pick-issue",
 			},
-			"createdAt": time.Now().Format(time.RFC3339),
+			"updatedAt": time.Now().Format(time.RFC3339),
 		}
 		if bytes, err := json.MarshalIndent(cfgData, "", "  "); err == nil {
 			_ = os.WriteFile(configFile, bytes, 0644)

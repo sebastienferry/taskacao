@@ -32,6 +32,7 @@ export const ListView: React.FC = () => {
     setDiffTask,
     updateTask,
     deleteTask,
+    moveTaskWorkflowStage,
     runSkill,
     isSkillRunning,
     runningSkillId,
@@ -136,27 +137,100 @@ export const ListView: React.FC = () => {
     }
   }
 
-  const getNextSkillForTask = (taskStatus: Status) => {
-    switch (taskStatus) {
-      case 'to_clarify':
-      case 'backlog':
-        return { id: 'clarify', label: 'Clarify' }
-      case 'to_specify':
-      case 'specified':
-        return { id: 'specify', label: 'Specify' }
-      case 'to_implement':
-      case 'in_progress':
-        return { id: 'implement', label: 'Code' }
-      case 'to_test':
-      case 'to_validate':
-        return { id: 'create_pr', label: 'PR / Merge' }
-      default:
-        return null
+  const getWorkflowAction = (task: Task) => {
+    const isFinished = task.status === 'finished' || task.status === 'done' || task.labels?.some(l => l.toLowerCase() === 'finished')
+    if (isFinished) return null
+
+    if (
+      task.status === 'to_close' ||
+      task.labels?.some(l => l.toLowerCase() === 'reviewed') ||
+      Boolean(task.prUrl && (task.status === 'to_test' || task.status === 'to_validate'))
+    ) {
+      return {
+        id: 'merge',
+        label: 'Merge',
+        icon: <CheckCircle2 size={11} className="text-emerald-400" />,
+        className: 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/25',
+        title: 'Fusionner la Pull Request / branche et finaliser la tâche (#finished)',
+        action: async (e: React.MouseEvent) => {
+          e.stopPropagation()
+          await moveTaskWorkflowStage(task.id, 'finished')
+        },
+      }
+    }
+
+    if (
+      task.status === 'to_test' ||
+      task.status === 'to_validate' ||
+      task.labels?.some(l => l.toLowerCase() === 'implemented')
+    ) {
+      return {
+        id: 'create_pr',
+        label: 'Créer PR',
+        icon: <GitPullRequest size={11} className="text-purple-400" />,
+        className: 'bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 border border-purple-500/25',
+        title: 'Lancer la revue de code et générer la Pull Request',
+        action: async (e: React.MouseEvent) => {
+          e.stopPropagation()
+          if (isSkillRunning) return
+          await runSkill(task.id, 'create_pr')
+        },
+      }
+    }
+
+    if (
+      task.status === 'to_implement' ||
+      task.status === 'in_progress' ||
+      task.labels?.some(l => l.toLowerCase() === 'specified')
+    ) {
+      return {
+        id: 'implement',
+        label: 'Coder',
+        icon: <Flame size={11} className="text-indigo-400" />,
+        className: 'bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 border border-indigo-500/25',
+        title: "Lancer l'implémentation du code par l'agent IA",
+        action: async (e: React.MouseEvent) => {
+          e.stopPropagation()
+          if (isSkillRunning) return
+          await runSkill(task.id, 'implement')
+        },
+      }
+    }
+
+    if (
+      task.status === 'to_specify' ||
+      task.labels?.some(l => l.toLowerCase() === 'clarified')
+    ) {
+      return {
+        id: 'specify',
+        label: 'Spécifier',
+        icon: <FileCode size={11} className="text-blue-400" />,
+        className: 'bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 border border-blue-500/25',
+        title: 'Rédiger la spécification technique Speckit',
+        action: async (e: React.MouseEvent) => {
+          e.stopPropagation()
+          if (isSkillRunning) return
+          await runSkill(task.id, 'specify')
+        },
+      }
+    }
+
+    return {
+      id: 'clarify',
+      label: 'Clarifier',
+      icon: <Sparkles size={11} className="text-amber-400" />,
+      className: 'bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 border border-amber-500/25',
+      title: 'Clarifier les exigences et cadrer la tâche',
+      action: async (e: React.MouseEvent) => {
+        e.stopPropagation()
+        if (isSkillRunning) return
+        await runSkill(task.id, 'clarify')
+      },
     }
   }
 
   const renderTaskRow = (task: Task) => {
-    const nextSkill = getNextSkillForTask(task.status)
+    const action = getWorkflowAction(task)
     const taskActs = activities?.filter(a => a.taskId === task.id) || []
     const latestActivity = taskActs.find(a => a.status === 'running' || a.status === 'queued' || a.status === 'pending') || taskActs[0]
 
@@ -301,24 +375,24 @@ export const ListView: React.FC = () => {
               </button>
             )}
 
-            {nextSkill ? (
+            {action ? (
               <button
-                onClick={() => runSkill(task.id, nextSkill.id)}
+                onClick={action.action}
                 disabled={isSkillRunning}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold text-white accent-bg shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
-                title={`Exécuter ${nextSkill.label}`}
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer ${action.className}`}
+                title={action.title}
               >
-                {isSkillRunning && runningSkillId === nextSkill.id ? (
+                {isSkillRunning && runningSkillId === action.id ? (
                   <Loader2 size={10} className="animate-spin" />
                 ) : (
                   <>
-                    <Sparkles size={10} className="text-amber-300" />
-                    <span>{nextSkill.label}</span>
+                    {action.icon}
+                    <span>{action.label}</span>
                   </>
                 )}
               </button>
             ) : (
-              <span className="text-[10px] text-emerald-400 font-medium">Prêt</span>
+              <span className="text-[10px] text-emerald-400 font-medium">Terminé</span>
             )}
           </div>
         </td>

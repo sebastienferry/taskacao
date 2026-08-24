@@ -1,18 +1,18 @@
 ---
 name: specify-issue
-description: Rédige la spécification technique Speckit, définit les critères d'acceptation Gherkin et prépare la branche Git.
+description: Rédige la spécification technique selon la norme Open Feature (Feature Flags, Evaluation Contexts, Hooks, Variations & Lifecycle).
 ---
-# Skill : Specify Issue (Speckit)
+# Skill : Specify Issue (Open Feature SDD)
 
 ## Objectif
-Générer une spécification technique exhaustive et actionnable (Speckit) prête pour l'implémentation.
+Générer une spécification technique standardisée selon le framework Open Feature Spec-Driven Design.
 
 ## Instructions
 1. Vérifier les réponses de clarification et le contexte du projet.
 2. Créer ou basculer sur la branche Git de travail au format <KEY>-<titre-slug>.
-3. Rédiger la spec technique complète incluant :
-   - Contexte et Objectifs
-   - User Stories et Scénarios d'Acceptation (Given / When / Then)
-   - Architecture & Diagrammes de flux (Mermaid)
-   - Contrats d'API et Schémas de Données
-   - Plan de tests et critères de validation
+3. Rédiger la spécification technique OpenFeature complète incluant :
+   - Définition des Feature Flags (Flag Key, Type: boolean/string/number/object, Default Value, Variations)
+   - Evaluation Context & Règles de ciblage (Attributs utilisateur, tenant, environnement)
+   - Intégration OpenFeature SDK (Provider, Evaluation Hooks, Fallbacks de sécurité)
+   - Cycle de vie du Flag (Création -> Rollout progressif -> Dépréciation & Nettoyage de code)
+   - Plan de tests et scénarios de validation (Given / When / Then)

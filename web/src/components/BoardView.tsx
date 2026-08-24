@@ -287,54 +287,47 @@ export const BoardView: React.FC = () => {
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[var(--bg-primary)] select-none">
       {/* Board Top Toolbar: Grouping Mode Switcher */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]/50 shrink-0">
+      {/* View Subheader: View Mode Switcher (Icon-only) & Hide/Show Done Filter */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]/50 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="flex items-center p-0.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
+          <div className="flex items-center p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] shadow-2xs">
             <button
               onClick={() => setBoardGrouping('workflow')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              className={`p-1.5 rounded-md transition-all cursor-pointer ${
                 boardGrouping === 'workflow'
                   ? 'bg-[var(--accent-color)] text-white shadow-xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]'
               }`}
-              title="Grouper par étape du cycle de vie IA (Labels : new ➔ clarified ➔ specified ➔ implemented ➔ reviewed ➔ finished)"
+              title="Workflow Agentic (Labels : new ➔ clarified ➔ specified ➔ implemented ➔ reviewed ➔ finished)"
             >
-              <Sparkles size={13} className={boardGrouping === 'workflow' ? 'text-amber-300' : 'text-amber-400'} />
-              <span>Pipeline IA (Labels)</span>
+              <Sparkles size={15} className={boardGrouping === 'workflow' ? 'text-amber-300' : 'text-amber-400'} />
             </button>
 
             <button
               onClick={() => setBoardGrouping('status')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              className={`p-1.5 rounded-md transition-all cursor-pointer ${
                 boardGrouping === 'status'
                   ? 'bg-[var(--accent-color)] text-white shadow-xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]'
               }`}
-              title="Grouper par statut opérationnel (Kanban : Todo ➔ In Progress ➔ Review & Testing ➔ Done)"
+              title="Board Agile (Statuts : Todo ➔ In Progress ➔ In Review & Testing ➔ Done)"
             >
-              <Kanban size={13} className={boardGrouping === 'status' ? 'text-cyan-300' : 'text-cyan-400'} />
-              <span>Kanban Agile (Statuts)</span>
+              <Kanban size={15} className={boardGrouping === 'status' ? 'text-cyan-300' : 'text-cyan-400'} />
             </button>
           </div>
-
-          <span className="text-[11px] text-[var(--text-muted)] hidden sm:inline">
-            {boardGrouping === 'workflow'
-              ? '🏷️ 6 étapes de maturité IA (Workflow Labels)'
-              : '📊 4 colonnes de livraison standard (Statuts)'}
-          </span>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={toggleHideDone}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
               hideDone
-                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 shadow-2xs'
                 : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
             }`}
             title={hideDone ? 'Afficher les tâches terminées' : 'Masquer les tâches terminées'}
           >
-            {hideDone ? <Eye size={13} /> : <EyeOff size={13} />}
+            {hideDone ? <Eye size={13} className="text-emerald-400" /> : <EyeOff size={13} />}
             <span>{hideDone ? 'Afficher Terminé' : 'Masquer Terminé'}</span>
           </button>
         </div>
@@ -350,6 +343,42 @@ export const BoardView: React.FC = () => {
             workflowColumns.map(col => {
               const colTasks = tasks.filter(t => getTaskWorkflowStage(t) === col.id)
               const isOver = dragOverColumn === col.id
+
+              // Collapsed Finished Column when hideDone is enabled
+              if (col.id === 'finished' && hideDone) {
+                return (
+                  <div
+                    key={col.id}
+                    onDragOver={e => handleDragOver(e, col.id)}
+                    onDragLeave={e => handleDragLeave(e, col.id)}
+                    onDrop={e => handleDropWorkflow(e, col.id)}
+                    onClick={toggleHideDone}
+                    className={`w-14 shrink-0 flex flex-col items-center justify-between py-4 rounded-2xl bg-[var(--bg-secondary)]/60 border transition-all duration-200 cursor-pointer group hover:bg-[var(--bg-secondary)] select-none ${
+                      isOver
+                        ? 'border-emerald-500 ring-2 ring-emerald-500/30 bg-emerald-500/15'
+                        : 'border-[var(--border-color)] hover:border-emerald-500/40'
+                    }`}
+                    title="Colonne Finished masquée - Glissez une tâche ici pour la terminer, ou cliquez pour l'afficher"
+                  >
+                    <div className="flex flex-col items-center gap-1.5">
+                      <CheckCircle2 size={18} className="text-emerald-400" />
+                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300">
+                        {colTasks.length}
+                      </span>
+                    </div>
+
+                    <div className="flex-1 flex items-center justify-center my-4">
+                      <span className="[writing-mode:vertical-lr] rotate-180 text-xs font-bold text-[var(--text-secondary)] group-hover:text-emerald-400 tracking-wider transition-colors">
+                        Finished ({colTasks.length})
+                      </span>
+                    </div>
+
+                    <div className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-muted)] group-hover:text-emerald-400 transition-colors">
+                      <Eye size={14} />
+                    </div>
+                  </div>
+                )
+              }
 
               return (
                 <div
@@ -382,7 +411,7 @@ export const BoardView: React.FC = () => {
                       {col.id === 'finished' && (
                         <button
                           onClick={toggleHideDone}
-                          className="p-1 rounded-md text-[var(--text-muted)] hover:text-emerald-400 hover:bg-[var(--bg-tertiary)] transition-colors"
+                          className="p-1 rounded-md text-[var(--text-muted)] hover:text-emerald-400 hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
                           title="Masquer la colonne Finished"
                         >
                           <EyeOff size={14} />
@@ -390,7 +419,7 @@ export const BoardView: React.FC = () => {
                       )}
                       <button
                         onClick={() => openQuickAddForWorkflow(col.id)}
-                        className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                        className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
                         title={`Ajouter un ticket (#${col.id})`}
                       >
                         <Plus size={15} />
@@ -429,8 +458,8 @@ export const BoardView: React.FC = () => {
               const colTasks = tasks.filter(t => isTaskInStatusColumn(t.status, col.id))
               const isOver = dragOverColumn === col.id
 
-              // Collapsed Done Column
-              if (col.id === 'to_close' && hideDone) {
+              // Collapsed Done Column when hideDone is enabled
+              if (col.id === 'finished' && hideDone) {
                 return (
                   <div
                     key={col.id}

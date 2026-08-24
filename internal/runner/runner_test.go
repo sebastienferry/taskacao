@@ -46,4 +46,11 @@ func TestOpenInEditor(t *testing.T) {
 	if err := r.OpenInEditor("echo", cwd); err != nil {
 		t.Fatalf("OpenInEditor failed with echo: %v", err)
 	}
+
+	// Test FindEditorBinary for code and zed
+	bin, _ := runner.FindEditorBinary("code")
+	if bin == "" {
+		t.Errorf("Expected FindEditorBinary(code) to return a binary or command")
+	}
+	t.Logf("FindEditorBinary(code) resolved to: %s", bin)
 }
