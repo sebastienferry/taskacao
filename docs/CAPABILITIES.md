@@ -25,10 +25,29 @@ Taskacao supports multiple concurrent software repositories and projects from a 
 
 Taskacao provides a unified domain model over four issue sources
 
-- Local (SQLite) : Native SQLite Storage for full offline support.
-- Linear : through linear CLI (https://github.com/schpet/linear-cli)
-- Jira : through `acli`
-- Github : through `gh`
+- Local (SQLite) : native SQLite storage for full offline support.
+- Linear : through the `linear` CLI (https://github.com/schpet/linear-cli)
+- Jira : through the Atlassian CLI `acli`
+- GitHub : through `gh`
+
+Each project carries its own tracker configuration: `linearTeam` for Linear,
+`githubRepo` for GitHub, and `jiraProject` (the Jira project key passed to
+`acli --project`) plus `trackerUrl` (the Jira base URL used to build
+`/browse/<KEY>` links) for Jira.
+
+All four sources support the same operations, so the board behaves identically
+whichever tracker backs a task:
+
+| Operation | Linear | GitHub | Jira |
+|---|---|---|---|
+| Import | `linear issue list` | `gh issue list` | `acli jira workitem list --project <KEY>` |
+| Create | `linear issue create` | `gh issue create` | `acli jira workitem create --project <KEY>` |
+| Edit fields | `linear issue update` | `gh issue edit` | `acli jira workitem edit` |
+| Transition | `linear issue update --state` | `gh issue close` / `reopen` | `acli jira workitem transition --state` |
+| Comment | `linear issue comment` | `gh issue comment` | `acli jira workitem comment` |
+
+Remote writes are queued as background jobs and surface in the Activities view,
+so a failing CLI call is reported rather than silently dropped.
 
 ---
 
@@ -49,8 +68,49 @@ flowchart LR
 - **Output**: Generates structured questions for the human developer. Answers can be appended directly to the story description or posted back to Linear/GitHub.
 
 ### Stage 2: Technical Specification (`specify-issue` / `/specify`)
-- **Objective**: Generates an actionable, implementation-ready technical specification (Speckit standard).
+- **Objective**: Generates an actionable, implementation-ready technical specification, following the Spec-Driven Design framework configured on the project.
 - **Output**: Stores markdown specification with system diagrams, API contracts, modified files list, and test requirements.
+- **Framework**: `speckit` writes `specs/<KEY>-<slug>/{spec,plan,tasks}.md` under a GitHub Spec Kit project; `openspec` writes a change proposal under `openspec/changes/<KEY>-<slug>/`. See section 2b.
+
+---
+
+## 2b. Spec-Driven Design Toolchains (Spec Kit / OpenSpec)
+
+Taskacao does not merely reference an SDD framework — it installs it. Two are
+supported, selectable per project and as a global default:
+
+| | GitHub Spec Kit | OpenSpec |
+|---|---|---|
+| CLI | `specify` | `openspec` |
+| Installed via | `uv` / `uvx` from `git+https://github.com/github/spec-kit.git` | `npm` / `npx` from `@fission-ai/openspec` |
+| Initializer | `specify init --here --ai <agent>` | `openspec init` |
+| Scaffolds | `.specify/` (constitution, templates) and `specs/` | `openspec/` (`project.md`, `changes/`, `specs/`) |
+| Artefact shape | spec.md → plan.md → tasks.md | proposal.md + design.md + tasks.md + spec deltas (`ADDED` / `MODIFIED` / `REMOVED`) |
+
+Endpoints:
+
+- `GET /api/spec-framework/status?projectId=…&framework=…` — reports, per
+  framework, whether the CLI is reachable in `PATH` (`cliAvailable`,
+  `cliCommand`) and whether the working directory is already initialized
+  (`initialized`, `markerPaths`). Omitting `framework` reports on both.
+- `POST /api/spec-framework/install` — body `{framework, repoPath, projectId,
+  aiAgent, force}`. Installs the CLI when missing, then runs the initializer.
+
+The installer tries the richest invocation first and falls back to progressively
+narrower ones, because flag support varies across CLI versions. Every attempted
+command is returned in `steps[]` with its shell string, success flag, and output,
+so a failure can be diagnosed and replayed by hand. `force: true` re-runs the
+initializer over an already-initialized directory. Each install is also recorded
+as an activity (`skillId: install_spec_framework`).
+
+Prerequisites are the user's responsibility and are reported rather than
+installed silently: Spec Kit needs `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh`),
+OpenSpec needs Node.js. The CLI status panel surfaces `uv`, `specify` and
+`openspec` alongside `git`, `gh`, `linear` and `acli`.
+
+Note: OpenSpec is a Spec-Driven Design workflow, unrelated to **OpenFeature**
+(a feature-flag standard). Earlier builds stored `openfeature` as a spec
+framework value; the database migrates that value to `openspec` on startup.
 
 ### Stage 3: Implementation (`code-issue` / `/code`)
 - **Objective**: Implements the required code changes directly inside the task's isolated Git worktree.

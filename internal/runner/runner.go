@@ -100,7 +100,7 @@ func (r *Runner) runCommand(ctx context.Context, dir string, name string, args .
 }
 
 func (r *Runner) CheckCliTools(repoPath string) []models.CliStatus {
-	tools := []string{"git", "gh", "linear", "acli", "agy", "vibe", "claude", "gemini", "codex"}
+	tools := []string{"git", "gh", "linear", "acli", "agy", "vibe", "claude", "gemini", "codex", "uv", "specify", "openspec"}
 	var results []models.CliStatus
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -136,14 +136,26 @@ func (r *Runner) CheckCliTools(repoPath string) []models.CliStatus {
 					status.Details = "Run 'linear auth login'"
 				}
 			case "acli":
-				out, aErr := r.runCommand(ctx, repoPath, path, "auth", "status")
-				if aErr == nil || strings.Contains(out, "Logged in") {
-					status.AuthStatus = "Authenticated"
-					status.Details = "Atlassian CLI connected"
-				} else {
-					status.AuthStatus = "Ready"
-					status.Details = "Atlassian CLI available"
+				out, aErr := r.runCommand(ctx, repoPath, path, "jira", "auth", "status")
+				if aErr != nil {
+					out, aErr = r.runCommand(ctx, repoPath, path, "auth", "status")
 				}
+				if aErr == nil || strings.Contains(out, "Logged in") || strings.Contains(out, "Active account") {
+					status.AuthStatus = "Authenticated"
+					status.Details = "Atlassian CLI (Jira) connected"
+				} else {
+					status.AuthStatus = "Not Authenticated"
+					status.Details = "Run 'acli jira auth login'"
+				}
+			case "uv":
+				status.AuthStatus = "Ready"
+				status.Details = "uv available (required to install GitHub Spec Kit)"
+			case "specify":
+				status.AuthStatus = "Ready"
+				status.Details = "GitHub Spec Kit CLI installed"
+			case "openspec":
+				status.AuthStatus = "Ready"
+				status.Details = "OpenSpec CLI installed"
 			case "git":
 				status.AuthStatus = "Ready"
 				status.Details = "Git available"
@@ -165,7 +177,18 @@ func (r *Runner) CheckCliTools(repoPath string) []models.CliStatus {
 			}
 		} else {
 			status.AuthStatus = "Not Installed"
-			status.Details = fmt.Sprintf("Tool '%s' not found in PATH", tool)
+			switch tool {
+			case "acli":
+				status.Details = "Atlassian CLI missing — see https://developer.atlassian.com/cloud/acli/"
+			case "uv":
+				status.Details = "uv missing — curl -LsSf https://astral.sh/uv/install.sh | sh"
+			case "specify":
+				status.Details = "GitHub Spec Kit missing — install it from a project (Spec Kit / OpenSpec panel)"
+			case "openspec":
+				status.Details = "OpenSpec missing — install it from a project (Spec Kit / OpenSpec panel)"
+			default:
+				status.Details = fmt.Sprintf("Tool '%s' not found in PATH", tool)
+			}
 		}
 
 		results = append(results, status)
@@ -1029,11 +1052,54 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 // JIRA CLI (acli) INTEGRATION
 // -------------------------------------------------------------
 
+// jiraSearchFields is the exact set of fields acli accepts for
+// 'jira workitem search --fields'. Notably 'created' and 'updated' are
+// rejected by the CLI, so task timestamps fall back to the import time.
+const jiraSearchFields = "key,summary,description,status,priority,assignee,labels,issuetype"
+
+// jiraSyncedIssueTypes is the set of Jira work item types Taskacao imports as
+// board cards. Epics are containers, and the other project-specific types
+// (Vulnerability, Corrective Action, Technical debt…) are out of scope: they
+// would flood the board without being part of the dev workflow.
+var jiraSyncedIssueTypes = []string{"Task", "Story"}
+
+// jiraSyncTimeout covers a full paginated fetch of a project's work items.
+const jiraSyncTimeout = 4 * time.Minute
+
+// jiraParentLookupWorkers bounds the concurrency of the parent enrichment pass.
+// acli's 'workitem search' cannot project the parent field (its --fields
+// allow-list rejects both 'parent' and any customfield), so the parent of each
+// work item has to be read one by one with 'workitem view'. Each call costs
+// roughly a second, hence the fan-out.
+const jiraParentLookupWorkers = 8
+
+// JiraIssueRef is a lightweight reference to another work item, used for the
+// 'parent' field returned by 'acli jira workitem view'.
+type JiraIssueRef struct {
+	Key    string `json:"key"`
+	Fields struct {
+		Summary   string `json:"summary"`
+		IssueType struct {
+			Name string `json:"name"`
+		} `json:"issuetype"`
+	} `json:"fields"`
+}
+
 type JiraIssueField struct {
-	Summary     string `json:"summary"`
-	Description string `json:"description"`
-	Status      struct {
+	Summary   string `json:"summary"`
+	IssueType struct {
 		Name string `json:"name"`
+	} `json:"issuetype"`
+	Parent *JiraIssueRef `json:"parent"`
+	// Description is Atlassian Document Format: a nested JSON object on Jira
+	// Cloud, but a plain string on older/Server payloads. Keep it raw and
+	// flatten it with jiraDescriptionToText.
+	Description json.RawMessage `json:"description"`
+	Status      struct {
+		Name           string `json:"name"`
+		StatusCategory struct {
+			Key string `json:"key"`
+		} `json:"statusCategory"`
 	} `json:"status"`
 	Priority struct {
 		Name string `json:"name"`
@@ -1058,8 +1124,90 @@ type JiraQueryResponse struct {
 	Issues []JiraIssueItem `json:"issues"`
 }
 
+// jiraDescriptionToText flattens a Jira description into plain text. It accepts
+// both a JSON string and an Atlassian Document Format tree, walking the tree to
+// collect text nodes and inserting line breaks at block boundaries.
+func jiraDescriptionToText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	// Plain string payload (Jira Server, or an already-flattened value).
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return asString
+	}
+
+	var node interface{}
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return ""
+	}
+
+	var b strings.Builder
+	var walk func(n interface{})
+	walk = func(n interface{}) {
+		switch v := n.(type) {
+		case map[string]interface{}:
+			nodeType, _ := v["type"].(string)
+			switch nodeType {
+			case "hardBreak":
+				b.WriteString("\n")
+			case "text":
+				if txt, ok := v["text"].(string); ok {
+					b.WriteString(txt)
+				}
+			}
+			if content, ok := v["content"].([]interface{}); ok {
+				for _, child := range content {
+					walk(child)
+				}
+			}
+			// Close block-level nodes with a newline so paragraphs, headings and
+			// list items do not run together.
+			switch nodeType {
+			case "paragraph", "heading", "listItem", "blockquote", "codeBlock", "rule", "tableRow":
+				b.WriteString("\n")
+			}
+		case []interface{}:
+			for _, child := range v {
+				walk(child)
+			}
+		}
+	}
+	walk(node)
+
+	return strings.TrimSpace(b.String())
+}
+
+// parseJiraSearchOutput accepts either a bare array of work items (acli
+// 'search --json') or a REST-shaped {"issues": [...]} envelope.
+func parseJiraSearchOutput(output string) ([]JiraIssueItem, error) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return nil, fmt.Errorf("réponse vide de acli")
+	}
+
+	var items []JiraIssueItem
+	if err := json.Unmarshal([]byte(trimmed), &items); err == nil {
+		return items, nil
+	}
+
+	var resp JiraQueryResponse
+	if err := json.Unmarshal([]byte(trimmed), &resp); err == nil {
+		return resp.Issues, nil
+	}
+
+	preview := trimmed
+	if len(preview) > 300 {
+		preview = preview[:300] + "…"
+	}
+	return nil, fmt.Errorf("réponse JSON Jira illisible: %s", preview)
+}
+
 func (r *Runner) SyncFromJira(projectKey string, repoPath string, trackerUrl string) ([]models.Task, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	// A full paginated fetch of a large project (1300+ work items) takes about
+	// 40 seconds, so the old 20s budget silently truncated the import.
+	ctx, cancel := context.WithTimeout(context.Background(), jiraSyncTimeout)
 	defer cancel()
 
 	acliPath, _ := FindCliTool("acli")
@@ -1067,38 +1215,62 @@ func (r *Runner) SyncFromJira(projectKey string, repoPath string, trackerUrl str
 		acliPath = "acli"
 	}
 
-	var args []string
-	if projectKey != "" {
-		args = []string{"jira", "workitem", "list", "--project", projectKey, "--output", "json"}
-	} else {
-		args = []string{"jira", "workitem", "list", "--output", "json"}
+	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
+	if projectKey == "" {
+		return nil, fmt.Errorf("clé de projet Jira manquante: renseignez 'Projet Jira' dans la configuration du projet")
 	}
 
-	output, err := r.runCommand(ctx, repoPath, acliPath, args...)
+	// Only Task and Story are imported. Epics are containers reattached to their
+	// children as a property by enrichJiraParents below; the remaining types are
+	// deliberately left out of the board.
+	//
+	// acli queries work items through JQL. 'search' is the current command;
+	// older builds exposed 'list --project', kept here as a fallback.
+	quoted := make([]string, 0, len(jiraSyncedIssueTypes))
+	for _, t := range jiraSyncedIssueTypes {
+		quoted = append(quoted, fmt.Sprintf("%q", t))
+	}
+	jql := fmt.Sprintf("project = %s AND issuetype IN (%s) ORDER BY updated DESC",
+		projectKey, strings.Join(quoted, ", "))
+	// --paginate walks every page: without it acli returns only the first page
+	// and the board silently stops at 100 tickets.
+	attempts := [][]string{
+		{"jira", "workitem", "search", "--jql", jql, "--fields", jiraSearchFields, "--paginate", "--json"},
+		{"jira", "workitem", "search", "--jql", jql, "--paginate", "--json"},
+		{"jira", "workitem", "list", "--project", projectKey, "--output", "json"},
+	}
+
+	var output string
+	var lastErr error
+	for _, args := range attempts {
+		out, err := r.runCommand(ctx, repoPath, acliPath, args...)
+		if err == nil {
+			output = out
+			lastErr = nil
+			break
+		}
+		lastErr = err
+		output = out
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("interrogation de Jira via acli impossible: %w", lastErr)
+	}
+
+	items, err := parseJiraSearchOutput(output)
 	if err != nil {
-		args = []string{"jira", "issue", "list", "--output", "json"}
-		if projectKey != "" {
-			args = append(args, "--project", projectKey)
-		}
-		var err2 error
-		output, err2 = r.runCommand(ctx, repoPath, acliPath, args...)
-		if err2 != nil {
-			return nil, fmt.Errorf("failed to query Jira via acli: %w (output: %s)", err, output)
-		}
-	}
-
-	var items []JiraIssueItem
-	if err := json.Unmarshal([]byte(output), &items); err != nil {
-		var resp JiraQueryResponse
-		if err2 := json.Unmarshal([]byte(output), &resp); err2 == nil {
-			items = resp.Issues
-		} else {
-			return nil, fmt.Errorf("failed to parse Jira JSON response: %w", err)
-		}
+		return nil, err
 	}
 
 	var tasks []models.Task
 	for i, item := range items {
+		// Second line of defence: the legacy 'workitem list' fallback above
+		// cannot filter by type, so enforce the allow-list here as well. An
+		// empty type (older payloads) is kept rather than silently dropped.
+		itemType := strings.TrimSpace(item.Fields.IssueType.Name)
+		if itemType != "" && !jiraTypeIsSynced(itemType) {
+			continue
+		}
+
 		var priority models.Priority
 		pName := strings.ToLower(item.Fields.Priority.Name)
 		switch {
@@ -1126,7 +1298,16 @@ func (r *Runner) SyncFromJira(projectKey string, repoPath string, trackerUrl str
 		case strings.Contains(stName, "done") || strings.Contains(stName, "closed") || strings.Contains(stName, "resolved") || strings.Contains(stName, "finish"):
 			status = models.StatusFinished
 		default:
-			status = models.StatusToClarify
+			// The workflow uses a status name Taskacao does not recognise; fall
+			// back to Jira's own status category, which every workflow sets.
+			switch item.Fields.Status.StatusCategory.Key {
+			case "indeterminate":
+				status = models.StatusToImplement
+			case "done":
+				status = models.StatusFinished
+			default:
+				status = models.StatusToClarify
+			}
 		}
 
 		var extURL *string
@@ -1147,7 +1328,7 @@ func (r *Runner) SyncFromJira(projectKey string, repoPath string, trackerUrl str
 			ID:             "jira-" + item.Key,
 			Key:            item.Key,
 			Title:          item.Fields.Summary,
-			Description:    item.Fields.Description,
+			Description:    jiraDescriptionToText(item.Fields.Description),
 			Status:         status,
 			Priority:       priority,
 			Labels:         item.Fields.Labels,
@@ -1156,11 +1337,150 @@ func (r *Runner) SyncFromJira(projectKey string, repoPath string, trackerUrl str
 			Position:       i + 1,
 			Source:         "jira",
 			ExternalURL:    extURL,
+			IssueType:      itemType,
 			CreatedAt:      time.Now(),
 			UpdatedAt:      time.Now(),
 		})
 	}
+
+	// Attach the parent (epic, or parent story for a sub-task) as a property of
+	// each task. Best-effort: a failure here leaves tasks without a parent
+	// rather than failing the whole sync.
+	r.enrichJiraParents(projectKey, tasks, repoPath)
+
 	return tasks, nil
+}
+
+// jiraTypeIsSynced reports whether a Jira work item type is imported as a card.
+func jiraTypeIsSynced(issueType string) bool {
+	for _, t := range jiraSyncedIssueTypes {
+		if strings.EqualFold(strings.TrimSpace(issueType), t) {
+			return true
+		}
+	}
+	return false
+}
+
+// enrichJiraParents fills ParentKey / ParentTitle / ParentType on Jira tasks in
+// place, by walking the project's epics and asking Jira for each epic's
+// children.
+//
+// The obvious approach — one 'acli jira workitem view <KEY>' per task — is not
+// viable at scale: acli's search command cannot project the parent field (its
+// --fields allow-list rejects 'parent' and every customfield), and a project
+// with 1300 work items would mean 1300 CLI calls. Epics are one to two orders
+// of magnitude fewer than their children (140 epics for 1321 items on PE), so
+// the mapping is built from the epic side instead: one query for the epic list,
+// then one 'parent = <EPIC>' query per epic, run concurrently.
+//
+// Known limitation: this resolves epic parents only. A task that hangs under a
+// parent *story* rather than an epic keeps an empty parent, because covering
+// that case would put us back to one call per task.
+func (r *Runner) enrichJiraParents(projectKey string, tasks []models.Task, repoPath string) {
+	if len(tasks) == 0 || strings.TrimSpace(projectKey) == "" {
+		return
+	}
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), jiraSyncTimeout)
+	defer cancel()
+
+	// 1. The project's epics, with their titles.
+	epicsOut, err := r.runCommand(ctx, repoPath, acliPath,
+		"jira", "workitem", "search",
+		"--jql", fmt.Sprintf("project = %s AND issuetype = Epic", projectKey),
+		"--fields", "key,summary", "--paginate", "--json")
+	if err != nil {
+		log.Printf("[CLI] Jira parent enrichment skipped: epic list unavailable: %v", err)
+		return
+	}
+	epics, err := parseJiraSearchOutput(epicsOut)
+	if err != nil || len(epics) == 0 {
+		log.Printf("[CLI] Jira parent enrichment: no epic found for project %s", projectKey)
+		return
+	}
+
+	// 2. Children of each epic, concurrently.
+	type link struct {
+		childKey  string
+		epicKey   string
+		epicTitle string
+	}
+
+	jobs := make(chan JiraIssueItem)
+	results := make(chan link, len(tasks)*2)
+	var wg sync.WaitGroup
+
+	for w := 0; w < jiraParentLookupWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for epic := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				// acli returns an array of nulls when --fields asks for "key"
+				// alone; a second field makes it emit real items.
+				out, cErr := r.runCommand(ctx, repoPath, acliPath,
+					"jira", "workitem", "search",
+					"--jql", fmt.Sprintf("parent = %s", epic.Key),
+					"--fields", "key,summary", "--paginate", "--json")
+				if cErr != nil {
+					continue
+				}
+				children, pErr := parseJiraSearchOutput(out)
+				if pErr != nil {
+					continue
+				}
+				for _, c := range children {
+					if c.Key == "" {
+						continue
+					}
+					results <- link{childKey: c.Key, epicKey: epic.Key, epicTitle: epic.Fields.Summary}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, e := range epics {
+			if e.Key == "" {
+				continue
+			}
+			select {
+			case jobs <- e:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(results)
+
+	byChild := make(map[string]link, len(tasks))
+	for l := range results {
+		byChild[l.childKey] = l
+	}
+
+	// 3. Apply the mapping to the imported tasks.
+	found := 0
+	for i := range tasks {
+		if l, ok := byChild[tasks[i].Key]; ok {
+			tasks[i].ParentKey = l.epicKey
+			tasks[i].ParentTitle = l.epicTitle
+			tasks[i].ParentType = "Epic"
+			found++
+		}
+	}
+
+	log.Printf("[CLI] Jira parent enrichment: %d/%d work items linked to an epic (%d epics scanned)",
+		found, len(tasks), len(epics))
 }
 
 func (r *Runner) CreateJiraIssue(projectKey string, repoPath string, trackerUrl string, title string, description string, priority models.Priority, labels []string) (*models.Task, error) {
@@ -1172,15 +1492,46 @@ func (r *Runner) CreateJiraIssue(projectKey string, repoPath string, trackerUrl 
 		acliPath = "acli"
 	}
 
-	args := []string{"jira", "workitem", "create", "--project", projectKey, "--summary", title, "--description", description, "--output", "json"}
-	output, err := r.runCommand(ctx, repoPath, acliPath, args...)
-	if err != nil {
-		args = []string{"jira", "issue", "create", "--project", projectKey, "--summary", title, "--description", description, "--output", "json"}
-		var err2 error
-		output, err2 = r.runCommand(ctx, repoPath, acliPath, args...)
-		if err2 != nil {
-			return nil, fmt.Errorf("failed to create Jira issue: %w (output: %s)", err, output)
+	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
+	if projectKey == "" {
+		return nil, fmt.Errorf("clé de projet Jira manquante: renseignez 'Projet Jira' dans la configuration du projet")
+	}
+
+	// acli rejects labels containing whitespace, so sanitize them first. The
+	// --label flag takes one comma-separated value, not a repeated flag.
+	jiraLabels := filterJiraLabels(labels)
+
+	// acli requires --type on creation and, unlike Linear or GitHub, exposes no
+	// --priority flag on create: the priority is applied by the caller through
+	// a follow-up edit where supported.
+	base := []string{
+		"jira", "workitem", "create",
+		"--project", projectKey,
+		"--type", "Task",
+		"--summary", title,
+		"--description", description,
+		"--json",
+	}
+	withLabels := append([]string{}, base...)
+	if len(jiraLabels) > 0 {
+		withLabels = append(withLabels, "--label", strings.Join(jiraLabels, ","))
+	}
+
+	attempts := [][]string{
+		withLabels,
+		base,
+	}
+
+	var output string
+	var err error
+	for _, args := range attempts {
+		output, err = r.runCommand(ctx, repoPath, acliPath, args...)
+		if err == nil {
+			break
 		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("création du ticket Jira impossible: %w", err)
 	}
 
 	var created struct {
@@ -1218,6 +1569,47 @@ func (r *Runner) CreateJiraIssue(projectKey string, repoPath string, trackerUrl 
 	}, nil
 }
 
+// filterJiraLabels keeps only labels Jira accepts: no whitespace, no leading '#'.
+func filterJiraLabels(labels []string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, l := range labels {
+		clean := strings.TrimSpace(strings.TrimPrefix(l, "#"))
+		if clean == "" {
+			continue
+		}
+		clean = strings.ReplaceAll(clean, " ", "-")
+		if seen[clean] {
+			continue
+		}
+		seen[clean] = true
+		out = append(out, clean)
+	}
+	return out
+}
+
+// Note on priority: acli exposes no --priority flag on either
+// 'jira workitem create' or 'jira workitem edit', so Taskacao reads a work
+// item's priority from Jira but cannot write it back. Priority changes made on
+// the board stay local for Jira-tracked tasks.
+
+// mapStatusToJiraState translates a Taskacao workflow stage into the Jira
+// status name used by the default software-project workflow.
+func mapStatusToJiraState(status models.Status) string {
+	switch status {
+	case models.StatusToClarify, models.StatusBacklog, models.StatusToSpecify:
+		return "To Do"
+	case models.StatusToImplement, models.StatusInProgress, models.StatusSpecified:
+		return "In Progress"
+	case models.StatusToTest, models.StatusToValidate:
+		return "In Review"
+	case models.StatusToClose, models.StatusFinished, models.StatusDone:
+		return "Done"
+	default:
+		return "In Progress"
+	}
+}
+
 func (r *Runner) UpdateJiraIssueState(issueKey string, status models.Status, repoPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -1227,23 +1619,87 @@ func (r *Runner) UpdateJiraIssueState(issueKey string, status models.Status, rep
 		acliPath = "acli"
 	}
 
-	stateName := "In Progress"
-	switch status {
-	case models.StatusToClarify, models.StatusBacklog:
-		stateName = "To Do"
-	case models.StatusToSpecify:
-		stateName = "To Do"
-	case models.StatusToImplement, models.StatusInProgress:
-		stateName = "In Progress"
-	case models.StatusToTest, models.StatusToValidate:
-		stateName = "In Review"
-	case models.StatusToClose, models.StatusFinished, models.StatusDone:
-		stateName = "Done"
+	stateName := mapStatusToJiraState(status)
+
+	// acli addresses work items with --key (not positionally) and names the
+	// target status --status. --yes skips the interactive confirmation.
+	args := []string{"jira", "workitem", "transition", "--key", issueKey, "--status", stateName, "--yes"}
+	if _, err := r.runCommand(ctx, repoPath, acliPath, args...); err == nil {
+		return nil
 	}
 
-	args := []string{"jira", "workitem", "transition", issueKey, "--state", stateName}
-	_, err := r.runCommand(ctx, repoPath, acliPath, args...)
-	return err
+	// Older acli builds took the key positionally and called the flag --state.
+	fallback := []string{"jira", "workitem", "transition", issueKey, "--state", stateName}
+	_, err := r.runCommand(ctx, repoPath, acliPath, fallback...)
+	if err != nil {
+		return fmt.Errorf("transition de %s vers '%s' impossible: %w", issueKey, stateName, err)
+	}
+	return nil
+}
+
+// UpdateJiraIssue pushes the full editable payload (summary, description,
+// priority, labels) to Jira and then transitions the work item if a status is
+// supplied. Every field is optional; nil means "leave untouched".
+func (r *Runner) UpdateJiraIssue(issueKey string, repoPath string, title *string, description *string, priority *models.Priority, status *models.Status, labels []string, removedLabels []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	// acli 'workitem edit' exposes --summary, --description, --labels and
+	// --remove-labels (comma-separated values, not repeated flags), and has no
+	// --priority flag: the priority is intentionally left untouched here.
+	var fieldArgs []string
+	if title != nil && strings.TrimSpace(*title) != "" {
+		fieldArgs = append(fieldArgs, "--summary", *title)
+	}
+	if description != nil {
+		fieldArgs = append(fieldArgs, "--description", *description)
+	}
+	if added := filterJiraLabels(labels); len(added) > 0 {
+		fieldArgs = append(fieldArgs, "--labels", strings.Join(added, ","))
+	}
+	if removed := filterJiraLabels(removedLabels); len(removed) > 0 {
+		fieldArgs = append(fieldArgs, "--remove-labels", strings.Join(removed, ","))
+	}
+
+	var firstErr error
+	if len(fieldArgs) > 0 {
+		args := append([]string{"jira", "workitem", "edit", "--key", issueKey}, fieldArgs...)
+		args = append(args, "--yes")
+		if _, err := r.runCommand(ctx, repoPath, acliPath, args...); err != nil {
+			// Retry without the label mutations: a label the Jira project does
+			// not allow makes the whole edit fail, and losing the label update
+			// is preferable to losing the summary and description update too.
+			var narrowed []string
+			for i := 0; i+1 < len(fieldArgs); i += 2 {
+				if fieldArgs[i] == "--labels" || fieldArgs[i] == "--remove-labels" {
+					continue
+				}
+				narrowed = append(narrowed, fieldArgs[i], fieldArgs[i+1])
+			}
+			if len(narrowed) > 0 {
+				retry := append([]string{"jira", "workitem", "edit", "--key", issueKey}, narrowed...)
+				retry = append(retry, "--yes")
+				if _, err2 := r.runCommand(ctx, repoPath, acliPath, retry...); err2 != nil {
+					firstErr = fmt.Errorf("acli jira workitem edit %s a échoué: %w", issueKey, err2)
+				}
+			} else {
+				firstErr = fmt.Errorf("acli jira workitem edit %s a échoué: %w", issueKey, err)
+			}
+		}
+	}
+
+	if status != nil {
+		if err := r.UpdateJiraIssueState(issueKey, *status, repoPath); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	return firstErr
 }
 
 func (r *Runner) PostJiraComment(issueKey string, body string, repoPath string) error {
@@ -1255,9 +1711,20 @@ func (r *Runner) PostJiraComment(issueKey string, body string, repoPath string) 
 		acliPath = "acli"
 	}
 
-	args := []string{"jira", "workitem", "comment", issueKey, "--body", body}
-	_, err := r.runCommand(ctx, repoPath, acliPath, args...)
-	return err
+	// 'comment' is a command group: the leaf that posts a comment is 'create',
+	// and the work item is addressed with --key.
+	args := []string{"jira", "workitem", "comment", "create", "--key", issueKey, "--body", body}
+	if _, err := r.runCommand(ctx, repoPath, acliPath, args...); err == nil {
+		return nil
+	}
+
+	// Older acli builds accepted 'comment' directly with a positional key.
+	fallback := []string{"jira", "workitem", "comment", issueKey, "--body", body}
+	_, err := r.runCommand(ctx, repoPath, acliPath, fallback...)
+	if err != nil {
+		return fmt.Errorf("publication du commentaire sur %s impossible: %w", issueKey, err)
+	}
+	return nil
 }
 
 func (r *Runner) AddIssueComment(source string, repo string, repoPath string, key string, body string) error {
@@ -1377,33 +1844,39 @@ func (r *Runner) RunAI(settings *models.Settings, skillID string, task *models.T
 	case "specify":
 		promptTemplate = settings.PromptSpecify
 		if promptTemplate == "" {
-			if settings.SpecFramework == "openfeature" {
-				promptTemplate = `Tu es le Lead Architecte & Feature Engineer pour Taskacao. Rédige une spécification technique OpenFeature complète et standardisée pour la tâche :
+			if NormalizeSpecFramework(settings.SpecFramework) == "openspec" {
+				promptTemplate = `Tu es le Lead Architecte pour Taskacao. Rédige une proposition de changement OpenSpec complète pour la tâche :
 Clé : {issueKey}
 Titre : {issueTitle}
 Description : {issueDesc}
 Branche Git cible : {branchName}
 Dossier du projet : {repoPath}
 
-Contenu attendu (Framework Spec-Driven Design : OpenFeature) :
-1. Définition des Feature Flags (Flag Key, Types: boolean/string/number/object, Valeurs par défaut, Variations)
-2. Evaluation Context & Règles de ciblage (Attributs utilisateur, tenant, environnement)
-3. Intégration OpenFeature SDK (Provider, Evaluation Hooks, Fallbacks de sécurité)
-4. Cycle de vie du Flag (Création -> Rollout progressif -> Dépréciation & Nettoyage de code)
-5. Plan de tests et de validation (Scénarios Given / When / Then).`
+Contenu attendu (Framework Spec-Driven Design : OpenSpec). Écris les fichiers dans
+openspec/changes/{issueKey}-<titre-slug>/ :
+1. proposal.md : problème, valeur, périmètre inclus et exclu.
+2. design.md : décisions techniques et alternatives écartées.
+3. tasks.md : checklist ordonnée et vérifiable de mise en œuvre.
+4. specs/<capability>/spec.md : deltas de comportement en sections ## ADDED / ## MODIFIED / ## REMOVED, avec des scénarios Given / When / Then.
+5. Valide avec 'openspec validate <change-id> --strict' et corrige les erreurs signalées.
+
+Si le répertoire openspec/ est absent, signale-le au lieu de deviner la structure.`
 			} else {
-				promptTemplate = `Tu es le Product Owner & Architecte technique pour Taskacao. Rédige une spécification technique SpecKit complète pour la tâche :
+				promptTemplate = `Tu es le Product Owner & Architecte technique pour Taskacao. Rédige une spécification GitHub Spec Kit complète pour la tâche :
 Clé : {issueKey}
 Titre : {issueTitle}
 Description : {issueDesc}
 Branche Git cible : {branchName}
 Dossier du projet : {repoPath}
 
-Contenu attendu (Framework Spec-Driven Design : SpecKit) :
-1. Contexte & User Stories
-2. Architecture et composants cibles (fichiers à créer / modifier)
-3. Critères d'acceptation détaillés (Scénarios Given / When / Then)
-4. Plan de tests et de validation.`
+Contenu attendu (Framework Spec-Driven Design : GitHub Spec Kit). Écris les fichiers dans
+specs/{issueKey}-<titre-slug>/ :
+1. spec.md : contexte, user stories priorisées, périmètre exclu, exigences fonctionnelles numérotées et critères d'acceptation Given / When / Then. Pas de choix d'implémentation ici.
+2. plan.md : pile technique, architecture, composants et fichiers cibles, diagrammes de flux Mermaid.
+3. tasks.md : checklist ordonnée et vérifiable de mise en œuvre, plus le plan de tests.
+
+Respecte .specify/memory/constitution.md s'il existe. Marque explicitement les points à
+clarifier au lieu de les deviner.`
 			}
 		}
 	case "implement":
@@ -1492,56 +1965,22 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 	var output string
 	var execErr error
 
-	if settings.AICommandTemplate != "" && (provider == "custom" || strings.Contains(settings.AICommandTemplate, "{prompt}")) {
-		cmdStr := settings.AICommandTemplate
-		cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", finalPrompt)
-		cmdToRun = strings.ReplaceAll(cmdToRun, "{issueKey}", task.Key)
-		cmdToRun = strings.ReplaceAll(cmdToRun, "{issueTitle}", task.Title)
-		cmdToRun = strings.ReplaceAll(cmdToRun, "{issueDesc}", task.Description)
-		cmdToRun = strings.ReplaceAll(cmdToRun, "{branchName}", branchName)
-		cmdToRun = strings.ReplaceAll(cmdToRun, "{repoPath}", repoDir)
-		cmdToRun = strings.ReplaceAll(cmdToRun, "{tracker}", trackerName)
-		cmdToRun = strings.ReplaceAll(cmdToRun, "{repo}", repoName)
-
-		steps = append(steps, fmt.Sprintf("Exécution de la commande personnalisée : %s dans %s", cmdToRun, filepath.Base(repoDir)))
-		output, execErr = r.runCommand(ctx, repoDir, "sh", "-c", cmdToRun)
-	} else {
-		switch provider {
-		case "agy":
-			agyPath, _ := FindCliTool("agy")
-			steps = append(steps, fmt.Sprintf("Exécution de : agy -p \"...\" dans %s", filepath.Base(repoDir)))
-			output, execErr = r.runCommand(ctx, repoDir, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
-
-		case "vibe":
-			vibePath, _ := FindCliTool("vibe")
-			steps = append(steps, fmt.Sprintf("Exécution de : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
-			output, execErr = r.runCommand(ctx, repoDir, vibePath, "-p", finalPrompt, "--auto-approve")
-
-		case "claude":
-			claudePath, _ := FindCliTool("claude")
-			steps = append(steps, fmt.Sprintf("Exécution de : claude -p \"...\" dans %s", filepath.Base(repoDir)))
-			output, execErr = r.runCommand(ctx, repoDir, claudePath, "-p", finalPrompt)
-
-		case "gemini":
-			geminiPath, _ := FindCliTool("gemini")
-			steps = append(steps, fmt.Sprintf("Exécution de : gemini -p \"...\" dans %s", filepath.Base(repoDir)))
-			output, execErr = r.runCommand(ctx, repoDir, geminiPath, "-p", finalPrompt)
-
-		case "cursor":
-			cursorPath, _ := FindCliTool("cursor")
-			steps = append(steps, fmt.Sprintf("Exécution de : cursor agent -p \"...\" dans %s", filepath.Base(repoDir)))
-			output, execErr = r.runCommand(ctx, repoDir, cursorPath, "agent", "-p", finalPrompt)
-
-		default:
-			cmdStr := settings.AICommandTemplate
-			if cmdStr == "" {
-				cmdStr = "agy -p \"{prompt}\""
-			}
-			cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", finalPrompt)
-			steps = append(steps, fmt.Sprintf("Exécution de la commande personnalisée dans %s", filepath.Base(repoDir)))
-			output, execErr = r.runCommand(ctx, repoDir, "sh", "-c", cmdToRun)
-		}
+	// The custom-template branch substitutes the task placeholders first, then
+	// hands the resolved template to the shared dispatcher.
+	resolvedTemplate := settings.AICommandTemplate
+	if resolvedTemplate != "" {
+		resolvedTemplate = strings.ReplaceAll(resolvedTemplate, "{issueKey}", task.Key)
+		resolvedTemplate = strings.ReplaceAll(resolvedTemplate, "{issueTitle}", task.Title)
+		resolvedTemplate = strings.ReplaceAll(resolvedTemplate, "{issueDesc}", task.Description)
+		resolvedTemplate = strings.ReplaceAll(resolvedTemplate, "{branchName}", branchName)
+		resolvedTemplate = strings.ReplaceAll(resolvedTemplate, "{repoPath}", repoDir)
+		resolvedTemplate = strings.ReplaceAll(resolvedTemplate, "{tracker}", trackerName)
+		resolvedTemplate = strings.ReplaceAll(resolvedTemplate, "{repo}", repoName)
 	}
+
+	var execSteps []string
+	output, execSteps, execErr = r.execAgentCommand(ctx, repoDir, provider, resolvedTemplate, finalPrompt)
+	steps = append(steps, execSteps...)
 
 	if execErr != nil {
 		steps = append(steps, fmt.Sprintf("⚠️ Erreur d'exécution : %v", execErr))
@@ -1552,236 +1991,114 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 	return output, steps, nil
 }
 
-// RunAIChatStream executes the configured AI CLI with live streaming of output chunks and steps
-func (r *Runner) RunAIChatStream(
-	ctx context.Context,
-	settings *models.Settings,
-	task *models.Task,
-	skillID string,
-	userPrompt string,
-	history []models.TaskMessage,
-	onChunk func(chunk string),
-	onStep func(step string),
-) (string, []string, error) {
-	repoDir := ""
-	if settings != nil && settings.RepoPath != "" {
-		repoDir = strings.TrimSpace(settings.RepoPath)
+// escapeForDoubleQuotes makes a string safe to interpolate inside a
+// double-quoted shell word. Inside double quotes sh only treats \, ", $ and `
+// specially, so backslash-escaping exactly those four yields the literal text.
+//
+// This matters for security, not just for quoting: the AI command template is
+// executed through 'sh -c', and the prompt embeds task titles and descriptions
+// that come straight from Jira, GitHub or Linear. Without escaping, a ticket
+// titled `"; rm -rf ~ #` would run as a shell command.
+func escapeForDoubleQuotes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch r {
+		case '\\', '"', '$', '`':
+			b.WriteRune('\\')
+		}
+		b.WriteRune(r)
 	}
-	if repoDir == "" {
-		cwd, _ := os.Getwd()
-		repoDir = cwd
-	}
-	repoDir = filepath.Clean(repoDir)
-	if abs, err := filepath.Abs(repoDir); err == nil {
-		repoDir = abs
-	}
+	return b.String()
+}
 
+// execAgentCommand runs the configured AI CLI for an already-resolved prompt.
+// cmdTemplate must have every placeholder other than {prompt} already
+// substituted by the caller; it is used when it is non-empty and either the
+// provider is "custom" or the template carries a {prompt} slot.
+func (r *Runner) execAgentCommand(ctx context.Context, repoDir string, provider string, cmdTemplate string, finalPrompt string) (string, []string, error) {
 	var steps []string
-	addStep := func(step string) {
-		steps = append(steps, step)
-		if onStep != nil {
-			onStep(step)
-		}
+
+	if cmdTemplate != "" && (provider == "custom" || strings.Contains(cmdTemplate, "{prompt}")) {
+		cmdToRun := strings.ReplaceAll(cmdTemplate, "{prompt}", escapeForDoubleQuotes(finalPrompt))
+		steps = append(steps, fmt.Sprintf("Exécution de la commande personnalisée : %s dans %s", cmdToRun, filepath.Base(repoDir)))
+		out, err := r.runCommand(ctx, repoDir, "sh", "-c", cmdToRun)
+		return out, steps, err
 	}
 
-	if stat, err := os.Stat(repoDir); err != nil || !stat.IsDir() {
-		cwd, _ := os.Getwd()
-		addStep(fmt.Sprintf("⚠️ Répertoire projet '%s' introuvable, repli sur : %s", repoDir, cwd))
-		repoDir = cwd
-	} else {
-		addStep(fmt.Sprintf("📁 Dossier de travail actif (CWD) : %s", repoDir))
+	switch provider {
+	case "agy":
+		agyPath, _ := FindCliTool("agy")
+		steps = append(steps, fmt.Sprintf("Exécution de : agy -p \"...\" dans %s", filepath.Base(repoDir)))
+		out, err := r.runCommand(ctx, repoDir, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
+		return out, steps, err
+
+	case "vibe":
+		vibePath, _ := FindCliTool("vibe")
+		steps = append(steps, fmt.Sprintf("Exécution de : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
+		out, err := r.runCommand(ctx, repoDir, vibePath, "-p", finalPrompt, "--auto-approve")
+		return out, steps, err
+
+	case "claude":
+		claudePath, _ := FindCliTool("claude")
+		steps = append(steps, fmt.Sprintf("Exécution de : claude -p \"...\" dans %s", filepath.Base(repoDir)))
+		out, err := r.runCommand(ctx, repoDir, claudePath, "-p", finalPrompt)
+		return out, steps, err
+
+	case "gemini":
+		geminiPath, _ := FindCliTool("gemini")
+		steps = append(steps, fmt.Sprintf("Exécution de : gemini -p \"...\" dans %s", filepath.Base(repoDir)))
+		out, err := r.runCommand(ctx, repoDir, geminiPath, "-p", finalPrompt)
+		return out, steps, err
+
+	case "cursor":
+		cursorPath, _ := FindCliTool("cursor")
+		steps = append(steps, fmt.Sprintf("Exécution de : cursor agent -p \"...\" dans %s", filepath.Base(repoDir)))
+		out, err := r.runCommand(ctx, repoDir, cursorPath, "agent", "-p", finalPrompt)
+		return out, steps, err
+
+	default:
+		cmdStr := cmdTemplate
+		if cmdStr == "" {
+			cmdStr = "agy -p \"{prompt}\""
+		}
+		cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", escapeForDoubleQuotes(finalPrompt))
+		steps = append(steps, fmt.Sprintf("Exécution de la commande personnalisée dans %s", filepath.Base(repoDir)))
+		out, err := r.runCommand(ctx, repoDir, "sh", "-c", cmdToRun)
+		return out, steps, err
+	}
+}
+
+// RunAgentPrompt executes the configured AI CLI on a free-form prompt with no
+// task context. Used by features that are not tied to a single work item, such
+// as the daily digest agenda.
+func (r *Runner) RunAgentPrompt(ctx context.Context, settings *models.Settings, prompt string) (string, []string, error) {
+	if settings == nil {
+		return "", nil, fmt.Errorf("réglages IA indisponibles")
 	}
 
-	branchName := ""
-	if task.BranchName != nil && *task.BranchName != "" {
-		branchName = *task.BranchName
-	} else {
-		cleanTitle := strings.ToLower(task.Title)
-		cleanTitle = strings.ReplaceAll(cleanTitle, " ", "-")
-		cleanTitle = strings.ReplaceAll(cleanTitle, "'", "-")
-		if len(cleanTitle) > 30 {
-			cleanTitle = cleanTitle[:30]
-		}
-		branchName = fmt.Sprintf("%s-%s", task.Key, cleanTitle)
-	}
-
-	var promptBuilder strings.Builder
-	promptBuilder.WriteString(fmt.Sprintf("Tu es l'agent Copilot autonome pour Taskacao. Tu es en discussion directe avec le développeur concernant la tâche suivante :\n"))
-	promptBuilder.WriteString(fmt.Sprintf("- Clé : %s\n- Titre : %s\n- Description : %s\n- Branche Git : %s\n- Dossier du projet (CWD) : %s\n\n", task.Key, task.Title, task.Description, branchName, repoDir))
-
-	if skillID != "" {
-		switch skillID {
-		case "clarify":
-			promptBuilder.WriteString("Objectif de l'action : Analyse les ambiguïtés techniques et pose des questions précises de cadrage.\n\n")
-		case "specify":
-			promptBuilder.WriteString("Objectif de l'action : Rédige ou affine la spécification technique (Speckit) et les critères d'acceptation.\n\n")
-		case "implement":
-			promptBuilder.WriteString("Objectif de l'action : Implémente et écris directement les modifications de code dans le projet, puis teste le build.\n\n")
-		case "create_pr":
-			promptBuilder.WriteString("Objectif de l'action : Vérifie l'état Git, commite les changements et prépare/crée la PR.\n\n")
-		}
-	}
-
-	// Include recent conversation history (up to last 10 messages)
-	if len(history) > 0 {
-		promptBuilder.WriteString("--- Historique récent des échanges ---\n")
-		startIdx := 0
-		if len(history) > 10 {
-			startIdx = len(history) - 10
-		}
-		for _, msg := range history[startIdx:] {
-			roleLabel := "Développeur"
-			if msg.Role == "assistant" {
-				roleLabel = "Agent Copilot"
-			} else if msg.Role == "system" {
-				roleLabel = "Système"
-			}
-			promptBuilder.WriteString(fmt.Sprintf("%s : %s\n\n", roleLabel, msg.Content))
-		}
-		promptBuilder.WriteString("--- Fin de l'historique ---\n\n")
-	}
-
-	promptBuilder.WriteString(fmt.Sprintf("Dernier message / consigne du développeur :\n%s\n\n", userPrompt))
-	promptBuilder.WriteString("Consignes de réponse :\n1. Réponds de manière concise, structurée (en Markdown) et actionnable.\n2. Si une action de code ou de commande est demandée, réalise-la directement dans le CWD et résume ce qui a été fait.\n")
-
-	finalPrompt := promptBuilder.String()
-
-	provider := strings.ToLower(settings.AIProvider)
+	provider := settings.AIProvider
 	if provider == "" {
 		provider = "agy"
 	}
-	addStep(fmt.Sprintf("🤖 Moteur IA : %s", strings.ToUpper(provider)))
 
-	var cmd *exec.Cmd
-	if settings.AICommandTemplate != "" && (provider == "custom" || strings.Contains(settings.AICommandTemplate, "{prompt}")) {
-		cmdStr := settings.AICommandTemplate
-		cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", finalPrompt)
-		addStep(fmt.Sprintf("Exécution de la commande personnalisée dans %s", filepath.Base(repoDir)))
-		cmd = exec.CommandContext(ctx, "sh", "-c", cmdToRun)
-	} else {
-		switch provider {
-		case "agy":
-			agyPath, _ := FindCliTool("agy")
-			addStep(fmt.Sprintf("Exécution en direct : agy -p \"...\" dans %s", filepath.Base(repoDir)))
-			cmd = exec.CommandContext(ctx, agyPath, "-p", finalPrompt, "--dangerously-skip-permissions")
-		case "vibe":
-			vibePath, _ := FindCliTool("vibe")
-			addStep(fmt.Sprintf("Exécution en direct : vibe -p \"...\" dans %s", filepath.Base(repoDir)))
-			cmd = exec.CommandContext(ctx, vibePath, "-p", finalPrompt, "--auto-approve")
-		case "claude":
-			claudePath, _ := FindCliTool("claude")
-			addStep(fmt.Sprintf("Exécution en direct : claude -p \"...\" dans %s", filepath.Base(repoDir)))
-			cmd = exec.CommandContext(ctx, claudePath, "-p", finalPrompt)
-		case "gemini":
-			geminiPath, _ := FindCliTool("gemini")
-			addStep(fmt.Sprintf("Exécution en direct : gemini -p \"...\" dans %s", filepath.Base(repoDir)))
-			cmd = exec.CommandContext(ctx, geminiPath, "-p", finalPrompt)
-		case "cursor":
-			cursorPath, _ := FindCliTool("cursor")
-			addStep(fmt.Sprintf("Exécution en direct : cursor agent -p \"...\" dans %s", filepath.Base(repoDir)))
-			cmd = exec.CommandContext(ctx, cursorPath, "agent", "-p", finalPrompt)
-		default:
-			cmdStr := settings.AICommandTemplate
-			if cmdStr == "" {
-				cmdStr = "agy -p \"{prompt}\""
-			}
-			cmdToRun := strings.ReplaceAll(cmdStr, "{prompt}", finalPrompt)
-			addStep(fmt.Sprintf("Exécution de la commande personnalisée dans %s", filepath.Base(repoDir)))
-			cmd = exec.CommandContext(ctx, "sh", "-c", cmdToRun)
-		}
+	repoDir := strings.TrimSpace(settings.RepoPath)
+	if repoDir == "" {
+		repoDir = "."
+	}
+	if abs, err := filepath.Abs(repoDir); err == nil {
+		repoDir = abs
+	}
+	if stat, err := os.Stat(repoDir); err != nil || !stat.IsDir() {
+		cwd, _ := os.Getwd()
+		repoDir = cwd
 	}
 
-	cmd.Dir = repoDir
-
-	// Inherit and extend PATH
-	env := os.Environ()
-	customPath := GetDynamicCustomPath()
-	foundPath := false
-	for i, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			env[i] = "PATH=" + customPath + ":" + strings.TrimPrefix(e, "PATH=")
-			foundPath = true
-			break
-		}
-	}
-	if !foundPath {
-		env = append(env, "PATH="+customPath)
-	}
-	cmd.Env = env
-
-	stdoutPipe, err := cmd.StdoutPipe()
+	out, steps, err := r.execAgentCommand(ctx, repoDir, provider, settings.AICommandTemplate, prompt)
 	if err != nil {
-		return "", steps, fmt.Errorf("failed to open stdout pipe: %w", err)
+		return out, steps, fmt.Errorf("exécution de l'agent %s impossible: %w", provider, err)
 	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return "", steps, fmt.Errorf("failed to open stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		addStep(fmt.Sprintf("⚠️ Échec du démarrage : %v", err))
-		return "", steps, fmt.Errorf("failed to start command: %w", err)
-	}
-
-	var totalOutput bytes.Buffer
-	var outMu sync.Mutex
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Stream Stdout
-	go func() {
-		defer wg.Done()
-		buf := make([]byte, 512)
-		for {
-			n, readErr := stdoutPipe.Read(buf)
-			if n > 0 {
-				chunk := string(buf[:n])
-				outMu.Lock()
-				totalOutput.Write(buf[:n])
-				outMu.Unlock()
-				if onChunk != nil {
-					onChunk(chunk)
-				}
-			}
-			if readErr != nil {
-				break
-			}
-		}
-	}()
-
-	// Stream Stderr
-	go func() {
-		defer wg.Done()
-		buf := make([]byte, 512)
-		for {
-			n, readErr := stderrPipe.Read(buf)
-			if n > 0 {
-				chunk := string(buf[:n])
-				outMu.Lock()
-				totalOutput.Write(buf[:n])
-				outMu.Unlock()
-				if onChunk != nil {
-					onChunk(chunk)
-				}
-			}
-			if readErr != nil {
-				break
-			}
-		}
-	}()
-
-	wg.Wait()
-	cmdErr := cmd.Wait()
-
-	result := totalOutput.String()
-	if cmdErr != nil {
-		addStep(fmt.Sprintf("⚠️ Fin avec avertissement/code retour : %v", cmdErr))
-	} else {
-		addStep("✅ Réponse générée et transmise en direct avec succès")
-	}
-
-	return result, steps, nil
+	return out, steps, nil
 }
 
 // GetGitDiff computes git diff for a task branch or working directory
@@ -2225,3 +2542,11 @@ func (r *Runner) OpenInEditor(editorCmd string, targetPath string) error {
 	return nil
 }
 
+
+// runCommandForTest runs a shell snippet and returns its raw stdout. It exists
+// so the escaping tests can assert what the shell actually parses.
+func (r *Runner) runCommandForTest(script string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return r.runCommand(ctx, "", "sh", "-c", script)
+}

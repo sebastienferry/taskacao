@@ -46,7 +46,7 @@ export const SyncView: React.FC = () => {
   // Local form state initialized from active project or fallback to global settings
   const [linearTeam, setLinearTeam] = useState(currentProject?.linearTeam || settings.linearTeam || '')
   const [githubRepo, setGithubRepo] = useState(currentProject?.githubRepo || settings.githubRepo || '')
-  const [jiraKey, setJiraKey] = useState(currentProject?.linearTeam || '')
+  const [jiraKey, setJiraKey] = useState(currentProject?.jiraProject || settings.jiraProject || '')
   const [repoPath, setRepoPath] = useState(currentProject?.repoPath || settings.repoPath || '')
   const [issueTracker, setIssueTracker] = useState<IssueTracker>(activeTracker)
   const [isSaved, setIsSaved] = useState(false)
@@ -54,19 +54,19 @@ export const SyncView: React.FC = () => {
   // Custom parameters for manual triggers on the active project
   const [customLinearTeam, setCustomLinearTeam] = useState(currentProject?.linearTeam || settings.linearTeam || '')
   const [customGithubRepo, setCustomGithubRepo] = useState(currentProject?.githubRepo || settings.githubRepo || '')
-  const [customJiraKey, setCustomJiraKey] = useState(currentProject?.linearTeam || '')
+  const [customJiraKey, setCustomJiraKey] = useState(currentProject?.jiraProject || settings.jiraProject || '')
 
   // Keep form updated when currentProject changes
   React.useEffect(() => {
     if (currentProject) {
       setLinearTeam(currentProject.linearTeam || '')
       setGithubRepo(currentProject.githubRepo || '')
-      setJiraKey(currentProject.linearTeam || '')
+      setJiraKey(currentProject.jiraProject || '')
       setRepoPath(currentProject.repoPath || '')
       setIssueTracker(currentProject.issueTracker || 'local')
       setCustomLinearTeam(currentProject.linearTeam || '')
       setCustomGithubRepo(currentProject.githubRepo || '')
-      setCustomJiraKey(currentProject.linearTeam || '')
+      setCustomJiraKey(currentProject.jiraProject || '')
     }
   }, [currentProject])
 
@@ -74,15 +74,17 @@ export const SyncView: React.FC = () => {
     e.preventDefault()
     if (currentProject) {
       await updateProject(currentProject.id, {
-        linearTeam: (issueTracker === 'jira' ? jiraKey : linearTeam).trim().toUpperCase(),
+        linearTeam: linearTeam.trim().toUpperCase(),
         githubRepo: githubRepo.trim(),
+        jiraProject: jiraKey.trim().toUpperCase(),
         repoPath: repoPath.trim(),
         issueTracker,
       })
     }
     await updateSettings({
-      linearTeam: (issueTracker === 'jira' ? jiraKey : linearTeam).trim().toUpperCase(),
+      linearTeam: linearTeam.trim().toUpperCase(),
       githubRepo: githubRepo.trim(),
+      jiraProject: jiraKey.trim().toUpperCase(),
       repoPath: repoPath.trim(),
       issueTracker,
     })
@@ -191,7 +193,7 @@ export const SyncView: React.FC = () => {
                   : activeTracker === 'github'
                   ? `Synchroniser GitHub (${currentProject?.githubRepo || 'Projet'})`
                   : activeTracker === 'jira'
-                  ? `Synchroniser Jira (${currentProject?.linearTeam || 'Projet'})`
+                  ? `Synchroniser Jira (${currentProject?.jiraProject || 'Projet'})`
                   : 'Recharger tâches locales'}
               </span>
             </button>
@@ -231,8 +233,9 @@ export const SyncView: React.FC = () => {
                 </h3>
                 <p className="text-xs text-[var(--text-muted)] font-mono truncate max-w-lg">
                   {currentProject.repoPath || 'Dossier par défaut du projet'}
-                  {currentProject.linearTeam ? ` · Équipe/Clé: ${currentProject.linearTeam}` : ''}
+                  {currentProject.linearTeam ? ` · Équipe Linear: ${currentProject.linearTeam}` : ''}
                   {currentProject.githubRepo ? ` · GitHub: ${currentProject.githubRepo}` : ''}
+                  {currentProject.jiraProject ? ` · Jira: ${currentProject.jiraProject}` : ''}
                 </p>
               </div>
             </div>
@@ -370,7 +373,7 @@ export const SyncView: React.FC = () => {
                   </h2>
                   <span className="text-xs text-emerald-400 flex items-center gap-1.5 font-medium">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    Connecté à Jira · Projet {customJiraKey || currentProject?.linearTeam || 'Non défini'}
+                    Connecté à Jira · Projet {customJiraKey || currentProject?.jiraProject || 'Non défini'}
                   </span>
                 </div>
               </div>
@@ -380,7 +383,7 @@ export const SyncView: React.FC = () => {
             </div>
 
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-              Synchronise les tickets et anomalies de votre projet Jira via la CLI Jira.
+              Synchronise les tickets et anomalies de votre projet Jira via la CLI Atlassian (acli).
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end pt-2">

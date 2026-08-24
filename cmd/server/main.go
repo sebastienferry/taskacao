@@ -50,6 +50,8 @@ func main() {
 	mux.HandleFunc("/api/sync/github", h.HandleSyncGithub)
 	mux.HandleFunc("/api/sync/jira", h.HandleSyncJira)
 	mux.HandleFunc("/api/skills", h.HandleSkills)
+	mux.HandleFunc("/api/spec-framework/status", h.HandleSpecFrameworkStatus)
+	mux.HandleFunc("/api/spec-framework/install", h.HandleSpecFrameworkInstall)
 	mux.HandleFunc("/api/projects", h.HandleProjects)
 	mux.HandleFunc("/api/projects/", h.HandleProjectDetail)
 	mux.HandleFunc("/api/tasks", h.HandleTasks)

@@ -38,17 +38,6 @@ export interface TaskActivity {
   duration?: string
 }
 
-export interface TaskMessage {
-  id: string
-  taskId: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  activityId?: string
-  skillId?: string
-  steps?: string[]
-  createdAt: string
-}
-
 export interface ActivityStats {
   total: number
   queued: number
@@ -66,11 +55,24 @@ export interface Project {
   icon: string
   color: AccentColor | string
   repoPath: string
+  /**
+   * Répertoires de travail connus du projet. Alimentée automatiquement :
+   * dès qu'un ticket épingle un nouveau CWD, le chemin est enregistré ici.
+   */
+  repoPaths?: string[]
   gitRemoteUrl?: string
   linearTeam: string
   githubRepo: string
+  /** Jira project key used as `acli --project`, e.g. "PE". */
+  jiraProject?: string
   issueTracker: IssueTracker
+  /** Linear project URL, or the Jira base URL (e.g. https://acme.atlassian.net). */
   trackerUrl?: string
+  /**
+   * "standard" for a delivery project, "personal" for a personal board. The
+   * daily digest is only served for a personal project.
+   */
+  projectType?: ProjectType
   isDefault: boolean
   taskCount?: number
   stageMapping?: Record<WorkflowStage, string>
@@ -105,8 +107,19 @@ export interface Task {
   dueDate?: string | null
   branchName?: string
   prUrl?: string
+  /** Répertoire de travail propre au ticket. Vide = hérite du projet, puis du réglage global. */
+  repoPath?: string
   source?: TaskSource
   externalUrl?: string
+  /** Tracker work item type. Only "Task" and "Story" are imported. */
+  issueType?: string
+  /**
+   * Parent work item — an epic, or a parent story for a sub-task — carried as a
+   * property of the task rather than as a card of its own.
+   */
+  parentKey?: string
+  parentTitle?: string
+  parentType?: string
   activities?: TaskActivity[]
   createdAt: string
   updatedAt: string
@@ -193,7 +206,7 @@ export type Language = 'fr' | 'en'
 
 export type Density = 'compact' | 'standard' | 'comfortable'
 
-export type ViewMode = 'board' | 'list' | 'activities' | 'sync'
+export type ViewMode = 'board' | 'list' | 'activities' | 'sync' | 'digest'
 
 export type BoardGroupingMode = 'workflow' | 'status'
 
@@ -205,7 +218,47 @@ export type AIProvider = 'agy' | 'vibe' | 'claude' | 'gemini' | 'codex' | 'curso
 
 export type IssueTracker = 'linear' | 'github' | 'jira' | 'local'
 
-export type SpecFramework = 'speckit' | 'openfeature'
+export type ProjectType = 'standard' | 'personal'
+
+/**
+ * Spec-Driven Design frameworks Taskacao can scaffold into a project.
+ * - `speckit`  : GitHub Spec Kit (`specify` CLI, `.specify/` + `specs/`)
+ * - `openspec` : OpenSpec (`openspec` CLI, `openspec/changes/` + `openspec/specs/`)
+ */
+export type SpecFramework = 'speckit' | 'openspec'
+
+export interface SpecFrameworkStatus {
+  framework: SpecFramework
+  frameworkLabel: string
+  repoPath: string
+  cliAvailable: boolean
+  cliCommand: string
+  initialized: boolean
+  markerPaths?: string[]
+  installHint?: string
+}
+
+export interface SpecFrameworkStep {
+  label: string
+  command: string
+  success: boolean
+  skipped: boolean
+  output?: string
+  error?: string
+}
+
+export interface SpecFrameworkInstallResult {
+  framework: SpecFramework
+  frameworkLabel: string
+  repoPath: string
+  installed: boolean
+  alreadyInit: boolean
+  version?: string
+  markerPaths?: string[]
+  steps: SpecFrameworkStep[]
+  message: string
+  error?: string
+}
 
 export interface UserSettings {
   id: number
@@ -224,6 +277,8 @@ export interface UserSettings {
   issueTracker: IssueTracker
   linearTeam: string
   githubRepo: string
+  jiraProject?: string
+  jiraUrl?: string
   promptClarify: string
   promptSpecify: string
   promptImplement: string
@@ -232,6 +287,73 @@ export interface UserSettings {
   editorCommand: string
   specFramework?: SpecFramework
   updatedAt: string
+}
+
+export interface DigestTaskRef {
+  key: string
+  title: string
+  status: Status
+  priority: Priority
+  issueType?: string
+  assignee?: string
+  parentKey?: string
+  parentTitle?: string
+  externalUrl?: string
+  branchName?: string
+  prUrl?: string
+  dueDate?: string
+  ageDays: number
+  isStale: boolean
+  /** The tracker did not expose real dates at sync time. */
+  datesUnknown?: boolean
+  daysToDue?: number
+}
+
+export interface DigestEpicGroup {
+  parentKey: string
+  parentTitle?: string
+  openCount: number
+  doneCount: number
+}
+
+export interface DigestStats {
+  totalOpen: number
+  urgent: number
+  high: number
+  stale: number
+  overdue: number
+  awaitingReview: number
+  doneLast7Days: number
+  openDateUnknown: number
+  closedDateUnknown: number
+}
+
+export type DigestAIStatus = 'none' | 'queued' | 'running' | 'completed' | 'failed'
+
+export interface DailyDigest {
+  projectId: string
+  projectName: string
+  date: string
+  /** Narrows the digest to one person; empty means the whole project. */
+  assignee: string
+  /** Every assignee present in the project's tasks, in the tracker's spelling. */
+  assignees?: string[]
+  focus: DigestTaskRef[]
+  watch: DigestTaskRef[]
+  stale: DigestTaskRef[]
+  dueSoon: DigestTaskRef[]
+  awaitingReview: DigestTaskRef[]
+  recentlyDone: DigestTaskRef[]
+  byEpic: DigestEpicGroup[]
+  stats: DigestStats
+  /** Markdown agenda produced by the project's AI agent (meetings). */
+  agenda?: string
+  aiStatus: DigestAIStatus
+  aiError?: string
+  aiActivityId?: string
+  aiUpdatedAt?: string
+  markdown: string
+  generatedAt: string
 }
 
 export interface CliStatus {

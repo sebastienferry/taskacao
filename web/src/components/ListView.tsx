@@ -20,6 +20,7 @@ import {
   EyeOff,
   MessageSquare,
   Code2,
+  Layers,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Task, Status, Priority } from '../types'
@@ -27,6 +28,8 @@ import type { Task, Status, Priority } from '../types'
 export const ListView: React.FC = () => {
   const {
     tasks,
+    priorityFilter,
+    setPriorityFilter,
     setSelectedTask,
     setChatTask,
     setDiffTask,
@@ -41,6 +44,7 @@ export const ListView: React.FC = () => {
     toggleHideDone,
     openInEditor,
     settings,
+    skillLabel,
     t,
   } = useApp()
 
@@ -66,7 +70,8 @@ export const ListView: React.FC = () => {
       setSortAsc(prev => !prev)
     } else {
       setSortField(field)
-      setSortAsc(true)
+      // Priority reads best highest-first; the other columns read best ascending.
+      setSortAsc(field !== 'priority')
     }
   }
 
@@ -166,7 +171,7 @@ export const ListView: React.FC = () => {
     ) {
       return {
         id: 'create_pr',
-        label: 'Créer PR',
+        label: skillLabel('create_pr', 'Créer PR'),
         icon: <GitPullRequest size={11} className="text-purple-400" />,
         className: 'bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 border border-purple-500/25',
         title: 'Lancer la revue de code et générer la Pull Request',
@@ -185,7 +190,7 @@ export const ListView: React.FC = () => {
     ) {
       return {
         id: 'implement',
-        label: 'Coder',
+        label: skillLabel('implement', 'Coder'),
         icon: <Flame size={11} className="text-indigo-400" />,
         className: 'bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 border border-indigo-500/25',
         title: "Lancer l'implémentation du code par l'agent IA",
@@ -203,10 +208,10 @@ export const ListView: React.FC = () => {
     ) {
       return {
         id: 'specify',
-        label: 'Spécifier',
+        label: skillLabel('specify', 'Spécifier'),
         icon: <FileCode size={11} className="text-blue-400" />,
         className: 'bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 border border-blue-500/25',
-        title: 'Rédiger la spécification technique Speckit',
+        title: 'Rédiger la spécification technique (Spec Kit / OpenSpec)',
         action: async (e: React.MouseEvent) => {
           e.stopPropagation()
           if (isSkillRunning) return
@@ -217,7 +222,7 @@ export const ListView: React.FC = () => {
 
     return {
       id: 'clarify',
-      label: 'Clarifier',
+      label: skillLabel('clarify', 'Clarifier'),
       icon: <Sparkles size={11} className="text-amber-400" />,
       className: 'bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 border border-amber-500/25',
       title: 'Clarifier les exigences et cadrer la tâche',
@@ -288,12 +293,24 @@ export const ListView: React.FC = () => {
         </td>
 
         {/* Title & Activity */}
-        <td className="py-2.5 px-3 max-w-[280px]">
+        <td className="py-2.5 px-3 max-w-[560px]">
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-semibold text-[var(--text-primary)] truncate group-hover:text-[var(--accent-color)] transition-colors">
               {task.title}
             </span>
           </div>
+
+          {/* Parent (Epic ou Story) — propriété du tracker, jamais une tâche */}
+          {task.parentKey && (
+            <div
+              className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] mt-1 mr-1 text-violet-300 bg-violet-500/10 border border-violet-500/25 max-w-[220px]"
+              title={`${task.parentType || 'Parent'} ${task.parentKey}${task.parentTitle ? ` — ${task.parentTitle}` : ''}`}
+            >
+              <Layers size={9} className="shrink-0 opacity-80" />
+              <span className="font-mono font-bold shrink-0">{task.parentKey}</span>
+              {task.parentTitle && <span className="truncate opacity-80">{task.parentTitle}</span>}
+            </div>
+          )}
 
           {/* Activity badge if exists */}
           {latestActivity && (
@@ -523,7 +540,7 @@ export const ListView: React.FC = () => {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 bg-[var(--bg-primary)]">
-      <div className="max-w-7xl mx-auto space-y-4">
+      <div className="space-y-4">
         {/* List Toolbar */}
         <div className="flex items-center justify-between gap-4 pb-2 border-b border-[var(--border-color)]">
           <div className="flex items-center gap-4">
@@ -548,6 +565,41 @@ export const ListView: React.FC = () => {
               />
               Masquer terminées ({doneTasksCount})
             </label>
+          </div>
+
+          {/* Priority filter + priority sort. The grouped tables have no
+              clickable headers, so the sort has to live in the toolbar. */}
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5">
+              <Flame size={12} className={priorityFilter ? 'text-rose-400' : 'text-[var(--text-muted)]'} />
+              <select
+                value={priorityFilter || ''}
+                onChange={e => setPriorityFilter((e.target.value || null) as Priority | null)}
+                title="Filtrer par priorité"
+                className="text-xs font-medium bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border-color)] rounded-md px-2 py-1 focus:outline-none focus:border-[var(--accent-color)] cursor-pointer"
+              >
+                <option value="">Toutes priorités</option>
+                <option value="urgent">{t.priority.urgent}</option>
+                <option value="high">{t.priority.high}</option>
+                <option value="medium">{t.priority.medium}</option>
+                <option value="low">{t.priority.low}</option>
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleSort('priority')}
+              title="Trier par priorité"
+              className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold border transition-colors cursor-pointer ${
+                sortField === 'priority'
+                  ? 'bg-[var(--accent-light)] accent-text border-[var(--accent-color)]/40'
+                  : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <ArrowUpDown size={11} />
+              <span>Priorité</span>
+              {sortField === 'priority' && <span className="font-mono">{sortAsc ? '↑' : '↓'}</span>}
+            </button>
           </div>
         </div>
 

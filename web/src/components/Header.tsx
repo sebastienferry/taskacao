@@ -10,6 +10,7 @@ import {
   GitBranch,
   Code2,
   Settings,
+  Terminal as TerminalIcon,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Status, Priority } from '../types'
@@ -37,6 +38,8 @@ export const Header: React.FC = () => {
     setAssigneeFilter,
     setIsQuickAddOpen,
     setIsBranchModalOpen,
+    isTerminalPanelOpen,
+    toggleTerminalPanel,
     isSyncing,
     settings,
     t,
@@ -45,14 +48,6 @@ export const Header: React.FC = () => {
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   const hasActiveFilters = Boolean(statusFilter || priorityFilter || labelFilter || assigneeFilter || searchQuery)
-
-  const clearAllFilters = () => {
-    setSearchQuery('')
-    setStatusFilter(null)
-    setPriorityFilter(null)
-    setLabelFilter(null)
-    setAssigneeFilter(null)
-  }
 
   return (
     <header
@@ -140,12 +135,6 @@ export const Header: React.FC = () => {
               </button>
             </span>
           )}
-          <button
-            onClick={clearAllFilters}
-            className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] underline transition-colors px-1 cursor-pointer shrink-0"
-          >
-            {t.header.clearFilters}
-          </button>
         </div>
       )}
 
@@ -230,6 +219,21 @@ export const Header: React.FC = () => {
         >
           <Code2 size={13} className="text-cyan-400" />
           <span>Code</span>
+        </button>
+
+        {/* Toggle the docked workspace CLI */}
+        <button
+          type="button"
+          onClick={toggleTerminalPanel}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer shadow-xs ${
+            isTerminalPanelOpen
+              ? 'bg-[var(--accent-light)] border-[var(--accent-color)]/50 accent-text'
+              : 'bg-[var(--bg-tertiary)]/70 border-[var(--border-color)] text-[var(--text-secondary)] hover:text-indigo-300 hover:border-indigo-500/40 hover:bg-indigo-500/10'
+          }`}
+          title={`${isTerminalPanelOpen ? 'Fermer' : 'Ouvrir'} le terminal du workspace (Ctrl + backquote)`}
+        >
+          <TerminalIcon size={13} className={isTerminalPanelOpen ? '' : 'text-indigo-400'} />
+          <span className="hidden md:inline">CLI</span>
         </button>
 
         {/* Quick Add Button (+) */}

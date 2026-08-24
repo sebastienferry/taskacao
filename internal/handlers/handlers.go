@@ -6,12 +6,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
 	"tasks/internal/db"
 	"tasks/internal/models"
 	"tasks/internal/terminal"
@@ -327,6 +324,53 @@ func (h *Handler) HandleSyncJira(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleSpecFrameworkStatus reports whether GitHub Spec Kit / OpenSpec are
+// installed on the host and initialized in a project working directory.
+// GET /api/spec-framework/status?projectId=…&repoPath=…&framework=speckit|openspec
+func (h *Handler) HandleSpecFrameworkStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	target := r.URL.Query().Get("projectId")
+	if target == "" {
+		target = r.URL.Query().Get("repoPath")
+	}
+
+	statuses := h.db.GetSpecFrameworkStatus(target, r.URL.Query().Get("framework"))
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"frameworks": statuses,
+	})
+}
+
+// HandleSpecFrameworkInstall bootstraps a Spec-Driven Design toolchain
+// (GitHub Spec Kit or OpenSpec) in a project working directory.
+// POST /api/spec-framework/install
+func (h *Handler) HandleSpecFrameworkInstall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req models.SpecFrameworkInstallRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "corps de requête JSON invalide: "+err.Error())
+		return
+	}
+
+	res, err := h.db.InstallSpecFramework(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// The install itself may have failed while the request was well-formed; the
+	// result carries the per-command detail, so return 200 with installed=false
+	// rather than an opaque 500.
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (h *Handler) HandleSkills(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -426,6 +470,87 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			"message": "Skills IA installées avec succès dans le projet",
 			"status":  status,
 		})
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/daily-digest
+	//   GET  → compute the task sections and merge any stored agenda
+	//   POST → same, then persist; with {"enrich": true} also runs the agenda pass
+	if len(parts) >= 2 && parts[1] == "daily-digest" {
+		switch r.Method {
+		case http.MethodGet:
+			if r.URL.Query().Get("history") == "1" {
+				dates, err := h.db.ListDigestDates(id, 30)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]interface{}{"dates": dates})
+				return
+			}
+			digest, err := h.db.ComputeDailyDigest(id, r.URL.Query().Get("date"), r.URL.Query().Get("assignee"))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, digest)
+			return
+
+		case http.MethodPost:
+			var payload models.DailyDigestRequest
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+
+			if payload.Enrich {
+				// Runs the agent; can take a while, and reports its own failure
+				// inside the digest rather than as an HTTP error.
+				digest, err := h.db.EnqueueDigestAgenda(id, payload.Date, payload.Assignee)
+				if err != nil {
+					writeError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				writeJSON(w, http.StatusOK, digest)
+				return
+			}
+
+			digest, err := h.db.ComputeDailyDigest(id, payload.Date, payload.Assignee)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if err := h.db.SaveDailyDigest(digest); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, digest)
+			return
+
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+	}
+
+	// Sub-action: /api/projects/{id}/spec-framework-status
+	if len(parts) >= 2 && parts[1] == "spec-framework-status" {
+		statuses := h.db.GetSpecFrameworkStatus(id, r.URL.Query().Get("framework"))
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"frameworks": statuses,
+		})
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/install-spec-framework
+	if len(parts) >= 2 && parts[1] == "install-spec-framework" && r.Method == http.MethodPost {
+		var payload models.SpecFrameworkInstallRequest
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		payload.ProjectID = id
+
+		res, err := h.db.InstallSpecFramework(payload)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 		return
 	}
 
@@ -744,17 +869,7 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "Tâche non trouvée")
 			return
 		}
-		repoPath := ""
-		if task.ProjectID != "" {
-			if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil && proj.RepoPath != "" {
-				repoPath = proj.RepoPath
-			}
-		}
-		if repoPath == "" {
-			if settings, _ := h.db.GetSettings(); settings != nil && settings.RepoPath != "" {
-				repoPath = settings.RepoPath
-			}
-		}
+		repoPath := h.db.ResolveTaskRepoPath(task)
 		branch, err := h.db.EnsureTaskGitBranch(repoPath, task)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -784,17 +899,7 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusNotFound, "Tâche non trouvée")
 				return
 			}
-			repoPath := ""
-			if task.ProjectID != "" {
-				if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil && proj.RepoPath != "" {
-					repoPath = proj.RepoPath
-				}
-			}
-			if repoPath == "" {
-				if settings, _ := h.db.GetSettings(); settings != nil && settings.RepoPath != "" {
-					repoPath = settings.RepoPath
-				}
-			}
+			repoPath := h.db.ResolveTaskRepoPath(task)
 			if err := h.db.RemoveTaskWorktree(repoPath, task.Key); err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -803,206 +908,6 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	// Sub-action: /api/tasks/{id}/messages
-	if subAction == "messages" {
-		if r.Method == http.MethodGet {
-			msgs, err := h.db.GetTaskMessages(id)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			writeJSON(w, http.StatusOK, msgs)
-			return
-		} else if r.Method == http.MethodDelete {
-			if err := h.db.ClearTaskMessages(id); err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]string{"message": "Historique de discussion réinitialisé avec succès"})
-			return
-		}
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	// Sub-action: /api/tasks/{id}/chat or /api/tasks/{id}/chat/stream (SSE stream)
-	if subAction == "chat" && r.Method == http.MethodPost {
-		var req models.TaskChatRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "Invalid chat payload: "+err.Error())
-			return
-		}
-		if strings.TrimSpace(req.Message) == "" {
-			writeError(w, http.StatusBadRequest, "Message is required")
-			return
-		}
-
-		task, err := h.db.GetTaskByID(id)
-		if err != nil || task == nil {
-			writeError(w, http.StatusNotFound, "Task not found")
-			return
-		}
-
-		settings, _ := h.db.GetSettings()
-		if settings == nil {
-			settings = &models.Settings{
-				AIProvider: "agy",
-				RepoPath:   ".",
-			}
-		}
-
-		runnerSettings := *settings
-		if task.ProjectID != "" {
-			if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil {
-				if proj.RepoPath != "" {
-					settings.RepoPath = proj.RepoPath
-				}
-				if proj.AIProvider != "" {
-					runnerSettings.AIProvider = proj.AIProvider
-				}
-				if proj.AICommandTemplate != "" {
-					runnerSettings.AICommandTemplate = proj.AICommandTemplate
-				}
-				if proj.SpecFramework != "" {
-					runnerSettings.SpecFramework = proj.SpecFramework
-				}
-				if proj.GithubRepo != "" {
-					runnerSettings.GithubRepo = proj.GithubRepo
-				}
-				if proj.IssueTracker != "" {
-					runnerSettings.IssueTracker = proj.IssueTracker
-				}
-				if proj.LinearTeam != "" {
-					runnerSettings.LinearTeam = proj.LinearTeam
-				}
-			}
-		}
-
-		executionDir := settings.RepoPath
-		var worktreeStep string
-		if settings.RepoPath != "" {
-			wtPath, branch, wtErr := h.db.EnsureTaskWorktree(settings.RepoPath, task)
-			if wtErr == nil && wtPath != "" {
-				executionDir = wtPath
-				worktreeStep = fmt.Sprintf("🌳 Worktree Git isolé actif : %s (branche: %s)", filepath.Base(wtPath), branch)
-			}
-		}
-
-		runnerSettings.RepoPath = executionDir
-
-		// Save User Message
-		userMsg := models.TaskMessage{
-			ID:        uuid.New().String(),
-			TaskID:    task.ID,
-			Role:      "user",
-			Content:   req.Message,
-			SkillID:   req.SkillID,
-			CreatedAt: time.Now(),
-		}
-		_ = h.db.SaveTaskMessage(userMsg)
-
-		// Fetch History for context
-		history, _ := h.db.GetTaskMessages(task.ID)
-
-		// Set SSE headers
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("X-Accel-Buffering", "no")
-
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			writeError(w, http.StatusInternalServerError, "Streaming unsupported")
-			return
-		}
-
-		sendSSE := func(event string, data interface{}) {
-			payload, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, string(payload))
-			flusher.Flush()
-		}
-
-		sendSSE("start", map[string]interface{}{
-			"userMessage": userMsg,
-		})
-
-		if worktreeStep != "" {
-			sendSSE("step", worktreeStep)
-		}
-
-		activityID := uuid.New().String()
-		skillName := "Discussion Copilot"
-		if req.SkillID != "" {
-			for _, s := range h.db.GetAvailableSkills() {
-				if s.ID == req.SkillID {
-					skillName = s.Name
-					break
-				}
-			}
-		}
-
-		output, steps, execErr := h.db.GetRunner().RunAIChatStream(
-			r.Context(),
-			&runnerSettings,
-			task,
-			req.SkillID,
-			req.Message,
-			history,
-			func(chunk string) {
-				sendSSE("chunk", map[string]string{"text": chunk})
-			},
-			func(step string) {
-				sendSSE("step", step)
-			},
-		)
-
-		if worktreeStep != "" {
-			steps = append([]string{worktreeStep}, steps...)
-		}
-
-		now := time.Now()
-		if execErr != nil {
-			sendSSE("error", execErr.Error())
-		}
-
-		assistantMsg := models.TaskMessage{
-			ID:         uuid.New().String(),
-			TaskID:     task.ID,
-			Role:       "assistant",
-			Content:    output,
-			ActivityID: activityID,
-			SkillID:    req.SkillID,
-			Steps:      steps,
-			CreatedAt:  now,
-		}
-		_ = h.db.SaveTaskMessage(assistantMsg)
-
-		// Record in task_activities for history
-		summary := fmt.Sprintf("Échange Copilot sur la tâche %s", task.Key)
-		if req.SkillID != "" {
-			summary = fmt.Sprintf("Exécution %s via Discussion", skillName)
-		}
-		_ = h.db.AddTaskActivity(models.TaskActivity{
-			ID:          activityID,
-			TaskID:      task.ID,
-			SkillID:     req.SkillID,
-			SkillName:   skillName,
-			Action:      "Discussion avec l'agent Copilot",
-			Status:      "completed",
-			Summary:     summary,
-			Output:      output,
-			Steps:       steps,
-			Prompt:      req.Message,
-			CreatedAt:   now,
-			StartedAt:   &now,
-			CompletedAt: &now,
-		})
-
-		sendSSE("done", assistantMsg)
-		return
-	}
-
 
 	switch r.Method {
 	case http.MethodGet:
@@ -1245,14 +1150,12 @@ func (h *Handler) HandleTerminalWs(w http.ResponseWriter, r *http.Request) {
 			envVars["TASKACAO_TASK_TITLE"] = task.Title
 			envVars["TASKACAO_TASK_PROJECT"] = task.ProjectID
 
-			settings, _ := h.db.GetSettings()
-			baseRepo := "."
-			if settings != nil && settings.RepoPath != "" {
-				baseRepo = settings.RepoPath
+			baseRepo := h.db.ResolveTaskRepoPath(task)
+			if baseRepo == "" {
+				baseRepo = "."
 			}
 			if task.ProjectID != "" {
-				if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil && proj.RepoPath != "" {
-					baseRepo = proj.RepoPath
+				if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil {
 					envVars["TASKACAO_PROJECT_NAME"] = proj.Name
 					envVars["TASKACAO_GITHUB_REPO"] = proj.GithubRepo
 					envVars["TASKACAO_LINEAR_TEAM"] = proj.LinearTeam
@@ -1381,14 +1284,9 @@ func (h *Handler) HandleOpenEditor(w http.ResponseWriter, r *http.Request) {
 					targetPath = *task.WorktreePath
 				}
 			}
-			repoPath := "."
-			if task.ProjectID != "" {
-				if proj, projErr := h.db.GetProjectByID(task.ProjectID); projErr == nil && proj != nil && proj.RepoPath != "" {
-					repoPath = proj.RepoPath
-				}
-			}
-			if repoPath == "." && settings != nil && settings.RepoPath != "" {
-				repoPath = settings.RepoPath
+			repoPath := h.db.ResolveTaskRepoPath(task)
+			if repoPath == "" {
+				repoPath = "."
 			}
 
 			if targetPath == "" {

@@ -14,6 +14,7 @@ import {
   Save,
   Trash2,
   FolderGit2,
+  CalendarDays,
   Check,
   Download,
   CheckCircle2,
@@ -32,7 +33,19 @@ import {
   Info,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { AccentColor, IssueTracker, ProjectSkillsStatus, WorkflowStage, DetectedStatus, AIProvider, SpecFramework } from '../types'
+import type {
+  AccentColor,
+  IssueTracker,
+  ProjectType,
+  ProjectSkillsStatus,
+  WorkflowStage,
+  DetectedStatus,
+  AIProvider,
+  SpecFramework,
+  SpecFrameworkStatus,
+  SpecFrameworkInstallResult,
+} from '../types'
+import { ACCENT_COLORS, accentBadgeStyle, normalizeAccentColor, DEFAULT_PROJECT_ACCENT } from '../lib/accents'
 
 type ProjectTab = 'general' | 'git' | 'agent' | 'tracker' | 'skills'
 
@@ -67,21 +80,6 @@ const AVAILABLE_ICONS = [
   { name: 'Workflow', Icon: Workflow, label: 'Workflow' },
 ]
 
-const AVAILABLE_COLORS: { name: AccentColor; label: string; bgClass: string; ringClass: string }[] = [
-  { name: 'indigo', label: 'Indigo', bgClass: 'bg-indigo-500', ringClass: 'ring-indigo-400' },
-  { name: 'violet', label: 'Violet', bgClass: 'bg-violet-500', ringClass: 'ring-violet-400' },
-  { name: 'emerald', label: 'Émeraude', bgClass: 'bg-emerald-500', ringClass: 'ring-emerald-400' },
-  { name: 'amber', label: 'Ambre', bgClass: 'bg-amber-500', ringClass: 'ring-amber-400' },
-  { name: 'rose', label: 'Rose', bgClass: 'bg-rose-500', ringClass: 'ring-rose-400' },
-  { name: 'cyan', label: 'Cyan', bgClass: 'bg-cyan-500', ringClass: 'ring-cyan-400' },
-  { name: 'blue', label: 'Bleu', bgClass: 'bg-blue-500', ringClass: 'ring-blue-400' },
-  { name: 'orange', label: 'Orange', bgClass: 'bg-orange-500', ringClass: 'ring-orange-400' },
-  { name: 'neon-cyan', label: '⚡ Cyber Cyan', bgClass: 'bg-[#00f0ff]', ringClass: 'ring-[#00f0ff]' },
-  { name: 'neon-purple', label: '🔮 Synthwave', bgClass: 'bg-[#d946ef]', ringClass: 'ring-[#d946ef]' },
-  { name: 'neon-green', label: '🟢 Matrix Green', bgClass: 'bg-[#10f070]', ringClass: 'ring-[#10f070]' },
-  { name: 'neon-amber', label: '✨ Laser Gold', bgClass: 'bg-[#ffd000]', ringClass: 'ring-[#ffd000]' },
-]
-
 const DEFAULT_STAGE_MAPPING: Record<WorkflowStage, string> = {
   new: 'to_clarify',
   clarified: 'to_specify',
@@ -111,7 +109,7 @@ const STATUS_OPTIONS: { id: string; label: string; stageCategory: string }[] = [
 
 const WORKFLOW_SKILLS: { id: string; defaultName: string; code: string; desc: string; icon: React.ComponentType<{ size?: number; className?: string }>; color: string }[] = [
   { id: 'clarify', defaultName: 'Clarify', code: 'clarify-issue', desc: 'Questions de cadrage & inputs produit', icon: HelpCircle, color: 'amber' },
-  { id: 'specify', defaultName: 'Specify', code: 'specify-issue', desc: 'Spécification technique Speckit', icon: FileCode, color: 'blue' },
+  { id: 'specify', defaultName: 'Specify', code: 'specify-issue', desc: 'Spécification technique (Spec Kit / OpenSpec)', icon: FileCode, color: 'blue' },
   { id: 'implement', defaultName: 'Implement', code: 'code-issue', desc: 'Développement & codage de la story', icon: Flame, color: 'indigo' },
   { id: 'create_pr', defaultName: 'Review & PR', code: 'create-pr', desc: 'Revue de code, tests & Pull Request', icon: ShieldCheck, color: 'purple' },
   { id: 'pick', defaultName: 'Auto-Pilot', code: 'pick-issue', desc: 'Prise en charge et analyse autonome', icon: Sparkles, color: 'emerald' },
@@ -147,11 +145,14 @@ export const ProjectModal: React.FC = () => {
   const [slug, setSlug] = useState('')
   const [description, setDescription] = useState('')
   const [icon, setIcon] = useState('Folder')
-  const [color, setColor] = useState<AccentColor>('indigo')
+  const [color, setColor] = useState<AccentColor>(DEFAULT_PROJECT_ACCENT)
+  const [projectType, setProjectType] = useState<ProjectType>('standard')
   const [isDefault, setIsDefault] = useState(false)
 
   // Section 2: Git (Local path, URL distante git@..., init git)
   const [repoPath, setRepoPath] = useState('')
+  const [repoPaths, setRepoPaths] = useState<string[]>([])
+  const [newRepoPathInput, setNewRepoPathInput] = useState('')
   const [gitRemoteUrl, setGitRemoteUrl] = useState('')
 
   // Section 3: Agent IA & CLI
@@ -167,11 +168,18 @@ export const ProjectModal: React.FC = () => {
   const [isInstallingSkills, setIsInstallingSkills] = useState(false)
   const [isInitializingGit, setIsInitializingGit] = useState(false)
 
+  // Spec-Driven Design toolchain (GitHub Spec Kit / OpenSpec) install state
+  const [sddStatuses, setSddStatuses] = useState<SpecFrameworkStatus[]>([])
+  const [isLoadingSdd, setIsLoadingSdd] = useState(false)
+  const [installingSdd, setInstallingSdd] = useState<SpecFramework | null>(null)
+  const [sddResult, setSddResult] = useState<SpecFrameworkInstallResult | null>(null)
+
   // Section 5: Tracker (Type, pas de défaut, URL, Clef, Mapping)
   const [issueTracker, setIssueTracker] = useState<IssueTracker>('linear')
   const [trackerUrl, setTrackerUrl] = useState('')
   const [linearTeam, setLinearTeam] = useState('')
   const [githubRepo, setGithubRepo] = useState('')
+  const [jiraProject, setJiraProject] = useState('')
   const [stageMapping, setStageMapping] = useState<Record<WorkflowStage, string>>(DEFAULT_STAGE_MAPPING)
   const [customInputMode, setCustomInputMode] = useState<Record<WorkflowStage, boolean>>({
     new: false,
@@ -250,6 +258,92 @@ export const ProjectModal: React.FC = () => {
     }
   }
 
+  /**
+   * Reads whether GitHub Spec Kit and OpenSpec are reachable on the host and
+   * already initialized in the project working directory.
+   */
+  const fetchSddStatuses = async (targetProjectIdOrPath: string) => {
+    const target = targetProjectIdOrPath.trim()
+    if (!target) {
+      setSddStatuses([])
+      return
+    }
+    setIsLoadingSdd(true)
+    try {
+      const params = new URLSearchParams()
+      if (editingProject) {
+        params.append('projectId', editingProject.id)
+      } else {
+        params.append('repoPath', target)
+      }
+      const res = await fetch(`/api/spec-framework/status?${params.toString()}`)
+      if (res.ok) {
+        const data: { frameworks: SpecFrameworkStatus[] } = await res.json()
+        setSddStatuses(Array.isArray(data.frameworks) ? data.frameworks : [])
+      }
+    } catch {
+      // Status is informational only; a failure just leaves the panel unknown.
+    } finally {
+      setIsLoadingSdd(false)
+    }
+  }
+
+  /**
+   * Runs the real toolchain installer for the chosen framework:
+   * Spec Kit via uv/uvx (`specify init --here`), OpenSpec via npm/npx (`openspec init`).
+   */
+  const handleInstallSddFramework = async (framework: SpecFramework, force = false) => {
+    const targetPath = repoPath.trim()
+    if (!targetPath) {
+      addToast({
+        type: 'warning',
+        title: 'Répertoire de travail manquant',
+        description: 'Renseignez le CWD du projet (onglet Git & Worktrees) avant d\'installer un framework SDD.',
+      })
+      return
+    }
+    if (installingSdd) return
+
+    setInstallingSdd(framework)
+    setSddResult(null)
+    try {
+      const res = await fetch('/api/spec-framework/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          framework,
+          repoPath: targetPath,
+          projectId: editingProject?.id || '',
+          aiAgent: aiProvider || settings.aiProvider || '',
+          force,
+        }),
+      })
+      const result: SpecFrameworkInstallResult & { error?: string } = await res.json()
+      if (!res.ok) {
+        throw new Error(result?.error || 'Installation impossible')
+      }
+
+      setSddResult(result)
+      await fetchSddStatuses(editingProject?.id || targetPath)
+
+      addToast({
+        type: result.installed ? 'success' : 'error',
+        title: result.installed
+          ? `${result.frameworkLabel} prêt`
+          : `Échec de l'installation de ${result.frameworkLabel}`,
+        description: result.message,
+      })
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Échec de l\'installation SDD',
+        description: err.message,
+      })
+    } finally {
+      setInstallingSdd(null)
+    }
+  }
+
   const fetchDetectedStatuses = async (team?: string, tracker?: IssueTracker, ghRepo?: string) => {
     setIsDetectingStatuses(true)
     try {
@@ -280,10 +374,12 @@ export const ProjectModal: React.FC = () => {
       setSlug(editingProject.slug)
       setDescription(editingProject.description || '')
       setIcon(editingProject.icon || 'Folder')
-      setColor((editingProject.color as AccentColor) || 'indigo')
+      setColor(normalizeAccentColor(editingProject.color) ?? DEFAULT_PROJECT_ACCENT)
+      setProjectType(editingProject.projectType === 'personal' ? 'personal' : 'standard')
       setIsDefault(editingProject.isDefault || false)
 
       setRepoPath(editingProject.repoPath || '')
+      setRepoPaths(editingProject.repoPaths || [])
       setGitRemoteUrl(editingProject.gitRemoteUrl || '')
 
       const hasCustomAgent = Boolean(editingProject.aiProvider || editingProject.aiCommandTemplate)
@@ -296,6 +392,7 @@ export const ProjectModal: React.FC = () => {
       setTrackerUrl(editingProject.trackerUrl || '')
       setLinearTeam(editingProject.linearTeam || '')
       setGithubRepo(editingProject.githubRepo || '')
+      setJiraProject(editingProject.jiraProject || '')
       setStageMapping(
         editingProject.stageMapping && Object.keys(editingProject.stageMapping).length > 0
           ? { ...DEFAULT_STAGE_MAPPING, ...editingProject.stageMapping }
@@ -304,6 +401,7 @@ export const ProjectModal: React.FC = () => {
       setSkillOverrides(editingProject.skillOverrides || {})
 
       fetchSkillsStatus(editingProject.id)
+      fetchSddStatuses(editingProject.id)
       fetchDetectedStatuses(editingProject.linearTeam, editingProject.issueTracker, editingProject.githubRepo)
     } else {
       setName('')
@@ -325,19 +423,35 @@ export const ProjectModal: React.FC = () => {
       setTrackerUrl('')
       setLinearTeam('')
       setGithubRepo('')
+      setJiraProject('')
       setStageMapping(DEFAULT_STAGE_MAPPING)
       setSkillOverrides({})
       setSkillsStatus(null)
+      setSddStatuses([])
+      setSddResult(null)
       fetchDetectedStatuses('', 'linear', '')
     }
     setActiveTab('general')
   }, [editingProject, isProjectModalOpen, settings.specFramework])
+
+  const addRepoPath = () => {
+    const candidate = newRepoPathInput.trim()
+    if (!candidate) return
+    // The project's own CWD is always offered, no need to duplicate it here.
+    if (candidate === repoPath.trim() || repoPaths.includes(candidate)) {
+      setNewRepoPathInput('')
+      return
+    }
+    setRepoPaths(prev => [...prev, candidate])
+    setNewRepoPathInput('')
+  }
 
   // Trigger skills check when repoPath changes
   useEffect(() => {
     if (!editingProject && repoPath && repoPath.length > 5 && repoPath.includes('/')) {
       const timeout = setTimeout(() => {
         fetchSkillsStatus(repoPath)
+        fetchSddStatuses(repoPath)
       }, 500)
       return () => clearTimeout(timeout)
     }
@@ -377,7 +491,7 @@ export const ProjectModal: React.FC = () => {
       addToast({
         type: 'success',
         title: 'Compétences IA & SDD scaffoldées !',
-        description: `Compétences (${specFramework === 'openfeature' ? 'Open Feature' : 'SpecKit'}) installées dans le projet racine et tous les worktrees.`,
+        description: `Compétences (${specFramework === 'openspec' ? 'OpenSpec' : 'Spec Kit'}) installées dans le projet racine et tous les worktrees.`,
       })
     } catch (err: any) {
       addToast({
@@ -443,8 +557,10 @@ export const ProjectModal: React.FC = () => {
         description: description.trim(),
         icon,
         color,
+        projectType,
         isDefault,
         repoPath: repoPath.trim(),
+        repoPaths,
         gitRemoteUrl: gitRemoteUrl.trim(),
         aiProvider: useCustomAgent && aiProvider ? (aiProvider as AIProvider) : undefined,
         aiCommandTemplate: useCustomAgent && aiCommandTemplate.trim() ? aiCommandTemplate.trim() : undefined,
@@ -453,6 +569,7 @@ export const ProjectModal: React.FC = () => {
         trackerUrl: trackerUrl.trim(),
         linearTeam: linearTeam.trim().toUpperCase(),
         githubRepo: computedGithubRepo,
+        jiraProject: jiraProject.trim().toUpperCase(),
         stageMapping,
         skillOverrides,
       }
@@ -489,7 +606,10 @@ export const ProjectModal: React.FC = () => {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 shrink-0">
           <div className="flex items-center gap-2.5">
-            <div className={`w-8 h-8 rounded-xl bg-${color}-500/20 text-${color}-400 flex items-center justify-center border border-${color}-500/30`}>
+            <div
+              className="w-8 h-8 rounded-xl flex items-center justify-center border"
+              style={accentBadgeStyle(color)}
+            >
               <Layers size={16} />
             </div>
             <div>
@@ -621,26 +741,74 @@ export const ProjectModal: React.FC = () => {
 
                 <div>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
-                    Couleur
+                    {t.profileModal.accentColor}
                   </label>
                   <div className="grid grid-cols-6 gap-1.5 p-2 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
-                    {AVAILABLE_COLORS.map(c => {
+                    {ACCENT_COLORS.map(c => {
                       const isSel = color === c.name
                       return (
                         <button
                           key={c.name}
                           type="button"
                           onClick={() => setColor(c.name)}
-                          className={`h-6 rounded-lg ${c.bgClass} flex items-center justify-center transition-all cursor-pointer ${
+                          className={`h-6 rounded-lg flex items-center justify-center transition-all cursor-pointer ${
                             isSel ? 'ring-2 ring-white ring-offset-2 ring-offset-[var(--bg-secondary)] scale-105 shadow-sm' : 'opacity-80 hover:opacity-100'
                           }`}
-                          title={c.label}
+                          style={{ backgroundColor: c.hex }}
+                          title={t.profileModal.accents[c.name] || c.label}
                         >
                           {isSel && <Check size={11} className="text-white drop-shadow" />}
                         </button>
                       )
                     })}
                   </div>
+                </div>
+              </div>
+
+              {/* Type de projet : le digest quotidien n'existe que sur un projet personnel */}
+              <div className="pt-2">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                  Type de projet
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    {
+                      id: 'standard' as ProjectType,
+                      label: 'Projet de delivery',
+                      desc: 'Board partagé, workflow SDD complet',
+                      Icon: FolderGit2,
+                    },
+                    {
+                      id: 'personal' as ProjectType,
+                      label: 'Projet personnel',
+                      desc: 'Board perso, active le Digest quotidien',
+                      Icon: CalendarDays,
+                    },
+                  ]).map(opt => {
+                    const isSel = projectType === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setProjectType(opt.id)}
+                        className={`flex items-start gap-2 p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          isSel
+                            ? 'border-[var(--accent-color)] bg-[var(--accent-light)]'
+                            : 'border-[var(--border-color)] bg-[var(--bg-tertiary)] hover:border-[var(--accent-color)]/50'
+                        }`}
+                      >
+                        <opt.Icon size={14} className={`mt-0.5 shrink-0 ${isSel ? 'text-[var(--accent-color)]' : 'text-[var(--text-muted)]'}`} />
+                        <span className="min-w-0">
+                          <span className={`block text-xs font-semibold ${isSel ? 'accent-text' : 'text-[var(--text-primary)]'}`}>
+                            {opt.label}
+                          </span>
+                          <span className="block text-[10px] text-[var(--text-muted)] leading-snug">
+                            {opt.desc}
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
 
@@ -707,6 +875,69 @@ export const ProjectModal: React.FC = () => {
                 <span className="text-[10px] text-[var(--text-muted)] mt-1 block">
                   Répertoire racine dans lequel s'exécutent les commandes git, worktrees et agents autonomes.
                 </span>
+              </div>
+
+              {/* Additional working directories. Fed automatically whenever a
+                  ticket pins a CWD, so an epic spanning several repositories
+                  builds its own list of choices. */}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                  Autres répertoires de travail (choisissables sur un ticket)
+                </label>
+
+                {repoPaths.length > 0 ? (
+                  <div className="space-y-1.5 mb-2">
+                    {repoPaths.map(path => (
+                      <div
+                        key={path}
+                        className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
+                      >
+                        <span className="text-[11px] font-mono text-[var(--text-secondary)] truncate" title={path}>
+                          {path}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setRepoPaths(prev => prev.filter(p => p !== path))}
+                          className="p-1 rounded-md text-[var(--text-muted)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer shrink-0"
+                          title="Retirer ce répertoire de la liste"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-[var(--text-muted)] mb-2">
+                    Aucun autre répertoire. La liste se remplit d'elle-même dès qu'un ticket épingle un nouveau CWD.
+                  </p>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={newRepoPathInput}
+                      onChange={e => setNewRepoPathInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          addRepoPath()
+                        }
+                      }}
+                      placeholder="/Users/username/Sources/autre-depot"
+                      className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--accent-color)]"
+                    />
+                    <FolderGit2 size={14} className="absolute left-2.5 top-2.5 text-[var(--text-muted)]" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addRepoPath}
+                    disabled={!newRepoPathInput.trim()}
+                    className="px-3 py-1.5 rounded-xl text-xs font-bold text-white accent-bg shadow-xs hover:opacity-90 disabled:opacity-40 transition-all cursor-pointer shrink-0"
+                  >
+                    Ajouter
+                  </button>
+                </div>
               </div>
 
               {/* Remote URL */}
@@ -1011,20 +1242,50 @@ export const ProjectModal: React.FC = () => {
                   </div>
                 )}
 
+                {issueTracker === 'jira' && (
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                      Projet Jira (clé)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={jiraProject}
+                        onChange={e => {
+                          const val = e.target.value.toUpperCase()
+                          setJiraProject(val)
+                          fetchDetectedStatuses(undefined, 'jira')
+                        }}
+                        placeholder="Ex: PE, ENG, OPS..."
+                        className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono uppercase focus:outline-none focus:border-[var(--accent-color)]"
+                      />
+                      <Key size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
+                    </div>
+                    <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
+                      Passée à <code className="text-cyan-400">acli jira workitem --project</code>. La CLI Atlassian doit être authentifiée (<code className="text-cyan-400">acli jira auth login</code>).
+                    </span>
+                  </div>
+                )}
+
                 <div className={issueTracker === 'local' ? 'col-span-2' : ''}>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                    URL du Tracker
+                    {issueTracker === 'jira' ? 'URL Jira (base)' : 'URL du Tracker'}
                   </label>
                   <div className="relative">
                     <input
                       type="text"
                       value={trackerUrl}
                       onChange={e => setTrackerUrl(e.target.value)}
-                      placeholder="https://linear.app/team/project/..."
+                      placeholder={issueTracker === 'jira' ? 'https://mon-org.atlassian.net' : 'https://linear.app/team/project/...'}
                       className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
                     />
                     <Globe size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
                   </div>
+                  {issueTracker === 'jira' && (
+                    <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
+                      Sert à construire les liens <code className="text-cyan-400">/browse/&lt;KEY&gt;</code> des tickets.
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -1224,7 +1485,7 @@ export const ProjectModal: React.FC = () => {
           )}
 
           {/* ========================================================= */}
-          {/* SECTION 5: COMPÉTENCES IA & SDD (SpecKit vs OpenFeature)   */}
+          {/* SECTION 5: COMPÉTENCES IA & SDD (Spec Kit vs OpenSpec)     */}
           {/* ========================================================= */}
           {activeTab === 'skills' && (
             <div className="space-y-4 animate-in fade-in duration-150">
@@ -1246,48 +1507,177 @@ export const ProjectModal: React.FC = () => {
                     <div className={`p-2 rounded-xl shrink-0 ${specFramework === 'speckit' ? 'bg-[var(--accent-color)] text-white' : 'bg-[var(--bg-primary)] text-[var(--text-muted)]'}`}>
                       <FileCode size={18} />
                     </div>
-                    <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 mb-0.5">
                         <span className={`font-bold text-xs ${specFramework === 'speckit' ? 'accent-text' : 'text-[var(--text-primary)]'}`}>
-                          SpecKit (Speckit SDD)
+                          GitHub Spec Kit
                         </span>
                         <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
                           Recommandé
                         </span>
                       </div>
                       <span className="text-[10px] text-[var(--text-muted)] leading-relaxed block">
-                        Spécifications techniques standardisées, User Stories, BDD Given/When/Then et architecture Mermaid.
+                        CLI <code className="text-cyan-400">specify</code>. Scaffolde <code className="text-cyan-400">.specify/</code> et <code className="text-cyan-400">specs/</code> : spec.md, plan.md, tasks.md et les commandes <code className="text-cyan-400">/speckit.*</code>.
                       </span>
                     </div>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setSpecFramework('openfeature')}
+                    onClick={() => setSpecFramework('openspec')}
                     className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-3 ${
-                      specFramework === 'openfeature'
+                      specFramework === 'openspec'
                         ? 'bg-[var(--accent-light)] border-[var(--accent-color)] shadow-xs'
                         : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-[var(--accent-color)]/50'
                     }`}
                   >
-                    <div className={`p-2 rounded-xl shrink-0 ${specFramework === 'openfeature' ? 'bg-[var(--accent-color)] text-white' : 'bg-[var(--bg-primary)] text-[var(--text-muted)]'}`}>
+                    <div className={`p-2 rounded-xl shrink-0 ${specFramework === 'openspec' ? 'bg-[var(--accent-color)] text-white' : 'bg-[var(--bg-primary)] text-[var(--text-muted)]'}`}>
                       <Sparkles size={18} />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className={`font-bold text-xs ${specFramework === 'openfeature' ? 'accent-text' : 'text-[var(--text-primary)]'}`}>
-                          Open Feature (OpenFeature SDD)
+                        <span className={`font-bold text-xs ${specFramework === 'openspec' ? 'accent-text' : 'text-[var(--text-primary)]'}`}>
+                          OpenSpec
                         </span>
                         <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                          Feature Flags
+                          Spec avant code
                         </span>
                       </div>
                       <span className="text-[10px] text-[var(--text-muted)] leading-relaxed block">
-                        Feature Flags déclaratifs, Evaluation Contexts, Hooks SDK OpenFeature et gestion du cycle de vie du flag.
+                        CLI <code className="text-cyan-400">openspec</code>. Scaffolde <code className="text-cyan-400">openspec/</code> : propositions de changement, deltas de specs et checklists validés avant implémentation.
                       </span>
                     </div>
                   </button>
                 </div>
+              </div>
+
+              {/* SDD toolchain installer: installs the real CLI and initializes it */}
+              <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-2.5">
+                <div className="flex items-center justify-between pb-1 border-b border-[var(--border-color)]">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-primary)]">
+                    Chaîne d'outils SDD (installation réelle)
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {isLoadingSdd && <Loader2 size={11} className="animate-spin text-[var(--accent-color)]" />}
+                    <button
+                      type="button"
+                      onClick={() => fetchSddStatuses(editingProject?.id || repoPath.trim())}
+                      disabled={!repoPath.trim()}
+                      className="flex items-center gap-1 text-[10px] font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40 cursor-pointer"
+                      title="Revérifier l'état des CLI et des répertoires"
+                    >
+                      <RefreshCw size={11} />
+                      <span>Revérifier</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  {(['speckit', 'openspec'] as SpecFramework[]).map(fw => {
+                    const st = sddStatuses.find(s => s.framework === fw)
+                    const label = fw === 'openspec' ? 'OpenSpec' : 'GitHub Spec Kit'
+                    const isBusy = installingSdd === fw
+                    return (
+                      <div
+                        key={fw}
+                        className="p-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-xs text-[var(--text-primary)]">{label}</span>
+                            {st?.initialized ? (
+                              <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                                Initialisé
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold bg-[var(--bg-tertiary)] text-[var(--text-muted)] border border-[var(--border-color)]">
+                                Non initialisé
+                              </span>
+                            )}
+                            <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                              st?.cliAvailable
+                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                            }`}>
+                              {st?.cliAvailable ? 'CLI trouvée' : 'CLI absente'}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-[var(--text-muted)] block mt-0.5 font-mono truncate">
+                            {st?.cliAvailable
+                              ? st.cliCommand
+                              : st?.installHint || (fw === 'openspec'
+                                ? 'npm install -g @fission-ai/openspec@latest'
+                                : 'uv tool install specify-cli --from git+https://github.com/github/spec-kit.git')}
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={Boolean(installingSdd) || !repoPath.trim()}
+                          onClick={() => handleInstallSddFramework(fw, Boolean(st?.initialized))}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold shadow-xs transition-all active:scale-95 disabled:opacity-50 cursor-pointer shrink-0 ${
+                            st?.initialized
+                              ? 'bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                              : 'bg-[var(--accent-color)] hover:opacity-90 text-white'
+                          }`}
+                        >
+                          {isBusy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                          <span>
+                            {isBusy
+                              ? 'Installation...'
+                              : st?.initialized
+                              ? 'Réinitialiser'
+                              : `Installer ${fw === 'openspec' ? 'OpenSpec' : 'Spec Kit'}`}
+                          </span>
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {!repoPath.trim() && (
+                  <p className="text-[10px] text-amber-400">
+                    Renseignez le répertoire de travail (onglet « Git & Worktrees ») avant d'installer une chaîne d'outils.
+                  </p>
+                )}
+
+                {/* Command-by-command report of the last install */}
+                {sddResult && (
+                  <div className="p-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      {sddResult.installed ? (
+                        <CheckCircle2 size={12} className="text-emerald-400" />
+                      ) : (
+                        <Info size={12} className="text-amber-400" />
+                      )}
+                      <span className="text-[11px] font-bold text-[var(--text-primary)]">
+                        {sddResult.frameworkLabel}
+                      </span>
+                      {sddResult.version && (
+                        <span className="text-[9px] font-mono text-[var(--text-muted)]">{sddResult.version}</span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-[var(--text-secondary)]">{sddResult.message}</p>
+                    {sddResult.steps.length > 0 && (
+                      <div className="space-y-1 max-h-40 overflow-y-auto">
+                        {sddResult.steps.map((step, i) => (
+                          <div key={`${step.label}-${i}`} className="text-[10px]">
+                            <div className="flex items-center gap-1">
+                              <span>{step.skipped ? '⏭️' : step.success ? '✅' : '❌'}</span>
+                              <span className="text-[var(--text-secondary)]">{step.label}</span>
+                            </div>
+                            <code className="block font-mono text-[9px] text-cyan-400 pl-4 break-all">
+                              $ {step.command}
+                            </code>
+                            {step.error && (
+                              <span className="block pl-4 text-[9px] text-rose-400 break-all">{step.error}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Scaffolding Action Header */}
@@ -1379,7 +1769,7 @@ export const ProjectModal: React.FC = () => {
                     const SkillIcon = s.icon
                     const customValue = skillOverrides[s.id] || ''
                     const displayDefaultName = s.id === 'specify'
-                      ? (specFramework === 'openfeature' ? 'Specify (Open Feature)' : 'Specify (SpecKit)')
+                      ? (specFramework === 'openspec' ? 'Specify (OpenSpec)' : 'Specify (Spec Kit)')
                       : s.defaultName
 
                     return (
@@ -1403,7 +1793,7 @@ export const ProjectModal: React.FC = () => {
                             </div>
                             <span className="text-[10px] text-[var(--text-muted)] truncate max-w-[220px]">
                               {s.id === 'specify'
-                                ? (specFramework === 'openfeature' ? 'Spécification technique Open Feature (Feature Flags)' : 'Spécification technique standard SpecKit (BDD Given/When/Then)')
+                                ? (specFramework === 'openspec' ? 'Proposition de changement OpenSpec (deltas de specs, checklist)' : 'Spécification Spec Kit (spec.md, plan.md, tasks.md, BDD Given/When/Then)')
                                 : s.desc}
                             </span>
                           </div>

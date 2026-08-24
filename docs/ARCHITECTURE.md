@@ -122,4 +122,4 @@ Taskacao includes an autonomous in-process background worker:
 - Monitored via a Go channel `d.queueChan`.
 - Fetches `queued` activities from SQLite in FIFO order.
 - Executes the designated AI skill or script in the task worktree.
-- Updates activity status (`running` → `completed` | `failed`), captures stdout/stderr, and creates chronological `task_messages` for conversation history.
+- Updates activity status (`running` → `completed` | `failed`) and captures stdout/stderr in the activity record.

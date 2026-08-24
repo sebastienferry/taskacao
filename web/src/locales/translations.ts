@@ -20,6 +20,12 @@ export interface TranslationSchema {
     myTasks: string
     urgentHigh: string
     labels: string
+    sources: string
+    allSources: string
+    localSource: string
+    parents: string
+    clearParentFilter: string
+    digest: string
     settings: string
     reseedDemo: string
     toggleSidebar: string
@@ -75,7 +81,6 @@ export interface TranslationSchema {
     activitiesView: string
     filterStatus: string
     filterPriority: string
-    clearFilters: string
     activeFilter: string
     activeFilters: string
     syncing: string
@@ -141,27 +146,6 @@ export interface TranslationSchema {
     output: string
     stepsTitle: string
     skillSuccess: string
-  }
-  chat: {
-    title: string
-    subtitle: string
-    discussWithAgent: string
-    viewChat: string
-    viewTerminal: string
-    sendPlaceholder: string
-    send: string
-    cancelStream: string
-    clearHistory: string
-    clearedSuccess: string
-    agentTyping: string
-    emptyHistory: string
-    quickActionsTitle: string
-    clarifyPrompt: string
-    specifyPrompt: string
-    implementPrompt: string
-    testPrompt: string
-    prPrompt: string
-    diffPrompt: string
   }
   taskModal: {
     createTitle: string
@@ -410,6 +394,12 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       myTasks: 'Mes tâches',
       urgentHigh: 'Priorité Haute',
       labels: 'Étiquettes',
+      sources: 'Sources',
+      allSources: 'Toutes les sources',
+      localSource: 'Local',
+      parents: 'Epics / Parents',
+      clearParentFilter: 'Retirer le filtre parent',
+      digest: 'Digest quotidien',
       settings: 'Profil & Préférences',
       reseedDemo: 'Réinitialiser démo',
       toggleSidebar: 'Replier / Déplier le menu',
@@ -465,7 +455,6 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       activitiesView: 'Activités',
       filterStatus: 'Statut',
       filterPriority: 'Priorité',
-      clearFilters: 'Effacer les filtres',
       activeFilter: 'filtre actif',
       activeFilters: 'filtres actifs',
       syncing: 'Synchronisation...',
@@ -520,7 +509,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       nextStep: 'Étape suivante',
       autoPilot: 'Auto-Pilot (/pick-issue)',
       clarify: 'Clarifier (/clarify-issue)',
-      specify: 'Spécifier Speckit (/specify-issue)',
+      specify: 'Spécifier (/specify-issue)',
       implement: 'Coder (/code-issue)',
       createPr: 'Créer PR (/create-pr)',
       history: 'Historique des exécutions & Artefacts',
@@ -531,27 +520,6 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       output: 'Rapport & Artefact généré',
       stepsTitle: 'Étapes exécutées',
       skillSuccess: 'Skill exécutée avec succès !',
-    },
-    chat: {
-      title: 'Discussion Agent Copilot',
-      subtitle: 'Échange interactif & Streaming CLI en direct',
-      discussWithAgent: 'Discuter avec l\'agent',
-      viewChat: 'Discussion',
-      viewTerminal: 'Console Terminal',
-      sendPlaceholder: 'Posez une question, demandez des modifications ou donnez une consigne... (Cmd+Entrée pour envoyer)',
-      send: 'Envoyer',
-      cancelStream: 'Arrêter',
-      clearHistory: 'Effacer l\'historique',
-      clearedSuccess: 'Historique de discussion réinitialisé',
-      agentTyping: 'L\'agent réfléchit et génère la réponse...',
-      emptyHistory: 'Aucun message pour le moment. Démarrez la discussion avec l\'agent Copilot sur cette tâche !',
-      quickActionsTitle: 'Actions rapides & Compétences',
-      clarifyPrompt: '🔍 Clarifier les ambiguïtés et contraintes',
-      specifyPrompt: '📝 Rédiger la spécification technique Speckit',
-      implementPrompt: '💻 Coder la fonctionnalité et modifier les fichiers',
-      testPrompt: '🧪 Lancer les tests et valider le build',
-      prPrompt: '🚀 Créer la Pull Request / Commiter',
-      diffPrompt: '👁️ Analyser le diff Git de la branche',
     },
     taskModal: {
       createTitle: 'Nouvelle Tâche',
@@ -668,7 +636,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
         repoPathDesc: 'Emplacement du repo dans lequel l\'agent exécutera les commandes',
         promptsTitle: 'Personnalisation des Prompts par Skill',
         promptClarify: 'Prompt /clarify-issue (Cadrage & questions)',
-        promptSpecify: 'Prompt /specify-issue (Spécification Speckit)',
+        promptSpecify: 'Prompt /specify-issue (Spécification Spec Kit / OpenSpec)',
         promptImplement: 'Prompt /code-issue (Implémentation & tests)',
         promptCreatePr: 'Prompt /create-pr (Génération Pull Request)',
         cliStatusTitle: 'Statut des CLI Locales',
@@ -798,6 +766,12 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       myTasks: 'My Tasks',
       urgentHigh: 'High Priority',
       labels: 'Labels',
+      sources: 'Sources',
+      allSources: 'All sources',
+      localSource: 'Local',
+      parents: 'Epics / Parents',
+      clearParentFilter: 'Clear parent filter',
+      digest: 'Daily digest',
       settings: 'Profile & Preferences',
       reseedDemo: 'Reset Demo Data',
       toggleSidebar: 'Toggle Sidebar',
@@ -853,7 +827,6 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       activitiesView: 'Activities',
       filterStatus: 'Status',
       filterPriority: 'Priority',
-      clearFilters: 'Clear filters',
       activeFilter: 'active filter',
       activeFilters: 'active filters',
       syncing: 'Syncing...',
@@ -908,7 +881,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       nextStep: 'Next Step',
       autoPilot: 'Auto-Pilot (/pick-issue)',
       clarify: 'Clarify (/clarify-issue)',
-      specify: 'Specify Speckit (/specify-issue)',
+      specify: 'Specify (/specify-issue)',
       implement: 'Implement (/code-issue)',
       createPr: 'Create PR (/create-pr)',
       history: 'Execution History & Artifacts',
@@ -919,27 +892,6 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       output: 'Report & Generated Artifact',
       stepsTitle: 'Executed Steps',
       skillSuccess: 'Skill executed successfully!',
-    },
-    chat: {
-      title: 'Agent Copilot Discussion',
-      subtitle: 'Interactive Chat & Live CLI Streaming',
-      discussWithAgent: 'Discuss with Agent',
-      viewChat: 'Discussion',
-      viewTerminal: 'Terminal Console',
-      sendPlaceholder: 'Ask a question, request code changes or give instructions... (Cmd+Enter to send)',
-      send: 'Send',
-      cancelStream: 'Stop',
-      clearHistory: 'Clear History',
-      clearedSuccess: 'Discussion history reset',
-      agentTyping: 'Agent is thinking and generating response...',
-      emptyHistory: 'No messages yet. Start a discussion with the Copilot agent on this task!',
-      quickActionsTitle: 'Quick Actions & Skills',
-      clarifyPrompt: '🔍 Clarify ambiguities and constraints',
-      specifyPrompt: '📝 Write Speckit technical specification',
-      implementPrompt: '💻 Code the feature and modify files',
-      testPrompt: '🧪 Run test suite and validate build',
-      prPrompt: '🚀 Create Pull Request / Commit changes',
-      diffPrompt: '👁️ Inspect Git diff of this branch',
     },
     taskModal: {
       createTitle: 'New Task',

@@ -21,14 +21,20 @@ CREATE TABLE IF NOT EXISTS projects (
     icon TEXT DEFAULT 'folder',
     color TEXT DEFAULT 'indigo',
     repo_path TEXT NOT NULL DEFAULT '.',
+    repo_paths TEXT NOT NULL DEFAULT '[]',  -- known working directories, auto-fed when a ticket pins a new CWD
     git_remote_url TEXT DEFAULT '',
     linear_team TEXT DEFAULT 'TASK',
     github_repo TEXT DEFAULT '',
-    issue_tracker TEXT NOT NULL DEFAULT 'local',
-    tracker_url TEXT DEFAULT '',
+    jira_project TEXT DEFAULT '',      -- Jira project key passed to acli --project
+    issue_tracker TEXT NOT NULL DEFAULT 'local',  -- 'linear' | 'github' | 'jira' | 'local'
+    tracker_url TEXT DEFAULT '',       -- Linear project URL, or the Jira base URL
+    project_type TEXT NOT NULL DEFAULT 'standard',  -- 'standard' | 'personal' (personal boards only serve the daily digest)
     is_default INTEGER DEFAULT 0,
     stage_mapping TEXT DEFAULT '{}',
     skill_overrides TEXT DEFAULT '{}',
+    ai_provider TEXT DEFAULT '',
+    ai_command_template TEXT DEFAULT '',
+    spec_framework TEXT DEFAULT '',    -- 'speckit' | 'openspec'
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -51,6 +57,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     external_url TEXT DEFAULT '',
     branch_name TEXT,
     pr_url TEXT,
+    repo_path TEXT NOT NULL DEFAULT '',  -- per-ticket CWD override; empty means inherit the project, then the global setting
     worktree_path TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -84,21 +91,6 @@ CREATE TABLE IF NOT EXISTS task_activities (
 CREATE INDEX IF NOT EXISTS idx_activities_task_id ON task_activities(task_id);
 CREATE INDEX IF NOT EXISTS idx_activities_status ON task_activities(status);
 
--- Task Messages Table (Chat History)
-CREATE TABLE IF NOT EXISTS task_messages (
-    id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL,
-    role TEXT NOT NULL, -- 'user' | 'assistant' | 'system'
-    content TEXT NOT NULL,
-    activity_id TEXT,
-    skill_id TEXT,
-    steps TEXT DEFAULT '[]',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_messages_task_id ON task_messages(task_id);
-
 -- Global Settings Table
 CREATE TABLE IF NOT EXISTS settings (
     id TEXT PRIMARY KEY,
@@ -107,6 +99,9 @@ CREATE TABLE IF NOT EXISTS settings (
     linear_team TEXT DEFAULT 'TASK',
     github_token TEXT DEFAULT '',
     github_repo TEXT DEFAULT '',
+    jira_project TEXT DEFAULT '',      -- default Jira project key
+    jira_url TEXT DEFAULT '',          -- default Jira base URL
+    spec_framework TEXT DEFAULT 'speckit',  -- 'speckit' | 'openspec'
     repo_path TEXT DEFAULT '.',
     auto_create_branch INTEGER DEFAULT 1,
     auto_create_worktree INTEGER DEFAULT 1,
@@ -128,11 +123,10 @@ CREATE TABLE IF NOT EXISTS settings (
 | :--- | :--- | :--- |
 | `GET` | `/api/tasks` | Returns array of all tasks (supports `?projectId=...`). |
 | `POST` | `/api/tasks` | Creates a new task bound strictly to `projectId`. |
-| `GET` | `/api/tasks/{id}` | Fetches task detail with messages and activities. |
+| `GET` | `/api/tasks/{id}` | Fetches task detail with its activities. |
 | `PUT` | `/api/tasks/{id}` | Updates task fields (status, title, description, priority, etc.). |
 | `DELETE` | `/api/tasks/{id}` | Deletes task and prunes associated Git worktree. |
 | `POST` | `/api/tasks/{id}/skills/{skillId}` | Enqueues or immediately executes an AI skill on the task. |
-| `POST` | `/api/tasks/{id}/chat` | Posts a user message and streams the AI agent's response. |
 | `POST` | `/api/tasks/{id}/comment` | Publishes a comment to Linear or GitHub issue tracker. |
 | `GET` | `/api/tasks/{id}/diff` | Computes and returns the Git diff of the task branch vs `main`. |
 
@@ -156,6 +150,91 @@ CREATE TABLE IF NOT EXISTS settings (
 | `PUT` | `/api/projects/{id}` | Updates project configuration, tracker binding, and paths. |
 | `DELETE` | `/api/projects/{id}` | Deletes project and its associated tasks. |
 | `POST` | `/api/projects/{id}/skills/install` | Installs default skills into `.gemini/` and `.agents/`. |
+| `GET` | `/api/projects/{id}/skills-status` | Reports which workflow skills are scaffolded, per worktree. |
+| `POST` | `/api/projects/{id}/install-skills` | Scaffolds the workflow skills into the repo and all its worktrees. |
+| `POST` | `/api/projects/{id}/init-git` | Initializes a Git repository in the project working directory. |
+| `GET` | `/api/projects/{id}/spec-framework-status` | Per-framework SDD status for this project (see 2.5). |
+| `POST` | `/api/projects/{id}/install-spec-framework` | Installs a SDD toolchain for this project (see 2.5). |
+| `GET` | `/api/projects/{id}/daily-digest` | Daily digest of the project. `?date=YYYY-MM-DD`, `?assignee=`, `?history=1` for the stored dates. Rejected unless the project is of type `personal`. |
+| `POST` | `/api/projects/{id}/daily-digest` | Computes and stores the digest; `{"enrich": true}` also runs the AI agenda pass. Same `personal` restriction. |
+
+### 2.4 Tracker Synchronization API
+
+| Method | Path | Body | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/sync/all` | — | Queues a sync of every configured project across all trackers. |
+| `POST` | `/api/sync/linear` | `{team, projectId}` | Queues a Linear team sync. |
+| `POST` | `/api/sync/github` | `{repo, projectId}` | Queues a GitHub repository sync. |
+| `POST` | `/api/sync/jira` | `{projectKey, projectId}` | Queues a Jira project sync via `acli`. |
+
+All four return `{message, activity}`; the work runs on the background job queue
+and its progress is readable through the Activities API.
+
+### 2.5 Spec-Driven Design Toolchain API
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/spec-framework/status` | Query params: `projectId` or `repoPath`, optional `framework`. Reports CLI availability and initialization state. |
+| `POST` | `/api/spec-framework/install` | Installs and initializes GitHub Spec Kit or OpenSpec in a working directory. |
+
+`GET /api/spec-framework/status` response:
+
+```json
+{
+  "frameworks": [
+    {
+      "framework": "speckit",
+      "frameworkLabel": "GitHub Spec Kit",
+      "repoPath": "/Users/me/code/my-app",
+      "cliAvailable": true,
+      "cliCommand": "/Users/me/.local/bin/specify",
+      "initialized": false,
+      "markerPaths": [],
+      "installHint": "uv tool install specify-cli --from git+https://github.com/github/spec-kit.git"
+    }
+  ]
+}
+```
+
+`POST /api/spec-framework/install` request:
+
+```json
+{
+  "framework": "openspec",
+  "repoPath": "/Users/me/code/my-app",
+  "projectId": "e2c1…",
+  "aiAgent": "claude",
+  "force": false
+}
+```
+
+Response — note that `installed: false` still returns HTTP 200, because the
+request was valid and `steps[]` carries the diagnosis:
+
+```json
+{
+  "framework": "openspec",
+  "frameworkLabel": "OpenSpec",
+  "repoPath": "/Users/me/code/my-app",
+  "installed": true,
+  "alreadyInit": false,
+  "version": "0.9.1",
+  "markerPaths": ["/Users/me/code/my-app/openspec", "/Users/me/code/my-app/openspec/project.md"],
+  "steps": [
+    {
+      "label": "Initialisation d'OpenSpec via npx",
+      "command": "npx -y @fission-ai/openspec@latest init --yes",
+      "success": true,
+      "skipped": false,
+      "output": "…"
+    }
+  ],
+  "message": "OpenSpec initialisé dans /Users/me/code/my-app"
+}
+```
+
+An unknown `framework` value returns HTTP 400. `force: true` re-runs the
+initializer over an already-initialized directory instead of returning early.
 
 ---
 
@@ -163,7 +242,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 ### Connection Handshake
 - **URL**: `ws://<host>:<port>/ws/terminal?taskId=<taskId>`
-- Automatically resolves worktree directory (`.tasks/worktrees/<taskKey>`) or project `repo_path`.
+- Automatically resolves the worktree directory (`.tasks/worktrees/<taskKey>`) under the repository returned by `ResolveTaskRepoPath`: the ticket's own `repo_path` first, then the project's, then the global setting.
 - Starts login shell `/bin/zsh -l` with PTY attached.
 
 ### Frame Formats
