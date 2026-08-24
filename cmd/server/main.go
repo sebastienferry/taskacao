@@ -13,7 +13,49 @@ import (
 	"tasks/internal/handlers"
 )
 
+// loadDotEnv reads KEY=VALUE lines from a .env file next to the binary's working
+// directory. A real environment variable always wins, so exporting a value in
+// the shell overrides the file. Secrets such as TASKACAO_JIRA_API_TOKEN can then
+// live outside the database and outside git, .env being already gitignored.
+func loadDotEnv(paths ...string) {
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			line = strings.TrimPrefix(line, "export ")
+			key, value, found := strings.Cut(line, "=")
+			if !found {
+				continue
+			}
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			// Quotes are what a user naturally types around a secret.
+			if len(value) >= 2 && (value[0] == '"' && value[len(value)-1] == '"' || value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+			if key == "" {
+				continue
+			}
+			if _, already := os.LookupEnv(key); already {
+				continue
+			}
+			_ = os.Setenv(key, value)
+		}
+		log.Printf("Loaded environment from %s", path)
+	}
+}
+
 func main() {
+	// .env.local last: it overrides nothing already exported, but is the usual
+	// place for a machine-specific secret.
+	loadDotEnv(".env", ".env.local")
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8090"
@@ -55,6 +97,7 @@ func main() {
 	mux.HandleFunc("/api/projects", h.HandleProjects)
 	mux.HandleFunc("/api/projects/", h.HandleProjectDetail)
 	mux.HandleFunc("/api/tasks", h.HandleTasks)
+	mux.HandleFunc("/api/tasks/facets", h.HandleTaskFacets)
 	mux.HandleFunc("/api/tasks/", h.HandleTaskDetail)
 	mux.HandleFunc("/api/activities", h.HandleActivities)
 	mux.HandleFunc("/api/activities/", h.HandleActivityDetail)

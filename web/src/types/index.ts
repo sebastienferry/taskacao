@@ -60,6 +60,11 @@ export interface Project {
    * dès qu'un ticket épingle un nouveau CWD, le chemin est enregistré ici.
    */
   repoPaths?: string[]
+  /**
+   * Chaque tâche travaille dans son propre worktree Git isolé, ou directement
+   * dans le clone si l'option est désactivée. Vrai par défaut.
+   */
+  useWorktrees?: boolean
   gitRemoteUrl?: string
   linearTeam: string
   githubRepo: string
@@ -109,6 +114,10 @@ export interface Task {
   prUrl?: string
   /** Répertoire de travail propre au ticket. Vide = hérite du projet, puis du réglage global. */
   repoPath?: string
+  /** Sprint / itération du tracker (champ Sprint côté Jira). */
+  sprint?: string
+  /** Équipe du tracker (champ Team côté Jira). */
+  team?: string
   source?: TaskSource
   externalUrl?: string
   /** Tracker work item type. Only "Task" and "Story" are imported. */
@@ -279,6 +288,17 @@ export interface UserSettings {
   githubRepo: string
   jiraProject?: string
   jiraUrl?: string
+  /** Identifiants de l'API Jira, requis pour importer Sprint et Team. */
+  jiraEmail?: string
+  /**
+   * Jamais renvoyé par l'API. En écriture, une chaîne vide conserve le jeton
+   * existant et la sentinelle `__clear__` l'efface.
+   */
+  jiraApiToken?: string
+  /** Un jeton est configuré, en base ou par variable d'environnement. */
+  jiraApiTokenSet?: boolean
+  /** Le jeton vient de TASKACAO_JIRA_API_TOKEN et prime sur la base. */
+  jiraApiTokenFromEnv?: boolean
   promptClarify: string
   promptSpecify: string
   promptImplement: string

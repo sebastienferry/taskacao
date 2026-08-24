@@ -11,6 +11,7 @@ import (
 
 	"tasks/internal/db"
 	"tasks/internal/models"
+	"tasks/internal/runner"
 	"tasks/internal/terminal"
 )
 
@@ -666,8 +667,10 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 		priority := r.URL.Query().Get("priority")
 		label := r.URL.Query().Get("label")
 		projectID := r.URL.Query().Get("projectId")
+		sprint := r.URL.Query().Get("sprint")
+		team := r.URL.Query().Get("team")
 
-		tasks, err := h.db.GetTasks(q, status, priority, label, projectID)
+		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -695,6 +698,21 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
+}
+
+// HandleTaskFacets serves the distinct sprint and team values present on the
+// board, so the UI shows those filters only for trackers that feed them.
+func (h *Handler) HandleTaskFacets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	facets, err := h.db.GetTaskFacets(r.URL.Query().Get("projectId"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, facets)
 }
 
 func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
@@ -876,8 +894,8 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"message": fmt.Sprintf("Bascule effectuée avec succès sur la branche '%s'", branch),
-			"branch":  branch,
+			"message":  fmt.Sprintf("Bascule effectuée avec succès sur la branche '%s'", branch),
+			"branch":   branch,
 			"repoPath": repoPath,
 		})
 		return
@@ -947,6 +965,22 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// maskJiraToken strips the Jira API token from anything sent to the client and
+// replaces it with two flags: whether a token is configured at all, and whether
+// it comes from the environment rather than the database. An empty incoming
+// token means "keep the stored one", so the UI can leave its field blank.
+func maskJiraToken(s *models.Settings) *models.Settings {
+	if s == nil {
+		return nil
+	}
+	copied := *s
+	fromEnv := runner.JiraTokenFromEnv() != ""
+	copied.JiraAPITokenSet = fromEnv || strings.TrimSpace(copied.JiraAPIToken) != ""
+	copied.JiraAPITokenFromEnv = fromEnv
+	copied.JiraAPIToken = ""
+	return &copied
+}
+
 func (h *Handler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -955,7 +989,7 @@ func (h *Handler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, settings)
+		writeJSON(w, http.StatusOK, maskJiraToken(settings))
 
 	case http.MethodPost, http.MethodPut:
 		var req models.Settings
@@ -968,7 +1002,7 @@ func (h *Handler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, saved)
+		writeJSON(w, http.StatusOK, maskJiraToken(saved))
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -986,7 +1020,7 @@ func (h *Handler) HandleSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tasks, _ := h.db.GetTasks("", "", "", "", "")
+	tasks, _ := h.db.GetTasks("", "", "", "", "", "", "")
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Database reset & demo tasks reseeded successfully",
 		"tasks":   tasks,
@@ -1162,14 +1196,17 @@ func (h *Handler) HandleTerminalWs(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// Ensure task worktree
+			// Ensure the task worktree, unless the project opted out: then the
+			// shell simply opens in the clone, and TASKACAO_TASK_WORKTREE stays
+			// unset so a script can tell the two situations apart.
 			if baseRepo != "" {
 				wtPath, branch, err := h.db.EnsureTaskWorktree(baseRepo, task)
-				if err == nil && wtPath != "" {
+				switch {
+				case err == nil && wtPath != "" && wtPath != baseRepo:
 					workDir = wtPath
 					envVars["TASKACAO_TASK_WORKTREE"] = wtPath
 					envVars["TASKACAO_TASK_BRANCH"] = branch
-				} else if workDir == "" {
+				case workDir == "":
 					workDir = baseRepo
 				}
 			}

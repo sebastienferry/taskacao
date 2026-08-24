@@ -43,6 +43,11 @@ interface AppContextType {
   priorityFilter: Priority | null
   setPriorityFilter: (priority: Priority | null) => void
   labelFilter: string | null
+  taskFacets: { sprints: string[]; teams: string[] }
+  sprintFilter: string | null
+  setSprintFilter: (sprint: string | null) => void
+  teamFilter: string | null
+  setTeamFilter: (team: string | null) => void
   setLabelFilter: (label: string | null) => void
   assigneeFilter: string | null
   setAssigneeFilter: (assignee: string | null) => void
@@ -229,6 +234,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [statusFilter, setStatusFilter] = useState<Status | null>(null)
   const [priorityFilter, setPriorityFilter] = useState<Priority | null>(null)
   const [labelFilter, setLabelFilter] = useState<string | null>(null)
+  const [taskFacets, setTaskFacets] = useState<{ sprints: string[]; teams: string[] }>({ sprints: [], teams: [] })
+  const [sprintFilter, setSprintFilter] = useState<string | null>(null)
+  const [teamFilter, setTeamFilter] = useState<string | null>(null)
   const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null)
   const [sourceFilter, setSourceFilter] = useState<'all' | TaskSource>('all')
   const [parentFilter, setParentFilter] = useState<string | null>(null)
@@ -518,6 +526,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (statusFilter) params.append('status', statusFilter)
       if (priorityFilter) params.append('priority', priorityFilter)
       if (labelFilter) params.append('label', labelFilter)
+      if (sprintFilter) params.append('sprint', sprintFilter)
+      if (teamFilter) params.append('team', teamFilter)
 
       const res = await fetch(`${API_BASE}/tasks?${params.toString()}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -529,7 +539,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } finally {
       setIsLoading(false)
     }
-  }, [searchQuery, statusFilter, priorityFilter, labelFilter, selectedProjectId])
+  }, [searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, selectedProjectId])
+
+  const fetchTaskFacets = useCallback(async () => {
+    try {
+      const params = new URLSearchParams()
+      if (selectedProjectId && selectedProjectId !== 'all') {
+        params.append('projectId', selectedProjectId)
+      }
+      const res = await fetch(`${API_BASE}/tasks/facets?${params.toString()}`)
+      if (!res.ok) return
+      const data = await res.json()
+      setTaskFacets({ sprints: data?.sprints || [], teams: data?.teams || [] })
+    } catch {
+      // A tracker that feeds neither field simply leaves the filters hidden.
+    }
+  }, [selectedProjectId])
+
+  useEffect(() => {
+    fetchTaskFacets()
+  }, [fetchTaskFacets, tasks.length])
 
   // Initial load on mount
   useEffect(() => {
@@ -1771,6 +1800,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         priorityFilter,
         setPriorityFilter,
         labelFilter,
+        taskFacets,
+        sprintFilter,
+        setSprintFilter,
+        teamFilter,
+        setTeamFilter,
         setLabelFilter,
         assigneeFilter,
         setAssigneeFilter,

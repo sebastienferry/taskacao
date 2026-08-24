@@ -152,6 +152,7 @@ export const ProjectModal: React.FC = () => {
   // Section 2: Git (Local path, URL distante git@..., init git)
   const [repoPath, setRepoPath] = useState('')
   const [repoPaths, setRepoPaths] = useState<string[]>([])
+  const [useWorktrees, setUseWorktrees] = useState(true)
   const [newRepoPathInput, setNewRepoPathInput] = useState('')
   const [gitRemoteUrl, setGitRemoteUrl] = useState('')
 
@@ -380,6 +381,7 @@ export const ProjectModal: React.FC = () => {
 
       setRepoPath(editingProject.repoPath || '')
       setRepoPaths(editingProject.repoPaths || [])
+      setUseWorktrees(editingProject.useWorktrees !== false)
       setGitRemoteUrl(editingProject.gitRemoteUrl || '')
 
       const hasCustomAgent = Boolean(editingProject.aiProvider || editingProject.aiCommandTemplate)
@@ -561,6 +563,7 @@ export const ProjectModal: React.FC = () => {
         isDefault,
         repoPath: repoPath.trim(),
         repoPaths,
+        useWorktrees,
         gitRemoteUrl: gitRemoteUrl.trim(),
         aiProvider: useCustomAgent && aiProvider ? (aiProvider as AIProvider) : undefined,
         aiCommandTemplate: useCustomAgent && aiCommandTemplate.trim() ? aiCommandTemplate.trim() : undefined,
@@ -938,6 +941,37 @@ export const ProjectModal: React.FC = () => {
                     Ajouter
                   </button>
                 </div>
+              </div>
+
+              {/* Isolation par worktree : utile quand plusieurs agents
+                  travaillent en parallèle, coût inutile sur un projet solo. */}
+              <div className="p-3 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="text-xs font-bold text-[var(--text-primary)] block">
+                    Worktree Git isolé par tâche
+                  </span>
+                  <span className="text-[10px] text-[var(--text-muted)] block mt-0.5">
+                    {useWorktrees
+                      ? 'Chaque tâche obtient son propre checkout dans .tasks/worktrees, sur sa branche. Utile quand plusieurs agents travaillent en parallèle.'
+                      : "Les tâches s'exécutent directement dans le dépôt, sans checkout dédié et sans changer ta branche courante. Adapté à un projet solo."}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setUseWorktrees(v => !v)}
+                  role="switch"
+                  aria-checked={useWorktrees}
+                  className={`relative w-10 h-5 rounded-full transition-colors shrink-0 cursor-pointer ${
+                    useWorktrees ? 'bg-[var(--accent-color)]' : 'bg-[var(--border-color)]'
+                  }`}
+                  title={useWorktrees ? 'Désactiver les worktrees pour ce projet' : 'Activer les worktrees pour ce projet'}
+                >
+                  <span
+                    className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
+                      useWorktrees ? 'left-[22px]' : 'left-0.5'
+                    }`}
+                  />
+                </button>
               </div>
 
               {/* Remote URL */}
