@@ -66,15 +66,11 @@ App.tsx
 - Quick status dropdown selector and live activity indicators on every row.
 
 ### 2.4 Task Chat Drawer & Interactive Terminal (`TaskChatDrawer.tsx` & `InteractiveTerminal.tsx`)
-The drawer slides in from the right edge of the screen and offers two complementary modes:
+The drawer slides in from the right edge of the screen and hosts a single view: the
+task's real TTY session. There is no separate non-TTY chat mode, so every exchange
+with the agent happens in the shell where the agent CLI actually runs.
 
-#### Mode A: Copilot Discussion
-- Rich Markdown rendering with code blocks and one-click copy buttons.
-- Real-time streaming response tokens via Server-Sent Events / streaming HTTP.
-- Quick Action buttons: `/clarify`, `/specify`, `/code`, `/test`, `/pr`.
-- Persistent conversation history stored in SQLite `task_messages`.
-
-#### Mode B: Interactive ZSH PTY Terminal
+#### Interactive ZSH PTY Terminal
 - Mounted via `<InteractiveTerminal task={chatTask} />`.
 - Connects directly to the Go WebSocket endpoint `/ws/terminal?taskId=<id>`.
 - Embeds a full Xterm.js terminal emulator with auto-fit addon and dark obsidian theme.

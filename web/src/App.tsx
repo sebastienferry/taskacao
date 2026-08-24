@@ -6,6 +6,7 @@ import { BoardView } from './components/BoardView'
 import { ListView } from './components/ListView'
 import { ActivitiesView } from './components/ActivitiesView'
 import { SyncView } from './components/SyncView'
+import { DigestView } from './components/DigestView'
 import { QuickAddModal } from './components/QuickAddModal'
 import { TaskDetailModal } from './components/TaskDetailModal'
 import { TaskChatDrawer } from './components/TaskChatDrawer'
@@ -15,6 +16,7 @@ import { ProjectModal } from './components/ProjectModal'
 import { GitDiffModal } from './components/GitDiffModal'
 import { BranchSwitcherModal } from './components/BranchSwitcherModal'
 import { StatusBar } from './components/StatusBar'
+import { WorkspaceTerminalPanel } from './components/WorkspaceTerminalPanel'
 import { ToastContainer } from './components/ToastContainer'
 import { Loader2 } from 'lucide-react'
 
@@ -49,11 +51,16 @@ const MainContent: React.FC = () => {
               <ListView />
             ) : activeView === 'sync' ? (
               <SyncView />
+            ) : activeView === 'digest' ? (
+              <DigestView />
             ) : (
               <ActivitiesView />
             )}
           </main>
         </div>
+
+        {/* Docked workspace CLI, side by side with the views */}
+        <WorkspaceTerminalPanel />
       </div>
 
       {/* Global Bottom Status Bar with CWD Git Branch, Project, Engine & Live Jobs */}

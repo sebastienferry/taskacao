@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult, GitStatusInfo, GitBranchesInfo, TaskMessage } from '../types'
+import type { Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
+import { resolveAccentAttribute } from '../lib/accents'
 
 interface AppContextType {
   projects: Project[]
@@ -47,21 +48,41 @@ interface AppContextType {
   setAssigneeFilter: (assignee: string | null) => void
   sourceFilter: 'all' | TaskSource
   setSourceFilter: (source: 'all' | TaskSource) => void
+  /** Filters the board on a parent work item key (epic, or parent story). */
+  parentFilter: string | null
+  setParentFilter: (parentKey: string | null) => void
+  /** Distinct parents present in the loaded tasks, most populated first. */
+  availableParents: { key: string; title: string; type: string; count: number }[] 
+  /**
+   * Resolves the display name of a workflow skill, honouring the project's
+   * `skillOverrides`. Pass `projectId` to resolve against a specific project —
+   * a task's project is not necessarily the one selected in the sidebar.
+   */
+  skillLabel: (skillId: string, fallback?: string, projectId?: string) => string
+  /**
+   * Resolves the slash command of a workflow skill. A project override is
+   * treated as the command to invoke, normalised with a leading slash, so
+   * renaming a skill also changes the command shown and run.
+   */
+  skillCommand: (skillId: string, fallback: string, projectId?: string) => string
+  /** Docked workspace terminal on the right side of the app. */
+  isTerminalPanelOpen: boolean
+  setIsTerminalPanelOpen: (open: boolean) => void
+  toggleTerminalPanel: () => void
+  /** True when the selected project is a personal board, the only kind the digest is served for. */
+  isDigestAvailable: boolean
+  /** Daily digest of the active project: task sections plus an optional AI agenda. */
+  dailyDigest: DailyDigest | null
+  isDigestLoading: boolean
+  isDigestEnriching: boolean
+  fetchDailyDigest: (date?: string, assignee?: string) => Promise<DailyDigest | null>
+  generateDailyDigest: (opts?: { date?: string; assignee?: string; enrich?: boolean }) => Promise<DailyDigest | null>
   sidebarCollapsed: boolean
   setSidebarCollapsed: (collapsed: boolean | ((prev: boolean) => boolean)) => void
   selectedTask: Task | null
   setSelectedTask: (task: Task | null) => void
   chatTask: Task | null
   setChatTask: (task: Task | null) => void
-  getTaskMessages: (taskId: string) => Promise<TaskMessage[]>
-  sendTaskMessageStream: (
-    taskId: string,
-    message: string,
-    skillId?: string,
-    onChunk?: (chunk: string) => void,
-    onStep?: (step: string) => void
-  ) => Promise<TaskMessage | null>
-  clearTaskMessages: (taskId: string) => Promise<void>
   hideDone: boolean
   setHideDone: (hide: boolean | ((prev: boolean) => boolean)) => void
   toggleHideDone: () => void
@@ -119,7 +140,7 @@ interface AppContextType {
 const defaultSettings: UserSettings = {
   id: 1,
   theme: 'dark',
-  accentColor: 'indigo',
+  accentColor: 'orange',
   language: 'fr',
   density: 'standard',
   defaultView: 'board',
@@ -133,6 +154,9 @@ const defaultSettings: UserSettings = {
   issueTracker: 'local',
   linearTeam: '',
   githubRepo: '',
+  jiraProject: '',
+  jiraUrl: '',
+  specFramework: 'speckit',
   promptClarify: '',
   promptSpecify: '',
   promptImplement: '',
@@ -156,6 +180,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [runningSkillId, setRunningSkillId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [activeView, setActiveView] = useState<ViewMode>('board')
+
+  // The docked terminal keeps its open state and width across reloads: it is a
+  // workspace tool, not a transient modal.
+  const [isTerminalPanelOpen, setIsTerminalPanelOpenState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('taskacao_terminal_panel_open') === 'true'
+    } catch {
+      return false
+    }
+  })
+
+  const setIsTerminalPanelOpen = useCallback((open: boolean) => {
+    setIsTerminalPanelOpenState(open)
+    try {
+      localStorage.setItem('taskacao_terminal_panel_open', String(open))
+    } catch {
+      // private mode / blocked storage: the panel just won't be remembered
+    }
+  }, [])
+
+  const toggleTerminalPanel = useCallback(() => {
+    setIsTerminalPanelOpenState(prev => {
+      const next = !prev
+      try {
+        localStorage.setItem('taskacao_terminal_panel_open', String(next))
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }, [])
   const [boardGrouping, setBoardGroupingState] = useState<BoardGroupingMode>(() => {
     try {
       return (localStorage.getItem('taskacao_board_grouping') as BoardGroupingMode) || 'workflow'
@@ -176,6 +231,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [labelFilter, setLabelFilter] = useState<string | null>(null)
   const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null)
   const [sourceFilter, setSourceFilter] = useState<'all' | TaskSource>('all')
+  const [parentFilter, setParentFilter] = useState<string | null>(null)
+  const [dailyDigest, setDailyDigest] = useState<DailyDigest | null>(null)
+  const [isDigestLoading, setIsDigestLoading] = useState(false)
+  const [isDigestEnriching, setIsDigestEnriching] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [chatTask, setChatTask] = useState<Task | null>(null)
@@ -275,8 +334,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       root.classList.remove('light')
     }
 
-    body.setAttribute('data-accent', settings.accentColor || 'indigo')
-    root.setAttribute('data-accent', settings.accentColor || 'indigo')
+    // Accent per project: the selected project's color drives the whole accent
+    // scale (index.css [data-accent=…]). "All projects" keeps the brand orange.
+    const accent = resolveAccentAttribute(currentProject?.color)
+    body.setAttribute('data-accent', accent)
+    root.setAttribute('data-accent', accent)
 
     const density = settings.density || 'standard'
     root.classList.remove('density-compact', 'density-standard', 'density-comfortable')
@@ -296,7 +358,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } else {
       root.style.fontSize = '14px'
     }
-  }, [settings.theme, settings.accentColor, settings.density])
+  }, [settings.theme, settings.density, currentProject?.color])
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -730,7 +792,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setIsSyncing(true)
     try {
       const activeProj = selectedProjectId !== 'all' ? projects.find(p => p.id === selectedProjectId) : (projects.find(p => p.isDefault) || projects[0])
-      const targetKey = projectKey || activeProj?.linearTeam || ''
+      const targetKey = projectKey || activeProj?.jiraProject || settings.jiraProject || ''
       const res = await fetch(`${API_BASE}/sync/jira`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -769,7 +831,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } else if (tracker === 'github') {
       await syncGithub(activeProj?.githubRepo)
     } else if (tracker === 'jira') {
-      await syncJira(activeProj?.linearTeam)
+      await syncJira(activeProj?.jiraProject)
     } else {
       await fetchTasks()
       addToast({
@@ -1220,10 +1282,158 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  // Filter tasks by active source filter (all / linear / github / local)
-  const filteredTasks = sourceFilter === 'all' 
-    ? tasks 
-    : tasks.filter(t => (t.source || 'local') === sourceFilter)
+  // Filter tasks by active source filter (all / linear / github / jira / local)
+  // then by the active parent (epic or parent story), when one is selected.
+  const filteredTasks = React.useMemo(() => {
+    let out = sourceFilter === 'all'
+      ? tasks
+      : tasks.filter(t => (t.source || 'local') === sourceFilter)
+    if (parentFilter) {
+      out = out.filter(t => t.parentKey === parentFilter)
+    }
+    return out
+  }, [tasks, sourceFilter, parentFilter])
+
+  // The daily digest reads as a brief for one person, so it is served only for
+  // a selected project of type "personal" — never for a delivery project, and
+  // never for the "all projects" view.
+  const isDigestAvailable = currentProject?.projectType === 'personal'
+
+  const digestProjectId = useCallback((): string | null => {
+    return currentProject?.projectType === 'personal' ? currentProject.id : null
+  }, [currentProject])
+
+  // Switching to a delivery project while the digest is open would leave an
+  // empty view behind: fall back to the board.
+  useEffect(() => {
+    if (activeView === 'digest' && !isDigestAvailable) {
+      setActiveView('board')
+    }
+  }, [activeView, isDigestAvailable])
+
+  const fetchDailyDigest = useCallback(async (date?: string, assignee?: string): Promise<DailyDigest | null> => {
+    const pid = digestProjectId()
+    if (!pid) return null
+    setIsDigestLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (date) params.set('date', date)
+      if (assignee) params.set('assignee', assignee)
+      const qs = params.toString() ? `?${params.toString()}` : ''
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(pid)}/daily-digest${qs}`)
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Digest indisponible')
+      }
+      const data: DailyDigest = await res.json()
+      setDailyDigest(data)
+      return data
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Digest indisponible', description: err.message })
+      return null
+    } finally {
+      setIsDigestLoading(false)
+    }
+  }, [digestProjectId])
+
+  const generateDailyDigest = useCallback(async (
+    opts?: { date?: string; assignee?: string; enrich?: boolean }
+  ): Promise<DailyDigest | null> => {
+    const pid = digestProjectId()
+    if (!pid) return null
+    const enrich = Boolean(opts?.enrich)
+    if (enrich) setIsDigestEnriching(true)
+    else setIsDigestLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(pid)}/daily-digest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: opts?.date || '', assignee: opts?.assignee || '', enrich }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Génération du digest impossible')
+      }
+      const data: DailyDigest = await res.json()
+      setDailyDigest(data)
+      if (enrich) {
+        addToast({
+          type: data.aiStatus === 'completed' ? 'success' : 'error',
+          title: data.aiStatus === 'completed' ? 'Agenda récupéré' : 'Agenda indisponible',
+          description: data.aiStatus === 'completed'
+            ? `Agenda du ${data.date} ajouté au digest.`
+            : (data.aiError || "L'agent n'a rien renvoyé."),
+        })
+      }
+      return data
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Digest', description: err.message })
+      return null
+    } finally {
+      setIsDigestEnriching(false)
+      setIsDigestLoading(false)
+    }
+  }, [digestProjectId])
+
+  // A project can rename any workflow skill through `skillOverrides`
+  // (skillId -> custom label). Every place that shows a skill name goes through
+  // this resolver, otherwise the setting would be write-only.
+  const resolveSkillOverride = useCallback(
+    (skillId: string, projectId?: string): string => {
+      const proj = projectId
+        ? projects.find(p => p.id === projectId) || currentProject
+        : currentProject
+      return (proj?.skillOverrides?.[skillId] || '').trim()
+    },
+    [projects, currentProject]
+  )
+
+  const skillLabel = useCallback(
+    (skillId: string, fallback?: string, projectId?: string): string => {
+      const override = resolveSkillOverride(skillId, projectId)
+      // An override written as a command ("/clarify-workitem") reads badly as a
+      // label, so strip the slash for display purposes.
+      if (override) return override.replace(/^\//, '')
+      if (fallback && fallback.trim() !== '') return fallback
+      const known = skills.find(s => s.id === skillId)
+      return known?.name || skillId
+    },
+    [resolveSkillOverride, skills]
+  )
+
+  const skillCommand = useCallback(
+    (skillId: string, fallback: string, projectId?: string): string => {
+      const override = resolveSkillOverride(skillId, projectId)
+      if (!override) return fallback
+      // Accept both "clarify-workitem" and "/clarify-workitem".
+      return '/' + override.replace(/^\//, '')
+    },
+    [resolveSkillOverride]
+  )
+
+  // Distinct parents across the loaded tasks, ordered by how much work hangs
+  // under each one. Drives the sidebar "Epics / Parents" filter.
+  const availableParents = React.useMemo(() => {
+    const byKey = new Map<string, { key: string; title: string; type: string; count: number }>()
+    for (const t of tasks) {
+      if (!t.parentKey) continue
+      const existing = byKey.get(t.parentKey)
+      if (existing) {
+        existing.count += 1
+        if (!existing.title && t.parentTitle) existing.title = t.parentTitle
+      } else {
+        byKey.set(t.parentKey, {
+          key: t.parentKey,
+          title: t.parentTitle || '',
+          type: t.parentType || '',
+          count: 1,
+        })
+      }
+    }
+    return Array.from(byKey.values()).sort(
+      (a, b) => b.count - a.count || a.key.localeCompare(b.key)
+    )
+  }, [tasks])
 
   const availableLabels = Array.from(
     new Set(tasks.flatMap(t => t.labels || []).filter(Boolean))
@@ -1271,118 +1481,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return false
     }
   }, [addToast, fetchTasks])
-
-  const getTaskMessages = useCallback(async (taskId: string): Promise<TaskMessage[]> => {
-    try {
-      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/messages`)
-      if (!res.ok) return []
-      const data = await res.json()
-      return data || []
-    } catch {
-      return []
-    }
-  }, [])
-
-  const clearTaskMessages = useCallback(async (taskId: string): Promise<void> => {
-    try {
-      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/messages`, {
-        method: 'DELETE',
-      })
-      if (!res.ok) throw new Error('Clear messages failed')
-      addToast({
-        type: 'info',
-        title: t.chat.clearedSuccess,
-      })
-    } catch (err: any) {
-      addToast({
-        type: 'error',
-        title: t.toasts.error,
-        description: err.message,
-      })
-    }
-  }, [addToast, t.chat.clearedSuccess, t.toasts.error])
-
-  const sendTaskMessageStream = useCallback(async (
-    taskId: string,
-    message: string,
-    skillId?: string,
-    onChunk?: (chunk: string) => void,
-    onStep?: (step: string) => void
-  ): Promise<TaskMessage | null> => {
-    try {
-      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, skillId }),
-      })
-
-      if (!response.ok) {
-        const err = await response.json()
-        throw new Error(err.error || 'Chat request failed')
-      }
-
-      if (!response.body) {
-        throw new Error('ReadableStream not supported in response')
-      }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder('utf-8')
-      let buffer = ''
-      let finalMessage: TaskMessage | null = null
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        let currentEvent = 'message'
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed) {
-            currentEvent = 'message'
-            continue
-          }
-          if (trimmed.startsWith('event:')) {
-            currentEvent = trimmed.slice(6).trim()
-            continue
-          }
-          if (trimmed.startsWith('data:')) {
-            const dataStr = trimmed.slice(5).trim()
-            try {
-              const parsed = JSON.parse(dataStr)
-              if (currentEvent === 'chunk') {
-                onChunk?.(parsed.text || '')
-              } else if (currentEvent === 'step') {
-                onStep?.(parsed)
-              } else if (currentEvent === 'done') {
-                finalMessage = parsed as TaskMessage
-              } else if (currentEvent === 'error') {
-                throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed))
-              }
-            } catch {
-              // ignore JSON parse error for partial chunks
-            }
-          }
-        }
-      }
-
-      // Refresh task activities and stats in the background
-      fetchActivities()
-      fetchActivityStats()
-
-      return finalMessage
-    } catch (err: any) {
-      addToast({
-        type: 'error',
-        title: t.toasts.error,
-        description: err.message,
-      })
-      return null
-    }
-  }, [addToast, fetchActivities, fetchActivityStats, t.toasts.error])
 
   const fetchGitBranches = useCallback(async (projectIdOrPath?: string): Promise<GitBranchesInfo | null> => {
     try {
@@ -1555,6 +1653,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const activeTag = (document.activeElement?.tagName || '').toLowerCase()
       const isInputActive = activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select'
 
+      // Ctrl/Cmd + ` toggles the docked terminal, as in an IDE.
+      if ((e.metaKey || e.ctrlKey) && (e.key === '`' || e.code === 'Backquote')) {
+        e.preventDefault()
+        toggleTerminalPanel()
+        return
+      }
+
       if (e.key === '/' && !isInputActive) {
         e.preventDefault()
         const searchInput = document.getElementById('global-search-input') as HTMLInputElement
@@ -1621,7 +1726,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isCommandPaletteOpen, isQuickAddOpen, selectedTask, selectedActivity, isProfileOpen, searchQuery, diffTask])
+  }, [isCommandPaletteOpen, isQuickAddOpen, selectedTask, selectedActivity, isProfileOpen, searchQuery, diffTask, toggleTerminalPanel])
 
   return (
     <AppContext.Provider
@@ -1671,15 +1776,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setAssigneeFilter,
         sourceFilter,
         setSourceFilter,
+        parentFilter,
+        setParentFilter,
+        availableParents,
+        skillLabel,
+        skillCommand,
+        isTerminalPanelOpen,
+        setIsTerminalPanelOpen,
+        toggleTerminalPanel,
+        isDigestAvailable,
+        dailyDigest,
+        isDigestLoading,
+        isDigestEnriching,
+        fetchDailyDigest,
+        generateDailyDigest,
         sidebarCollapsed,
         setSidebarCollapsed,
         selectedTask,
         setSelectedTask,
         chatTask,
         setChatTask,
-        getTaskMessages,
-        sendTaskMessageStream,
-        clearTaskMessages,
         diffTask,
         setDiffTask,
         fetchGitDiff,

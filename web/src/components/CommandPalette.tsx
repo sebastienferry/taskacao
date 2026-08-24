@@ -20,8 +20,11 @@ import {
   ShieldCheck,
   Layers,
   MessageSquare,
+  Download,
+  Terminal as TerminalIcon,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { accentTextStyle } from '../lib/accents'
 
 export const CommandPalette: React.FC = () => {
   const {
@@ -33,6 +36,8 @@ export const CommandPalette: React.FC = () => {
     setIsProjectModalOpen,
     setEditingProject,
     setActiveView,
+    isTerminalPanelOpen,
+    toggleTerminalPanel,
     setIsQuickAddOpen,
     setIsProfileOpen,
     setSelectedTask,
@@ -44,6 +49,10 @@ export const CommandPalette: React.FC = () => {
     runSkill,
     openInEditor,
     syncCurrentProject,
+    syncJira,
+    currentProject,
+    skillLabel,
+    addToast,
     t,
   } = useApp()
 
@@ -73,6 +82,57 @@ export const CommandPalette: React.FC = () => {
   }, [isCommandPaletteOpen, setIsCommandPaletteOpen])
 
   if (!isCommandPaletteOpen) return null
+
+  /**
+   * Installs a Spec-Driven Design toolchain (Spec Kit or OpenSpec) into the
+   * active project's working directory, reporting the outcome as a toast.
+   */
+  const installSpecFrameworkFromPalette = async (framework: 'speckit' | 'openspec') => {
+    const label = framework === 'openspec' ? 'OpenSpec' : 'GitHub Spec Kit'
+    const repoPath = currentProject?.repoPath || settings.repoPath
+    if (!repoPath) {
+      addToast({
+        type: 'warning',
+        title: 'Aucun répertoire de travail',
+        description: `Configurez le CWD d'un projet avant d'installer ${label}.`,
+      })
+      return
+    }
+
+    addToast({
+      type: 'info',
+      title: `Installation de ${label}...`,
+      description: `Répertoire : ${repoPath}`,
+    })
+
+    try {
+      const res = await fetch('/api/spec-framework/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          framework,
+          repoPath,
+          projectId: currentProject?.id || '',
+          aiAgent: currentProject?.aiProvider || settings.aiProvider || '',
+        }),
+      })
+      const result = await res.json()
+      if (!res.ok) {
+        throw new Error(result?.error || `Installation de ${label} impossible`)
+      }
+      addToast({
+        type: result.installed ? 'success' : 'error',
+        title: result.installed ? `${label} prêt` : `Échec de l'installation de ${label}`,
+        description: result.message,
+      })
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: `Échec de l'installation de ${label}`,
+        description: err.message,
+      })
+    }
+  }
 
   const getSkillIcon = (iconName: string) => {
     switch (iconName) {
@@ -147,6 +207,17 @@ export const CommandPalette: React.FC = () => {
       },
     },
     {
+      id: 'toggle_terminal',
+      title: isTerminalPanelOpen ? '🖥️ Fermer le terminal du workspace' : '🖥️ Ouvrir le terminal du workspace (CLI)',
+      icon: <TerminalIcon size={16} className="text-indigo-400" />,
+      shortcut: 'Ctrl+`',
+      keywords: ['terminal', 'cli', 'shell', 'zsh', 'console', 'tty', 'pty', 'commande'],
+      action: () => {
+        toggleTerminalPanel()
+        setIsCommandPaletteOpen(false)
+      },
+    },
+    {
       id: 'sync_now',
       title: '🚀 Lancer la synchronisation du projet actif',
       icon: <RefreshCw size={16} className="text-emerald-400" />,
@@ -155,6 +226,39 @@ export const CommandPalette: React.FC = () => {
       action: () => {
         setIsCommandPaletteOpen(false)
         syncCurrentProject()
+      },
+    },
+    {
+      id: 'sync_jira',
+      title: `🔷 Synchroniser Jira${currentProject?.jiraProject ? ` (${currentProject.jiraProject})` : ''}`,
+      icon: <RefreshCw size={16} className="text-blue-400" />,
+      shortcut: 'J',
+      keywords: ['jira', 'atlassian', 'acli', 'synchroniser', 'sync', 'tickets', 'workitem'],
+      action: () => {
+        setIsCommandPaletteOpen(false)
+        syncJira(currentProject?.jiraProject)
+      },
+    },
+    {
+      id: 'install_speckit',
+      title: '📑 Installer GitHub Spec Kit dans le projet actif',
+      icon: <Download size={16} className="text-blue-400" />,
+      shortcut: 'K',
+      keywords: ['speckit', 'spec kit', 'specify', 'sdd', 'installer', 'install', 'scaffold', 'uv', 'uvx'],
+      action: () => {
+        setIsCommandPaletteOpen(false)
+        void installSpecFrameworkFromPalette('speckit')
+      },
+    },
+    {
+      id: 'install_openspec',
+      title: '🧭 Installer OpenSpec dans le projet actif',
+      icon: <Download size={16} className="text-emerald-400" />,
+      shortcut: 'Shift+K',
+      keywords: ['openspec', 'open spec', 'sdd', 'installer', 'install', 'scaffold', 'npx', 'npm'],
+      action: () => {
+        setIsCommandPaletteOpen(false)
+        void installSpecFrameworkFromPalette('openspec')
       },
     },
     {
@@ -183,7 +287,7 @@ export const CommandPalette: React.FC = () => {
     ...projects.map(p => ({
       id: `switch_proj_${p.id}`,
       title: `Basculer sur le projet: ${p.name}${p.linearTeam ? ` (${p.linearTeam})` : ''}`,
-      icon: <Layers size={16} className={`text-${p.color || 'indigo'}-400`} />,
+      icon: <Layers size={16} style={accentTextStyle(p.color)} />,
       shortcut: p.slug.substring(0, 3).toUpperCase(),
       keywords: ['projet', 'project', p.name.toLowerCase(), p.slug.toLowerCase(), p.linearTeam?.toLowerCase() || '', p.githubRepo?.toLowerCase() || ''],
       action: () => {
@@ -249,12 +353,16 @@ export const CommandPalette: React.FC = () => {
   ]
 
   // Dynamic Skill Actions
-  const skillActions = skills.map(sk => ({
+  const skillActions = skills.map(sk => {
+    const label = skillLabel(sk.id, sk.name)
+    return {
     id: `skill_${sk.id}`,
-    title: `⚡ Lancer ${sk.name} (${sk.command})`,
+    title: `⚡ Lancer ${label} (${sk.command})`,
     icon: getSkillIcon(sk.icon),
     shortcut: sk.command.replace('/', ''),
-    keywords: ['skill', sk.name.toLowerCase(), sk.command.toLowerCase(), sk.description?.toLowerCase() || ''],
+    // Keep the default name searchable too, so a renamed skill stays findable
+    // by whichever label the user has in mind.
+    keywords: ['skill', label.toLowerCase(), sk.name.toLowerCase(), sk.command.toLowerCase(), sk.description?.toLowerCase() || ''],
     action: () => {
       setIsCommandPaletteOpen(false)
       // Pick first task matching this skill input or first active task
@@ -264,7 +372,8 @@ export const CommandPalette: React.FC = () => {
         setSelectedTask(targetTask)
       }
     },
-  }))
+    }
+  })
 
   const qLower = query.toLowerCase().trim()
 

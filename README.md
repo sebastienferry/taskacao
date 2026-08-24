@@ -6,19 +6,33 @@ Outil moderne et agentique de gestion des tâches pour développeurs et équipes
 
 ## ✨ Fonctionnalités implémentées
 
-- 🔄 **Support Multi-Trackers Hybride (Linear, GitHub CLI & Local)** :
+- 🔄 **Support Multi-Trackers Hybride (Linear, GitHub CLI, Jira & Local)** :
   - **Chargement & Synchronisation complète** :
-    - `POST /api/sync/all` : Synchronise à la fois Linear et GitHub en un seul clic.
+    - `POST /api/sync/all` : Synchronise Linear, GitHub et Jira en un seul clic.
     - `POST /api/sync/linear` : Synchronise les tickets d'équipe Linear.
     - `POST /api/sync/github` : Synchronise les issues GitHub du repository configuré.
+    - `POST /api/sync/jira` : Synchronise les tickets du projet Jira via la CLI Atlassian (`acli jira workitem list`).
   - **Création d'Issues avec routage CLI** :
-    - Choix de la destination lors de l'ajout rapide (<kbd>N</kbd> ou `+`) : 🟣 **Linear**, 🐙 **GitHub**, ou 📁 **Local SQLite**.
-    - Exécution transparente de `linear issue create` ou `gh issue create` en arrière-plan avec récupération automatique des identifiants et URLs.
+    - Choix de la destination lors de l'ajout rapide (<kbd>N</kbd> ou `+`) : 🟣 **Linear**, 🐙 **GitHub**, 🔷 **Jira**, ou 📁 **Local SQLite**.
+    - Exécution transparente de `linear issue create`, `gh issue create` ou `acli jira workitem create` en arrière-plan avec récupération automatique des identifiants et URLs.
   - **Mise à jour d'état bidirectionnelle** :
-    - Déplacer une carte dans le Kanban ou la Liste met à jour automatiquement l'état sur Linear (`linear issue update --state`) et sur GitHub (`gh issue close` / `reopen`).
+    - Déplacer une carte dans le Kanban ou la Liste met à jour automatiquement l'état sur Linear (`linear issue update --state`), sur GitHub (`gh issue close` / `reopen`) et sur Jira (`acli jira workitem transition --state`).
+    - Les rapports d'exécution des skills sont postés en commentaire sur le ticket distant (`acli jira workitem comment` pour Jira).
+  - **Configuration Jira par projet** :
+    - Champ *Projet Jira* (clé passée à `acli --project`) et *URL Jira* pour construire les liens `/browse/<KEY>`.
+    - Détection des statuts réels du workflow Jira via `acli jira workitem search`, avec repli sur *To Do / In Progress / In Review / Done*.
   - **Filtres par source & Badges d'origine** :
-    - Filtrez en 1 clic dans la barre latérale : *Toutes les sources*, *Linear (50)*, *GitHub (9)*, *Local*.
+    - Filtrez en 1 clic dans la barre latérale : *Toutes les sources*, *Linear*, *GitHub*, *Jira*, *Local*, avec compteurs en temps réel.
     - Badges d'origine avec lien direct vers le ticket dans le navigateur.
+
+- 📐 **Frameworks Spec-Driven Design installables (Spec Kit & OpenSpec)** :
+  - **Installation réelle de la chaîne d'outils depuis l'interface** (onglet *Compétences IA & SDD* d'un projet, ou palette <kbd>Cmd+K</kbd>) :
+    - **GitHub Spec Kit** : installe la CLI `specify` via `uv` / `uvx` depuis `git+https://github.com/github/spec-kit.git`, puis exécute `specify init --here`. Scaffolde `.specify/` et `specs/` (spec.md, plan.md, tasks.md) ainsi que les commandes `/speckit.*` de l'agent.
+    - **OpenSpec** : installe la CLI `openspec` via `npm` / `npx` depuis `@fission-ai/openspec`, puis exécute `openspec init`. Scaffolde `openspec/` (propositions de changement, deltas de specs `ADDED` / `MODIFIED` / `REMOVED`, checklists).
+  - `GET /api/spec-framework/status` : indique, par framework, si la CLI est trouvée dans le PATH et si le répertoire de travail est déjà initialisé.
+  - `POST /api/spec-framework/install` : lance l'installation et renvoie **chaque commande exécutée** avec sa sortie, de sorte qu'un échec soit diagnosticable et rejouable à la main.
+  - Chaque installation est tracée comme une activité dans la vue *Activités*.
+  - Le framework choisi pilote le contenu de la skill `/specify-issue` scaffoldée dans le projet et le prompt envoyé à l'agent IA.
 
 - 🤖 **Agent Copilot & Moteur IA Configurable (`agy`, `vibe`, `claude`)** :
   - **Choix du moteur d'IA** :
@@ -28,16 +42,16 @@ Outil moderne et agentique de gestion des tâches pour développeurs et équipes
     - `custom` : Template de commande shell entièrement personnalisable avec variables d'injection.
   - **Personnalisation des Prompts par Skill** :
     1. 🔍 **Clarify** (`/clarify-issue`) : Analyse les ambiguïtés et génère les questions de cadrage.
-    2. 📝 **Specify** (`/specify-issue`) : Rédige la spec Speckit et initialise la branche Git.
+    2. 📝 **Specify** (`/specify-issue`) : Rédige la spec (Spec Kit ou OpenSpec, selon le framework du projet) et initialise la branche Git.
     3. 💻 **Implement** (`/code-issue`) : Plan de code, modification des fichiers et tests unitaires.
     4. 🚀 **Create PR** (`/create-pr`) : Commit sémantique et description Markdown complète de la PR.
     5. ⚡ **Auto-Pilot** (`/pick-issue`) : Routeur intelligent qui enchaîne automatiquement l'étape optimale.
-  - **Panneau de statut des CLI** : Vérification en temps réel de l'installation et de l'authentification de `git`, `gh`, `linear`, `agy`, `vibe`, `claude`.
+  - **Panneau de statut des CLI** : Vérification en temps réel de l'installation et de l'authentification de `git`, `gh`, `linear`, `acli`, `agy`, `vibe`, `claude`, `gemini`, `codex`, ainsi que des outils SDD `uv`, `specify` et `openspec`.
 
 - 🗂 **Sidebar complète & Workflow Stages** :
   - `Backlog` ➔ `À clarifier` ➔ `Spécifié` ➔ `En cours` ➔ `À valider` ➔ `Terminé` avec compteurs en temps réel.
   - Bascule des vues (`Tableau Kanban` / `Vue Liste`).
-  - Filtres rapides (`Mes tâches`, `Priorité Haute`, `Étiquettes/Tags`).
+  - Filtres rapides (`Mes tâches`, `Priorité Haute`, `Étiquettes/Tags`) et filtre par source (`Linear`, `GitHub`, `Jira`, `Local`).
   - Repli / Dépli fluide de la barre latérale.
 
 - 👤 **Profil & Ergonomie Personnalisée** :

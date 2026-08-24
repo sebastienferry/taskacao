@@ -28,9 +28,11 @@ import {
   Workflow,
   Plus,
   Settings2,
+  CalendarDays,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { Status } from '../types'
+import { accentBadgeStyle } from '../lib/accents'
+import type { Status, TaskSource } from '../types'
 import { TaskacaoLogo } from './TaskacaoLogo'
 
 const renderProjectIcon = (iconName: string, size = 15, className = '') => {
@@ -61,6 +63,7 @@ export const Sidebar: React.FC = () => {
     activeJobCount,
     activeView,
     setActiveView,
+    isDigestAvailable,
     statusFilter,
     setStatusFilter,
     priorityFilter,
@@ -69,6 +72,11 @@ export const Sidebar: React.FC = () => {
     setLabelFilter,
     assigneeFilter,
     setAssigneeFilter,
+    sourceFilter,
+    setSourceFilter,
+    parentFilter,
+    setParentFilter,
+    availableParents,
     sidebarCollapsed,
     setSidebarCollapsed,
     setIsProfileOpen,
@@ -101,6 +109,23 @@ export const Sidebar: React.FC = () => {
     to_close: tasks.filter(t => t.status === 'to_close').length,
     finished: tasks.filter(t => t.status === 'finished' || t.status === 'done').length,
   }
+
+  // Tracker origin counts, used by the source filter below the quick filters.
+  const sourceCounts: Record<'all' | TaskSource, number> = {
+    all: tasks.length,
+    linear: tasks.filter(t => t.source === 'linear').length,
+    github: tasks.filter(t => t.source === 'github').length,
+    jira: tasks.filter(t => t.source === 'jira').length,
+    local: tasks.filter(t => !t.source || t.source === 'local').length,
+  }
+
+  const sourceItems: { id: 'all' | TaskSource; label: string; icon: string; color: string }[] = [
+    { id: 'all', label: t.nav.allSources, icon: '◎', color: 'text-slate-400' },
+    { id: 'linear', label: 'Linear', icon: '◆', color: 'text-indigo-400' },
+    { id: 'github', label: 'GitHub', icon: '⑄', color: 'text-slate-300' },
+    { id: 'jira', label: 'Jira', icon: 'J', color: 'text-blue-400' },
+    { id: 'local', label: t.nav.localSource, icon: '▤', color: 'text-emerald-400' },
+  ]
 
   const workflowItems: { status: Status | null; label: string; stageLabel: string; stageColor: string; icon: React.ReactNode; count: number; color: string }[] = [
     { status: null, label: t.nav.allTasks, stageLabel: '', stageColor: '', icon: <Inbox size={16} />, count: counts.all, color: 'text-slate-400' },
@@ -175,11 +200,12 @@ export const Sidebar: React.FC = () => {
               className="w-full flex items-center justify-between p-2 rounded-xl bg-[var(--bg-tertiary)]/70 hover:bg-[var(--bg-tertiary)] border border-[var(--sidebar-border)] hover:border-[var(--accent-color)]/50 transition-all text-left group shadow-xs cursor-pointer"
             >
               <div className="flex items-center gap-2 min-w-0">
-                <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
-                  currentProject
-                    ? `bg-${currentProject.color || 'indigo'}-500/20 text-${currentProject.color || 'indigo'}-400 border border-${currentProject.color || 'indigo'}-500/30`
-                    : 'bg-[var(--accent-light)] accent-text border border-[var(--accent-color)]/30'
-                }`}>
+                <div
+                  className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0 border"
+                  style={currentProject
+                    ? accentBadgeStyle(currentProject.color)
+                    : { color: 'var(--accent-color)', backgroundColor: 'var(--accent-light)', borderColor: 'var(--accent-glow)' }}
+                >
                   {currentProject ? renderProjectIcon(currentProject.icon, 13) : <Layers size={13} />}
                 </div>
                 <div className="flex flex-col min-w-0">
@@ -245,7 +271,10 @@ export const Sidebar: React.FC = () => {
                         }`}
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <div className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 bg-${p.color || 'indigo'}-500/20 text-${p.color || 'indigo'}-400`}>
+                          <div
+                            className="w-5 h-5 rounded-md flex items-center justify-center shrink-0"
+                            style={accentBadgeStyle(p.color)}
+                          >
                             {renderProjectIcon(p.icon, 12)}
                           </div>
                           <div className="flex flex-col min-w-0">
@@ -382,6 +411,22 @@ export const Sidebar: React.FC = () => {
                 {!sidebarCollapsed && <span className="truncate">{t.nav.sync || "Synchronisation"}</span>}
               </div>
             </button>
+            {isDigestAvailable && (
+            <button
+              onClick={() => setActiveView('digest')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'digest'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.digest}
+            >
+              <div className="flex items-center gap-2.5 min-w-0 truncate">
+                <CalendarDays size={15} className="shrink-0 text-emerald-400" />
+                {!sidebarCollapsed && <span className="truncate">{t.nav.digest}</span>}
+              </div>
+            </button>
+            )}
           </div>
         </div>
 
@@ -476,9 +521,116 @@ export const Sidebar: React.FC = () => {
                 <Flame size={15} className="text-rose-400 shrink-0" />
                 {!sidebarCollapsed && <span className="truncate">{t.nav.urgentHigh}</span>}
               </div>
-            </button>
+          </button>
           </div>
         </div>
+
+        {/* Tracker Origin Filter (Linear / GitHub / Jira / Local) */}
+        <div>
+          {!sidebarCollapsed && (
+            <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+              {t.nav.sources}
+            </div>
+          )}
+          <div className="space-y-0.5">
+            {sourceItems.map(item => {
+              const isActive = sourceFilter === item.id
+              if (item.id !== 'all' && sourceCounts[item.id] === 0 && !isActive) return null
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setSourceFilter(item.id)}
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                    isActive
+                      ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                  }`}
+                  title={item.label}
+                >
+                  <div className="flex items-center gap-2.5 truncate">
+                    <span className={`${item.color} shrink-0 font-black font-mono w-[15px] text-center`}>{item.icon}</span>
+                    {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
+                  </div>
+                  {!sidebarCollapsed && (
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                        isActive
+                          ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                          : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
+                      }`}
+                    >
+                      {sourceCounts[item.id]}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Epics / Parent stories filter */}
+        {availableParents.length > 0 && (
+          <div>
+            {!sidebarCollapsed && (
+              <div className="px-2 pb-1 flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                  {t.nav.parents}
+                </span>
+                {parentFilter && (
+                  <button
+                    onClick={() => setParentFilter(null)}
+                    className="text-[10px] font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                    title={t.nav.clearParentFilter}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="space-y-0.5 max-h-56 overflow-y-auto">
+              {availableParents.slice(0, 12).map(par => {
+                const isSelected = parentFilter === par.key
+                const isEpic = (par.type || '').toLowerCase() === 'epic'
+                return (
+                  <button
+                    key={par.key}
+                    onClick={() => setParentFilter(isSelected ? null : par.key)}
+                    className={`w-full flex items-center justify-between gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                    }`}
+                    title={`${par.type || 'Parent'} ${par.key}${par.title ? ` — ${par.title}` : ''}`}
+                  >
+                    <div className="flex items-center gap-2 truncate min-w-0">
+                      <Layers
+                        size={12}
+                        className={`shrink-0 ${isEpic ? 'text-violet-400' : 'text-amber-400'}`}
+                      />
+                      {!sidebarCollapsed && (
+                        <span className="truncate">
+                          <span className="font-mono font-bold">{par.key}</span>
+                          {par.title ? ` ${par.title}` : ''}
+                        </span>
+                      )}
+                    </div>
+                    {!sidebarCollapsed && (
+                      <span
+                        className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold shrink-0 ${
+                          isSelected
+                            ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                            : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
+                        }`}
+                      >
+                        {par.count}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Labels Section */}
         {availableLabels.length > 0 && (

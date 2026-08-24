@@ -19,7 +19,16 @@ import type { Task } from '../types'
 import { useApp } from '../context/AppContext'
 
 interface InteractiveTerminalProps {
-  task: Task
+  /** Task-scoped session: runs in the task worktree, unlocks the skill shortcuts. */
+  task?: Task
+  /** Workspace session: an explicit PTY session id, kept alive server-side. */
+  sessionId?: string
+  /** Working directory for a workspace session. */
+  cwd?: string
+  /** Project the workspace session belongs to, for the agent command template. */
+  projectId?: string
+  /** Label shown in the session bar; defaults to "ZSH Session". */
+  label?: string
   isExpanded?: boolean
   initialCommand?: string
   onToggleExpand?: () => void
@@ -28,6 +37,10 @@ interface InteractiveTerminalProps {
 
 export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   task,
+  sessionId,
+  cwd,
+  projectId,
+  label,
   isExpanded,
   initialCommand,
   onToggleExpand,
@@ -52,7 +65,14 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     // In dev mode (Vite at :5173), connect to backend port :8090, or fallback to current host
     const host = window.location.port === '5173' ? `${window.location.hostname}:8090` : window.location.host
-    const wsUrl = `${protocol}//${host}/ws/terminal?taskId=${encodeURIComponent(task.id)}`
+    const params = new URLSearchParams()
+    if (task) {
+      params.set('taskId', task.id)
+    } else {
+      params.set('sessionId', sessionId || 'global-workspace')
+      if (cwd) params.set('cwd', cwd)
+    }
+    const wsUrl = `${protocol}//${host}/ws/terminal?${params.toString()}`
 
     try {
       const ws = new WebSocket(wsUrl)
@@ -107,7 +127,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
       console.error('WebSocket connection error:', err)
       setStatus('error')
     }
-  }, [task.id])
+  }, [task?.id, sessionId, cwd])
 
   // Initialize Xterm.js
   useEffect(() => {
@@ -213,7 +233,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   }
 
   // Quick Action commands
-  const proj = projects.find(p => p.id === task.projectId)
+  const proj = projects.find(p => p.id === (task?.projectId || projectId))
   const provider = proj?.aiProvider || settings.aiProvider || 'agy'
   const cmdTemplate = proj?.aiCommandTemplate || settings.aiCommandTemplate
 
@@ -221,11 +241,11 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
     if (cmdTemplate && cmdTemplate.includes('{prompt}')) {
       return cmdTemplate
         .replace('{prompt}', prompt)
-        .replace('{issueKey}', task.key)
-        .replace('{issueTitle}', task.title)
-        .replace('{branchName}', task.branchName || '')
-        .replace('{repoPath}', proj?.repoPath || settings.repoPath || '')
-        .replace('{tracker}', proj?.issueTracker || task.source || 'github')
+        .replace('{issueKey}', task?.key || '')
+        .replace('{issueTitle}', task?.title || '')
+        .replace('{branchName}', task?.branchName || '')
+        .replace('{repoPath}', task?.repoPath || proj?.repoPath || settings.repoPath || '')
+        .replace('{tracker}', proj?.issueTracker || task?.source || 'github')
         .replace('{repo}', proj?.githubRepo || proj?.name || 'repo')
     }
     if (provider === 'agy') {
@@ -245,12 +265,12 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   }
 
   const handleRunSkill = (skill: string) => {
-    const trackerStr = proj?.issueTracker || task.source || 'github'
+    const trackerStr = proj?.issueTracker || task?.source || 'github'
     const repoStr = proj?.githubRepo || proj?.name || settings.repoPath?.split('/').pop() || 'repo'
 
     switch (skill) {
       case 'clarify':
-        sendCommand(`${buildCliCommand(`/clarify-issue ${task.key} tracked on ${trackerStr} in ${repoStr}`)}\n`)
+        sendCommand(`${buildCliCommand(`/clarify-issue ${task?.key || ''} tracked on ${trackerStr} in ${repoStr}`)}\n`)
         break
       case 'specify':
         sendCommand(`${buildCliCommand(`/specify-issue`)}\n`)
@@ -284,7 +304,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
       await fetch('/api/terminal/reset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId: task.id }),
+        body: JSON.stringify({ taskId: task?.id, sessionId: task ? undefined : (sessionId || 'global-workspace') }),
       })
       termRef.current?.clear()
       connectWs()
@@ -300,7 +320,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
         <div className="flex items-center gap-2 overflow-hidden">
           <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-300 font-semibold">
             <TerminalIcon size={14} className="text-indigo-400" />
-            <span>ZSH Session</span>
+            <span>{label || 'ZSH Session'}</span>
           </div>
 
           <span className="text-slate-600">•</span>
@@ -337,7 +357,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
 
         {/* Task Worktree & Branch badges */}
         <div className="flex items-center gap-2">
-          {task.branchName && (
+          {task?.branchName && (
             <div className="hidden sm:flex items-center gap-1 text-[10px] font-mono text-purple-300 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded-md">
               <GitBranch size={10} />
               <span className="truncate max-w-[140px]">{task.branchName}</span>
@@ -412,6 +432,8 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
           <span className="font-semibold">Lancer {provider}</span>
         </button>
 
+        {task && (
+          <>
         <button
           type="button"
           onClick={() => handleRunSkill('clarify')}
@@ -444,6 +466,9 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
           <span>/create-pr</span>
         </button>
 
+          </>
+        )}
+
         <button
           type="button"
           onClick={() => handleRunSkill('git_status')}
@@ -454,7 +479,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
 
         <button
           type="button"
-          onClick={() => openInEditor({ taskId: task.id })}
+          onClick={() => openInEditor(task ? { taskId: task.id } : { projectId, path: cwd })}
           className="flex items-center gap-1 px-2 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 rounded-md font-mono text-[10.5px] transition-all shrink-0 cursor-pointer"
           title={`Ouvrir le dossier dans ${settings.editorCommand || 'VS Code'}`}
         >

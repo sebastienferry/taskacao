@@ -31,7 +31,7 @@ import {
   Minimize2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { Status, Priority, DetailMode } from '../types'
+import type { Status, Priority, DetailMode, SpecFramework } from '../types'
 import { InteractiveTerminal } from './InteractiveTerminal'
 
 export const TaskDetailModal: React.FC = () => {
@@ -55,8 +55,29 @@ export const TaskDetailModal: React.FC = () => {
     updateSettings,
     openInEditor,
     addToast,
+    skillLabel,
+    skillCommand,
     t,
   } = useApp()
+
+  // The task's own project drives the AI provider, the command template and the
+  // skill overrides. It is NOT necessarily the project selected in the sidebar:
+  // on an "all projects" view currentProject is null, which used to silently
+  // fall back to the global settings (hence "AGY" on a Claude-configured project).
+  // Deliberately no fallback to the sidebar's selected project: falling back to
+  // it is what produced the wrong provider. With no task project we let the
+  // global settings apply, which is the honest default.
+  const taskProject = React.useMemo(
+    () => projects.find(p => p.id === selectedTask?.projectId) || null,
+    [projects, selectedTask?.projectId]
+  )
+
+  // Resolved once for the whole modal: every label and every command must name
+  // the same CLI, otherwise the badge says AGY while the command runs Claude.
+  const activeProvider = taskProject?.aiProvider || settings.aiProvider || 'agy'
+
+  const clarifySkillLabel = skillLabel('clarify', 'Cadrage Produit', taskProject?.id)
+  const specifySkillLabel = skillLabel('specify', 'Spécifications', taskProject?.id)
 
   const [isSwitchingBranch, setIsSwitchingBranch] = useState(false)
 
@@ -67,6 +88,7 @@ export const TaskDetailModal: React.FC = () => {
   const [taskProjectId, setTaskProjectId] = useState<string>(projects[0]?.id || '')
   const [branchName, setBranchName] = useState('')
   const [prUrl, setPrUrl] = useState('')
+  const [repoPath, setRepoPath] = useState('')
   const [labels, setLabels] = useState<string[]>([])
   const [newLabelInput, setNewLabelInput] = useState('')
   const [assignee, setAssignee] = useState('')
@@ -75,7 +97,7 @@ export const TaskDetailModal: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'details' | 'cadrage' | 'skills' | 'history'>('details')
   const [customPrompt, setCustomPrompt] = useState('')
   const [copiedBranch, setCopiedBranch] = useState(false)
-  const [specFramework, setSpecFramework] = useState<'speckit' | 'openfeature'>(settings.specFramework || 'speckit')
+  const [specFramework, setSpecFramework] = useState<SpecFramework>(settings.specFramework || 'speckit')
   const [isExpandedSpec, setIsExpandedSpec] = useState(false)
   const [copiedSpec, setCopiedSpec] = useState(false)
   const [isMaximized, setIsMaximized] = useState(false)
@@ -84,6 +106,20 @@ export const TaskDetailModal: React.FC = () => {
   const [ttyCommand, setTtyCommand] = useState('')
 
   const detailMode: DetailMode = settings.detailMode || 'panel'
+
+  // CWD hérité (projet, puis réglage global) et CWD réellement utilisé, le
+  // ticket pouvant épingler son propre dépôt.
+  const inheritedRepoPath = taskProject?.repoPath || settings.repoPath || ''
+  const effectiveRepoPath = repoPath.trim() || inheritedRepoPath
+  // Répertoires proposés : celui du projet, puis ceux enregistrés sur le projet
+  // (alimentés automatiquement dès qu'un ticket en épingle un nouveau).
+  const knownRepoPaths = Array.from(
+    new Set(
+      [taskProject?.repoPath || '', ...(taskProject?.repoPaths || [])]
+        .map(p => p.trim())
+        .filter(Boolean)
+    )
+  )
 
   useEffect(() => {
     if (selectedTask) {
@@ -94,6 +130,7 @@ export const TaskDetailModal: React.FC = () => {
       setTaskProjectId(selectedTask.projectId || projects[0]?.id || '')
       setBranchName(selectedTask.branchName || '')
       setPrUrl(selectedTask.prUrl || '')
+      setRepoPath(selectedTask.repoPath || '')
       setLabels(selectedTask.labels || [])
       setAssignee(selectedTask.assignee || '')
       setDueDate(selectedTask.dueDate || '')
@@ -119,6 +156,7 @@ export const TaskDetailModal: React.FC = () => {
         taskProjectId !== (selectedTask.projectId || '') ||
         branchName.trim() !== (selectedTask.branchName || '').trim() ||
         prUrl.trim() !== (selectedTask.prUrl || '').trim() ||
+        repoPath.trim() !== (selectedTask.repoPath || '').trim() ||
         assignee.trim() !== (selectedTask.assignee || '').trim() ||
         (dueDate || '') !== (selectedTask.dueDate || '') ||
         JSON.stringify(labels) !== JSON.stringify(selectedTask.labels || [])
@@ -135,6 +173,7 @@ export const TaskDetailModal: React.FC = () => {
           dueDate: dueDate || null,
           branchName: branchName.trim() || undefined,
           prUrl: prUrl.trim() || undefined,
+          repoPath: repoPath.trim(),
         })
       }
     }
@@ -156,9 +195,96 @@ export const TaskDetailModal: React.FC = () => {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedTask, isTtyExpanded, isExpandedSpec, title, description, status, priority, taskProjectId, branchName, prUrl, assignee, dueDate, labels])
+  }, [selectedTask, isTtyExpanded, isExpandedSpec, title, description, status, priority, taskProjectId, branchName, prUrl, repoPath, assignee, dueDate, labels])
 
   if (!selectedTask) return null
+
+  // A tracker URL for any key of the same tracker as this task: used for the
+  // task itself and for its parent, which the tracker payload carries as a key
+  // without a URL of its own.
+  const trackerUrlForKey = (key?: string): string | undefined => {
+    if (!key) return undefined
+    const source = selectedTask.source
+    if (source === 'jira') {
+      const base = (currentTaskProject?.trackerUrl || settings.jiraUrl || '').replace(/\/+$/, '')
+      if (base) return `${base}/browse/${key}`
+      // No base configured: reuse the host of the task's own tracker URL.
+      const m = externalUrl?.match(/^(https?:\/\/[^/]+)\/browse\//)
+      return m ? `${m[1]}/browse/${key}` : undefined
+    }
+    if (source === 'github') {
+      const num = key.replace(/^#/, '')
+      return targetGithubRepo && /^\d+$/.test(num)
+        ? `https://github.com/${targetGithubRepo}/issues/${num}`
+        : undefined
+    }
+    if (source === 'linear' && externalUrl) {
+      const m = externalUrl.match(/^(https?:\/\/linear\.app\/[^/]+\/issue)\//)
+      return m ? `${m[1]}/${key}` : undefined
+    }
+    return undefined
+  }
+
+  const taskUrl = externalUrl || trackerUrlForKey(selectedTask.key)
+  const parentUrl = trackerUrlForKey(selectedTask.parentKey)
+  const trackerName =
+    selectedTask.source === 'linear' ? 'Linear'
+    : selectedTask.source === 'github' ? 'GitHub'
+    : selectedTask.source === 'jira' ? 'Jira'
+    : 'le tracker'
+
+  /**
+   * The reference badge: ParentKey / TaskKey, each opening its own tracker
+   * item. Replaces the former key badge + parent chip + separate tracker link.
+   */
+  const renderTaskRef = () => (
+    <span className="font-mono text-sm font-bold text-[var(--accent-color)] bg-[var(--accent-light)] px-2.5 py-1 rounded-lg flex items-center gap-1.5 shrink-0">
+      {selectedTask.source === 'linear' && <span className="text-indigo-400 font-bold font-mono">◆</span>}
+      {selectedTask.source === 'github' && <FolderGit2 size={13} className="text-purple-400" />}
+      {selectedTask.source === 'jira' && <span className="text-blue-400 font-sans font-black text-xs">J</span>}
+      {(!selectedTask.source || selectedTask.source === 'local') && <Folder size={13} className="text-emerald-400" />}
+
+      <span className="inline-flex items-baseline min-w-0">
+        {selectedTask.parentKey && (
+          <>
+            {parentUrl ? (
+              <a
+                href={parentUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[var(--text-muted)] hover:text-violet-300 hover:underline"
+                title={`Ouvrir ${selectedTask.parentType || 'le parent'} ${selectedTask.parentKey}${selectedTask.parentTitle ? ` — ${selectedTask.parentTitle}` : ''} sur ${trackerName}`}
+              >
+                {selectedTask.parentKey}
+              </a>
+            ) : (
+              <span
+                className="text-[var(--text-muted)]"
+                title={`${selectedTask.parentType || 'Parent'} ${selectedTask.parentKey}${selectedTask.parentTitle ? ` — ${selectedTask.parentTitle}` : ''}`}
+              >
+                {selectedTask.parentKey}
+              </span>
+            )}
+            <span className="mx-1 text-[var(--text-muted)] opacity-50">/</span>
+          </>
+        )}
+        {taskUrl ? (
+          <a
+            href={taskUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 hover:underline"
+            title={`Ouvrir ${selectedTask.key} sur ${trackerName}`}
+          >
+            <span>{selectedTask.key}</span>
+            <ExternalLink size={11} className="opacity-70" />
+          </a>
+        ) : (
+          <span>{selectedTask.key}</span>
+        )}
+      </span>
+    </span>
+  )
 
   const handleSave = async () => {
     if (!title.trim() || isSaving) return
@@ -175,6 +301,7 @@ export const TaskDetailModal: React.FC = () => {
       dueDate: dueDate || null,
       branchName: branchName.trim() || undefined,
       prUrl: prUrl.trim() || undefined,
+      repoPath: repoPath.trim(),
     })
     setIsSaving(false)
     setSelectedTask(null)
@@ -296,25 +423,25 @@ export const TaskDetailModal: React.FC = () => {
     })
   }
 
-  // Technical Specification (SpecKit / Open Feature) Section Box
+  // Technical Specification (Spec Kit / OpenSpec) Section Box
   const renderSpecificationSection = () => {
     if (!specifyActivity?.output) return null
 
-    const isOF = specFramework === 'openfeature'
-    const frameworkLabel = isOF ? 'Open Feature' : 'SpecKit'
+    const isOpenSpec = specFramework === 'openspec'
+    const frameworkLabel = isOpenSpec ? 'OpenSpec' : 'Spec Kit'
 
     return (
       <div className="p-4 rounded-2xl bg-linear-to-b from-[var(--bg-tertiary)] to-[var(--bg-secondary)] border border-blue-500/40 shadow-md space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <FileCode size={16} className={isOF ? 'text-emerald-400' : 'text-blue-400'} />
+            <FileCode size={16} className={isOpenSpec ? 'text-emerald-400' : 'text-blue-400'} />
             <h4 className="text-xs font-bold text-[var(--text-primary)]">
               Spécification Technique ({frameworkLabel})
             </h4>
           </div>
           <div className="flex items-center gap-2">
             <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase border ${
-              isOF
+              isOpenSpec
                 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
                 : 'bg-blue-500/20 text-blue-300 border-blue-500/30'
             }`}>
@@ -333,7 +460,7 @@ export const TaskDetailModal: React.FC = () => {
               type="button"
               onClick={() => setIsExpandedSpec(true)}
               className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all shadow-2xs hover:scale-105 cursor-pointer ${
-                isOF
+                isOpenSpec
                   ? 'text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30'
                   : 'text-blue-300 bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30'
               }`}
@@ -385,9 +512,9 @@ export const TaskDetailModal: React.FC = () => {
 
     const currentProject = projects.find(p => p.id === (selectedTask.projectId || taskProjectId))
     const issueTracker = currentProject?.issueTracker || selectedTask.source || 'github'
-    const repoName = currentProject?.githubRepo || currentProject?.name || settings.repoPath?.split('/').pop() || 'repo'
-    const provider = currentProject?.aiProvider || settings.aiProvider || 'agy'
-    const cmdTemplate = currentProject?.aiCommandTemplate || settings.aiCommandTemplate
+    const repoName = taskProject?.githubRepo || taskProject?.name || settings.repoPath?.split('/').pop() || 'repo'
+    const provider = activeProvider
+    const cmdTemplate = taskProject?.aiCommandTemplate || settings.aiCommandTemplate
 
     const buildCliCommand = (prompt: string): string => {
       if (cmdTemplate && cmdTemplate.includes('{prompt}')) {
@@ -396,7 +523,7 @@ export const TaskDetailModal: React.FC = () => {
           .replace('{issueKey}', selectedTask.key)
           .replace('{issueTitle}', selectedTask.title)
           .replace('{branchName}', selectedTask.branchName || '')
-          .replace('{repoPath}', currentProject?.repoPath || settings.repoPath || '')
+          .replace('{repoPath}', effectiveRepoPath)
           .replace('{tracker}', issueTracker)
           .replace('{repo}', repoName)
       }
@@ -412,10 +539,12 @@ export const TaskDetailModal: React.FC = () => {
       return `${provider} -p "${prompt}"`
     }
 
-    const clarifyPrompt = `/clarify-issue ${selectedTask.key} tracked on ${issueTracker} in ${repoName}`
+    const clarifyCommand = skillCommand('clarify', '/clarify-issue', taskProject?.id)
+    const clarifyPrompt = `${clarifyCommand} ${selectedTask.key} tracked on ${issueTracker} in ${repoName}`
     const clarifyCliCommand = buildCliCommand(clarifyPrompt)
 
-    const specifyPrompt = `/specify-issue ${selectedTask.key} --framework ${specFramework}`
+    const specifyCommand = skillCommand('specify', '/specify-issue', taskProject?.id)
+    const specifyPrompt = `${specifyCommand} ${selectedTask.key} --framework ${specFramework}`
     const specifyCliCommand = buildCliCommand(specifyPrompt)
 
     return (
@@ -428,13 +557,13 @@ export const TaskDetailModal: React.FC = () => {
             </div>
             <div>
               <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2">
-                <span>Cadrage Produit & Spécifications ({specFramework === 'openfeature' ? 'Open Feature' : 'SpecKit'})</span>
+                <span>{clarifySkillLabel} & {specifySkillLabel} ({specFramework === 'openspec' ? 'OpenSpec' : 'Spec Kit'})</span>
                 <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
                   {status === 'to_clarify' || status === 'backlog' ? '#new' : status === 'to_specify' ? '#clarified' : status === 'to_implement' ? '#specified' : `#${status}`}
                 </span>
               </h3>
               <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                Clarification interactive en console TTY et génération de spécifications formelles (SpecKit ou Open Feature).
+                {clarifySkillLabel} interactif en console TTY, puis {specifySkillLabel} pour générer la spécification formelle (Spec Kit ou OpenSpec).
               </p>
             </div>
           </div>
@@ -457,7 +586,7 @@ export const TaskDetailModal: React.FC = () => {
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-300 font-bold border border-amber-500/30">
-                {settings.aiProvider?.toUpperCase() || 'AGY'} CLI
+                {provider.toUpperCase()} CLI
               </span>
             </div>
           </div>
@@ -528,7 +657,7 @@ export const TaskDetailModal: React.FC = () => {
                 title="Ouvrir la console TTY interactive intégrée et exécuter /clarify-issue"
               >
                 <Terminal size={13} className={isTtyOpen && ttyCommand === clarifyCliCommand ? 'text-white' : 'text-amber-400'} />
-                <span>{isTtyOpen && ttyCommand === clarifyCliCommand ? 'Masquer TTY' : 'Lancer Console TTY Cadrage'}</span>
+                <span>{isTtyOpen && ttyCommand === clarifyCliCommand ? 'Masquer TTY' : `Lancer Console TTY ${clarifySkillLabel}`}</span>
               </button>
 
               <button
@@ -559,7 +688,7 @@ export const TaskDetailModal: React.FC = () => {
               </h4>
             </div>
 
-            {/* Framework Toggle Buttons: SpecKit vs Open Feature */}
+            {/* Framework Toggle Buttons: Spec Kit vs OpenSpec */}
             <div className="flex items-center gap-1.5 p-1 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)]">
               <button
                 type="button"
@@ -571,31 +700,31 @@ export const TaskDetailModal: React.FC = () => {
                 }`}
               >
                 <span>📑</span>
-                <span>SpecKit</span>
+                <span>Spec Kit</span>
               </button>
               <button
                 type="button"
-                onClick={() => setSpecFramework('openfeature')}
+                onClick={() => setSpecFramework('openspec')}
                 className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  specFramework === 'openfeature'
+                  specFramework === 'openspec'
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
                 }`}
               >
                 <span>🚩</span>
-                <span>Open Feature</span>
+                <span>OpenSpec</span>
               </button>
             </div>
           </div>
 
           <div className="text-[11px] text-[var(--text-muted)] flex items-center gap-2">
-            {specFramework === 'openfeature' ? (
+            {specFramework === 'openspec' ? (
               <span>
-                <strong className="text-emerald-400">Framework Open Feature :</strong> Spécification axée sur les Feature Flags, contextes d'évaluation, hooks SDK et cycle de vie.
+                <strong className="text-emerald-400">Framework OpenSpec :</strong> Proposition de changement sous openspec/changes/, deltas de specs ADDED / MODIFIED / REMOVED et checklist de tâches, validés avant le code.
               </span>
             ) : (
               <span>
-                <strong className="text-blue-400">Framework SpecKit :</strong> Spécification technique standard avec user stories, architecture et critères BDD (Given/When/Then).
+                <strong className="text-blue-400">Framework Spec Kit :</strong> spec.md, plan.md et tasks.md sous specs/, avec user stories, architecture et critères BDD (Given/When/Then).
               </span>
             )}
           </div>
@@ -603,7 +732,7 @@ export const TaskDetailModal: React.FC = () => {
           {/* Code block with exact specify prompt */}
           <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3 text-xs font-mono">
             <div className="flex items-center gap-2 truncate min-w-0">
-              <span className={specFramework === 'openfeature' ? 'text-emerald-400 font-bold' : 'text-blue-400 font-bold'}>$</span>
+              <span className={specFramework === 'openspec' ? 'text-emerald-400 font-bold' : 'text-blue-400 font-bold'}>$</span>
               <span className="text-slate-200 select-all truncate">
                 {specifyPrompt}
               </span>
@@ -647,7 +776,7 @@ export const TaskDetailModal: React.FC = () => {
           {/* Action trigger buttons */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
             <div className="text-[11px] text-[var(--text-muted)]">
-              Génère la spécification formelle selon la norme <span className="font-bold text-[var(--text-primary)]">{specFramework === 'openfeature' ? 'Open Feature' : 'SpecKit'}</span>.
+              Génère la spécification formelle selon la norme <span className="font-bold text-[var(--text-primary)]">{specFramework === 'openspec' ? 'OpenSpec' : 'Spec Kit'}</span>.
             </div>
 
             <div className="flex items-center gap-2">
@@ -660,15 +789,15 @@ export const TaskDetailModal: React.FC = () => {
                 }}
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs active:scale-95 ${
                   isTtyOpen && ttyCommand === specifyCliCommand
-                    ? specFramework === 'openfeature' ? 'bg-emerald-600 text-white hover:bg-emerald-500' : 'bg-blue-600 text-white hover:bg-blue-500'
-                    : specFramework === 'openfeature'
+                    ? specFramework === 'openspec' ? 'bg-emerald-600 text-white hover:bg-emerald-500' : 'bg-blue-600 text-white hover:bg-blue-500'
+                    : specFramework === 'openspec'
                       ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30'
                       : 'bg-blue-500/15 text-blue-300 hover:bg-blue-500/25 border border-blue-500/30'
                 }`}
                 title="Ouvrir la console TTY interactive intégrée et exécuter /specify-issue"
               >
                 <Terminal size={13} />
-                <span>{isTtyOpen && ttyCommand === specifyCliCommand ? 'Masquer TTY' : 'Lancer Console TTY Spécifier'}</span>
+                <span>{isTtyOpen && ttyCommand === specifyCliCommand ? 'Masquer TTY' : `Lancer Console TTY ${specifySkillLabel}`}</span>
               </button>
 
               <button
@@ -682,7 +811,7 @@ export const TaskDetailModal: React.FC = () => {
                 }}
                 disabled={isSkillRunning}
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-white transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50 ${
-                  specFramework === 'openfeature'
+                  specFramework === 'openspec'
                     ? 'bg-emerald-600 hover:bg-emerald-500'
                     : 'bg-blue-600 hover:bg-blue-500'
                 }`}
@@ -732,7 +861,7 @@ export const TaskDetailModal: React.FC = () => {
           </div>
         )}
 
-        {/* 3. Technical Specification (Speckit / Open Feature) Section Box */}
+        {/* 3. Technical Specification (Spec Kit / OpenSpec) Section Box */}
         {renderSpecificationSection()}
 
         {/* 4. Empty state helper if no clarification or spec yet */}
@@ -746,7 +875,7 @@ export const TaskDetailModal: React.FC = () => {
                 Prêt pour le cadrage assisté par IA
               </h4>
               <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                Lancez l'agent Clarify en mode interactif TTY pour cadrer les besoins, ou démarrez directement la rédaction de la spécification technique ({specFramework === 'openfeature' ? 'Open Feature' : 'SpecKit'}).
+                Lancez l'agent Clarify en mode interactif TTY pour cadrer les besoins, ou démarrez directement la rédaction de la spécification technique ({specFramework === 'openspec' ? 'OpenSpec' : 'Spec Kit'}).
               </p>
             </div>
             <div className="flex items-center justify-center gap-2">
@@ -1019,6 +1148,84 @@ export const TaskDetailModal: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Per-task working directory: an epic spanning several repositories
+            cannot rely on the project's single repoPath. */}
+        <div className="mt-3">
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[10px] font-medium text-[var(--text-secondary)] flex items-center gap-1.5">
+              <span>Répertoire de travail (CWD)</span>
+            </label>
+            {repoPath.trim() ? (
+              <button
+                type="button"
+                onClick={() => setRepoPath('')}
+                className="text-[9px] font-mono font-bold text-rose-400 hover:underline flex items-center gap-1 cursor-pointer"
+                title="Revenir au répertoire du projet"
+              >
+                <X size={10} />
+                <span>Hériter du projet</span>
+              </button>
+            ) : (
+              <span className="text-[9px] font-mono text-[var(--text-muted)]">
+                Hérité : {inheritedRepoPath || 'non configuré'}
+              </span>
+            )}
+          </div>
+          <div className="relative">
+            <input
+              type="text"
+              list="task-cwd-options"
+              value={repoPath}
+              onChange={e => setRepoPath(e.target.value)}
+              placeholder={inheritedRepoPath || '/chemin/vers/le/depot'}
+              className="w-full pl-7 pr-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-[11px] focus:outline-none focus:border-[var(--accent-color)]"
+            />
+            <FolderGit2 size={12} className={`absolute left-2.5 top-2.5 ${repoPath.trim() ? 'text-amber-400' : 'text-[var(--text-muted)]'}`} />
+            <datalist id="task-cwd-options">
+              {knownRepoPaths.map(path => (
+                <option key={path} value={path} />
+              ))}
+            </datalist>
+          </div>
+
+          {/* Choix rapides : le dépôt du projet et ceux déjà utilisés par
+              d'autres tickets. Saisir un chemin inédit l'ajoute à cette liste. */}
+          {knownRepoPaths.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+              <button
+                type="button"
+                onClick={() => setRepoPath('')}
+                className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono border transition-colors cursor-pointer ${
+                  repoPath.trim() === ''
+                    ? 'bg-[var(--accent-light)] accent-text border-[var(--accent-color)]/40 font-bold'
+                    : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+                }`}
+                title={inheritedRepoPath ? `Hériter du projet : ${inheritedRepoPath}` : 'Hériter du projet'}
+              >
+                Hériter du projet
+              </button>
+              {knownRepoPaths.map(path => (
+                <button
+                  key={path}
+                  type="button"
+                  onClick={() => setRepoPath(path)}
+                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono border transition-colors cursor-pointer max-w-[220px] truncate ${
+                    repoPath.trim() === path
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold'
+                      : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+                  }`}
+                  title={path}
+                >
+                  {path.split('/').pop() || path}
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="mt-1 text-[9px] text-[var(--text-muted)] font-mono truncate" title={effectiveRepoPath}>
+            Worktree, terminal TTY, skills et diff Git s'exécutent dans {effectiveRepoPath || 'le dossier courant du serveur'}
+          </p>
+        </div>
       </div>
 
       {/* Description / Acceptance criteria */}
@@ -1027,11 +1234,11 @@ export const TaskDetailModal: React.FC = () => {
           Description & Contexte Technique
         </label>
         <textarea
-          rows={4}
+          rows={16}
           value={description}
           onChange={e => setDescription(e.target.value)}
           placeholder={t.taskModal.descPlaceholder}
-          className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] leading-relaxed resize-y"
+          className="w-full px-3.5 py-2.5 text-[13px] rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] leading-relaxed resize-y min-h-[320px] max-h-[60vh]"
         />
       </div>
 
@@ -1098,11 +1305,11 @@ export const TaskDetailModal: React.FC = () => {
           </div>
           <div>
             <div className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1.5">
-              <span>Agent Copilot ({settings.aiProvider.toUpperCase()})</span>
+              <span>Agent Copilot ({activeProvider.toUpperCase()})</span>
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             </div>
             <div className="text-[10px] text-[var(--text-muted)] font-mono truncate max-w-[280px]">
-              {settings.repoPath || 'Workspace standard'}
+              {effectiveRepoPath || 'Workspace standard'}
             </div>
           </div>
         </div>
@@ -1202,7 +1409,7 @@ export const TaskDetailModal: React.FC = () => {
               {isSkillRunning && runningSkillId === nextSkill.id ? (
                 <>
                   <Loader2 size={13} className="animate-spin" />
-                  <span>Exécution {settings.aiProvider}...</span>
+                  <span>Exécution {activeProvider}...</span>
                 </>
               ) : (
                 <>
@@ -1300,39 +1507,18 @@ export const TaskDetailModal: React.FC = () => {
         />
 
         {/* Sliding Panel */}
-        <div className="absolute inset-y-0 right-0 max-w-full flex pl-6 sm:pl-10">
-          <div className="w-screen max-w-3xl 2xl:max-w-4xl bg-[var(--bg-secondary)] border-l border-[var(--border-color)] shadow-2xl flex flex-col h-full animate-in slide-in-from-right duration-200">
+        <div className="absolute inset-y-0 right-0 max-w-full flex pl-2 sm:pl-6">
+          <div className="w-screen max-w-5xl 2xl:max-w-[1500px] bg-[var(--bg-secondary)] border-l border-[var(--border-color)] shadow-2xl flex flex-col h-full animate-in slide-in-from-right duration-200">
             {/* Panel Header */}
             <div className="flex items-center justify-between px-6 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 shrink-0">
-              {/* Left: Key & External Link */}
+              {/* Left: Référence ParentKey / TaskKey (chacune ouvre le tracker) */}
               <div className="flex items-center gap-2.5 min-w-0">
-                <span className="font-mono text-sm font-bold text-[var(--accent-color)] bg-[var(--accent-light)] px-2.5 py-1 rounded-lg flex items-center gap-1.5 shrink-0">
-                  {selectedTask.source === 'linear' && <span className="text-indigo-400 font-bold font-mono">◆</span>}
-                  {selectedTask.source === 'github' && <FolderGit2 size={13} className="text-purple-400" />}
-                  {selectedTask.source === 'jira' && <span className="text-blue-400 font-sans font-black text-xs">J</span>}
-                  {(!selectedTask.source || selectedTask.source === 'local') && <Folder size={13} className="text-emerald-400" />}
-                  {selectedTask.key}
-                </span>
+                {renderTaskRef()}
 
-                {externalUrl && (
-                  <a
-                    href={externalUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all shadow-2xs hover:scale-105 ${
-                      selectedTask.source === 'linear'
-                        ? 'text-indigo-400 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30'
-                        : selectedTask.source === 'github'
-                        ? 'text-purple-400 bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30'
-                        : selectedTask.source === 'jira'
-                        ? 'text-blue-400 bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30'
-                        : 'text-[var(--accent-color)] bg-[var(--accent-light)]'
-                    }`}
-                    title={selectedTask.source === 'linear' ? 'Ouvrir dans Linear' : selectedTask.source === 'github' ? 'Ouvrir dans GitHub' : selectedTask.source === 'jira' ? 'Ouvrir dans Jira' : 'Ouvrir'}
-                  >
-                    <span>{selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Ouvrir'}</span>
-                    <ExternalLink size={11} />
-                  </a>
+                {selectedTask.issueType && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium text-[var(--text-muted)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] shrink-0">
+                    {selectedTask.issueType}
+                  </span>
                 )}
               </div>
 
@@ -1492,36 +1678,23 @@ export const TaskDetailModal: React.FC = () => {
   // With tab navigation & switcher back to right panel
   // -------------------------------------------------------------
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200 select-none">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200 select-none">
       <div
         className={`relative w-full transition-all duration-200 bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col ${
           isMaximized
             ? 'w-full h-full max-w-none max-h-none rounded-2xl'
-            : 'max-w-5xl 2xl:max-w-6xl h-[90vh] max-h-[92vh] rounded-2xl'
+            : 'max-w-[95vw] xl:max-w-[1400px] 2xl:max-w-[1700px] h-[94vh] max-h-[94vh] rounded-2xl'
         }`}
       >
         {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30 shrink-0">
           <div className="flex items-center gap-3">
-            <span className="font-mono text-sm font-bold text-[var(--accent-color)] bg-[var(--accent-light)] px-2.5 py-1 rounded-lg flex items-center gap-1.5">
-              {selectedTask.source === 'linear' && <span className="text-indigo-400 font-bold font-mono">◆</span>}
-              {selectedTask.source === 'github' && <FolderGit2 size={13} className="text-purple-400" />}
-              {selectedTask.source === 'jira' && <span className="text-blue-400 font-sans font-black text-xs">J</span>}
-              {(!selectedTask.source || selectedTask.source === 'local') && <Folder size={13} className="text-emerald-400" />}
-              {selectedTask.key}
-            </span>
+            {renderTaskRef()}
             <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-              {externalUrl && (
-                <a
-                  href={externalUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-1 text-[11px] font-semibold text-[var(--accent-color)] hover:underline"
-                  title={selectedTask.source === 'linear' ? 'Ouvrir dans Linear' : selectedTask.source === 'github' ? 'Ouvrir dans GitHub' : selectedTask.source === 'jira' ? 'Ouvrir dans Jira' : 'Ouvrir'}
-                >
-                  <ExternalLink size={12} />
-                  <span>{selectedTask.source === 'linear' ? 'Linear' : selectedTask.source === 'github' ? 'GitHub' : selectedTask.source === 'jira' ? 'Jira' : 'Ouvrir'}</span>
-                </a>
+              {selectedTask.issueType && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium text-[var(--text-muted)] bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
+                  {selectedTask.issueType}
+                </span>
               )}
             </div>
           </div>
@@ -1702,7 +1875,7 @@ export const TaskDetailModal: React.FC = () => {
                       {selectedTask.key}
                     </span>
                     <h3 className="text-sm font-bold text-[var(--text-primary)]">
-                      Spécification Technique Speckit (Vue Détaillée)
+                      Spécification Technique (Vue Détaillée)
                     </h3>
                   </div>
                   <p className="text-[11px] text-[var(--text-muted)] mt-0.5">

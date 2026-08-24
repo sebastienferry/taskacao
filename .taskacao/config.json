@@ -13,6 +13,6 @@
     "create-pr",
     "pick-issue"
   ],
-  "specFramework": "openfeature",
+  "specFramework": "speckit",
   "updatedAt": "2026-08-24T07:00:58+02:00"
 }

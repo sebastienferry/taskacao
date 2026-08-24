@@ -22,7 +22,7 @@ import {
   Info,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { AccentColor, Theme, Language, Density, ViewMode, DetailMode, AIProvider } from '../types'
+import type { Theme, Language, Density, ViewMode, DetailMode, AIProvider, SpecFramework } from '../types'
 
 type SettingsTab = 'appearance' | 'agentic' | 'prompts'
 
@@ -52,7 +52,6 @@ export const ProfileModal: React.FC = () => {
   const [userName, setUserName] = useState(settings.userName)
   const [userEmail, setUserEmail] = useState(settings.userEmail)
   const [theme, setTheme] = useState<Theme>(settings.theme)
-  const [accentColor, setAccentColor] = useState<AccentColor>(settings.accentColor)
   const [language, setLanguage] = useState<Language>(settings.language)
   const [density, setDensity] = useState<Density>(settings.density)
   const [defaultView, setDefaultView] = useState<ViewMode>(settings.defaultView)
@@ -62,7 +61,7 @@ export const ProfileModal: React.FC = () => {
   // Agentic AI & CLI Configuration
   const [aiProvider, setAiProvider] = useState<AIProvider>(settings.aiProvider || 'agy')
   const [aiCommandTemplate, setAiCommandTemplate] = useState(settings.aiCommandTemplate || 'agy -p "{prompt}"')
-  const [specFramework, setSpecFramework] = useState<'speckit' | 'openfeature'>(settings.specFramework || 'speckit')
+  const [specFramework, setSpecFramework] = useState<SpecFramework>(settings.specFramework || 'speckit')
 
   // Skill Prompts
   const [promptClarify, setPromptClarify] = useState(settings.promptClarify || '')
@@ -75,7 +74,6 @@ export const ProfileModal: React.FC = () => {
       setUserName(settings.userName)
       setUserEmail(settings.userEmail)
       setTheme(settings.theme)
-      setAccentColor(settings.accentColor)
       setLanguage(settings.language)
       setDensity(settings.density)
       setDefaultView(settings.defaultView)
@@ -104,20 +102,6 @@ export const ProfileModal: React.FC = () => {
 
   if (!isProfileOpen) return null
 
-  const accents: { id: AccentColor; name: string; hex: string }[] = [
-    { id: 'indigo', name: t.profileModal.accents.indigo, hex: '#6366f1' },
-    { id: 'violet', name: t.profileModal.accents.violet, hex: '#8b5cf6' },
-    { id: 'emerald', name: t.profileModal.accents.emerald, hex: '#10b981' },
-    { id: 'amber', name: t.profileModal.accents.amber, hex: '#f59e0b' },
-    { id: 'rose', name: t.profileModal.accents.rose, hex: '#f43f5e' },
-    { id: 'cyan', name: t.profileModal.accents.cyan, hex: '#06b6d4' },
-    { id: 'blue', name: t.profileModal.accents.blue, hex: '#3b82f6' },
-    { id: 'orange', name: t.profileModal.accents.orange, hex: '#f97316' },
-    { id: 'neon-cyan', name: t.profileModal.accents['neon-cyan'], hex: '#00f0ff' },
-    { id: 'neon-purple', name: t.profileModal.accents['neon-purple'], hex: '#d946ef' },
-    { id: 'neon-green', name: t.profileModal.accents['neon-green'], hex: '#10f070' },
-    { id: 'neon-amber', name: t.profileModal.accents['neon-amber'], hex: '#ffd000' },
-  ]
 
   const densities: { id: Density; label: string; desc: string }[] = [
     { id: 'compact', label: 'Compact', desc: '13px font, padding réduit' },
@@ -137,7 +121,6 @@ export const ProfileModal: React.FC = () => {
       userName: userName.trim(),
       userEmail: userEmail.trim(),
       theme,
-      accentColor,
       language,
       density,
       defaultView,
@@ -263,41 +246,6 @@ export const ProfileModal: React.FC = () => {
                       <Mail size={14} className="absolute left-2.5 top-2.5 text-[var(--text-muted)]" />
                     </div>
                   </div>
-                </div>
-              </div>
-
-              {/* Accent Color */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
-                    <Palette size={13} />
-                    <span>{t.profileModal.accentColor}</span>
-                  </div>
-                  <span className="text-[11px] font-semibold accent-text capitalize">
-                    {accentColor}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
-                  {accents.map(acc => {
-                    const isSelected = accentColor === acc.id
-                    return (
-                      <button
-                        key={acc.id}
-                        type="button"
-                        onClick={() => setAccentColor(acc.id)}
-                        className={`h-10 rounded-xl flex flex-col items-center justify-center relative transition-all duration-150 cursor-pointer ${
-                          isSelected
-                            ? 'ring-2 ring-white scale-105 shadow-md'
-                            : 'opacity-85 hover:opacity-100 hover:scale-102'
-                        }`}
-                        style={{ backgroundColor: acc.hex }}
-                        title={acc.name}
-                      >
-                        {isSelected && <Check size={16} className="text-white drop-shadow" />}
-                      </button>
-                    )
-                  })}
                 </div>
               </div>
 
@@ -618,7 +566,7 @@ export const ProfileModal: React.FC = () => {
                     <span>Framework Spec-Driven Design par défaut</span>
                   </label>
                   <span className="text-[10px] text-blue-400 font-mono font-bold">
-                    {specFramework === 'openfeature' ? 'Open Feature' : 'SpecKit'}
+                    {specFramework === 'openspec' ? 'OpenSpec' : 'Spec Kit'}
                   </span>
                 </div>
 
@@ -635,18 +583,18 @@ export const ProfileModal: React.FC = () => {
                     <span className="text-base">📑</span>
                     <div className="truncate flex-1">
                       <div className="font-bold text-xs flex items-center justify-between">
-                        <span>SpecKit (Speckit)</span>
+                        <span>GitHub Spec Kit</span>
                         {specFramework === 'speckit' && <Check size={14} className="text-blue-400" />}
                       </div>
-                      <div className="text-[10px] text-[var(--text-muted)] mt-0.5">Spécifications techniques, user stories & BDD Given/When/Then</div>
+                      <div className="text-[10px] text-[var(--text-muted)] mt-0.5">CLI specify : .specify/ + specs/ (spec.md, plan.md, tasks.md)</div>
                     </div>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setSpecFramework('openfeature')}
+                    onClick={() => setSpecFramework('openspec')}
                     className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-2.5 ${
-                      specFramework === 'openfeature'
+                      specFramework === 'openspec'
                         ? 'bg-emerald-500/15 border-emerald-500 text-white ring-2 ring-emerald-500/30 shadow-xs'
                         : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[var(--text-muted)]'
                     }`}
@@ -654,10 +602,10 @@ export const ProfileModal: React.FC = () => {
                     <span className="text-base">🚩</span>
                     <div className="truncate flex-1">
                       <div className="font-bold text-xs flex items-center justify-between">
-                        <span>Open Feature (OpenFeature)</span>
-                        {specFramework === 'openfeature' && <Check size={14} className="text-emerald-400" />}
+                        <span>OpenSpec</span>
+                        {specFramework === 'openspec' && <Check size={14} className="text-emerald-400" />}
                       </div>
-                      <div className="text-[10px] text-[var(--text-muted)] mt-0.5">Feature Flags SDD, règles d'évaluation, hooks & fallbacks</div>
+                      <div className="text-[10px] text-[var(--text-muted)] mt-0.5">CLI openspec : propositions de changement et deltas de specs validés avant code</div>
                     </div>
                   </button>
                 </div>
@@ -697,13 +645,13 @@ export const ProfileModal: React.FC = () => {
                     <FileCode size={13} />
                     <span>Prompt de Spécification (/specify-issue)</span>
                   </span>
-                  <span className="text-[10px] text-[var(--text-muted)] font-mono">Spécification technique Speckit</span>
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono">Spécification Spec Kit / OpenSpec</span>
                 </label>
                 <textarea
                   value={promptSpecify}
                   onChange={e => setPromptSpecify(e.target.value)}
                   rows={3}
-                  placeholder='Tu es le Product Owner pour {issueKey}. Rédige une spécification Speckit...'
+                  placeholder='Tu es le Product Owner pour {issueKey}. Rédige la spécification selon le framework SDD configuré...'
                   className="w-full p-2.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-blue-500 transition-all resize-y"
                 />
               </div>

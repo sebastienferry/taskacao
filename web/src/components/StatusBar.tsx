@@ -30,6 +30,9 @@ export const StatusBar: React.FC = () => {
 
   const [copied, setCopied] = useState(false)
 
+  // The selected project overrides the global engine, so the pill must not
+  // advertise the global one while the project runs another CLI.
+  const statusProvider = currentProject?.aiProvider || settings.aiProvider || 'agy'
   const activeBranch = gitStatus?.branch || (currentProject?.repoPath ? 'main' : null)
   const isGit = gitStatus?.isGitRepo ?? Boolean(gitStatus?.branch)
   const isClean = gitStatus?.isClean ?? true
@@ -206,10 +209,10 @@ export const StatusBar: React.FC = () => {
         <div
           onClick={() => setIsProfileOpen(true)}
           className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors text-[10px]"
-          title={`Moteur IA actif : ${settings.aiProvider.toUpperCase()} - Cliquer pour configurer`}
+          title={`Moteur IA actif : ${statusProvider.toUpperCase()}${currentProject?.aiProvider ? ` (défini par le projet ${currentProject.name})` : ''} - Cliquer pour configurer`}
         >
           <Bot size={11} className="text-amber-400" />
-          <span className="font-bold text-[var(--accent-color)]">{settings.aiProvider.toUpperCase()}</span>
+          <span className="font-bold text-[var(--accent-color)]">{statusProvider.toUpperCase()}</span>
         </div>
 
         {/* Refresh Git Status Button */}
