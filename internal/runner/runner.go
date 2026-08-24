@@ -1204,63 +1204,66 @@ func parseJiraSearchOutput(output string) ([]JiraIssueItem, error) {
 	return nil, fmt.Errorf("réponse JSON Jira illisible: %s", preview)
 }
 
-func (r *Runner) SyncFromJira(projectKey string, repoPath string, trackerUrl string) ([]models.Task, error) {
-	// A full paginated fetch of a large project (1300+ work items) takes about
-	// 40 seconds, so the old 20s budget silently truncated the import.
-	ctx, cancel := context.WithTimeout(context.Background(), jiraSyncTimeout)
+// SyncFromJira reads a Jira project. Two sources, same conversion: the REST API
+// when credentials are configured, which returns the parent, Sprint and Team in
+// the same pass, and acli otherwise, which needs two extra passes because its
+// --fields rejects those.
+func (r *Runner) SyncFromJira(settings *models.Settings, projectKey string, repoPath string, trackerUrl string) ([]models.Task, error) {
+	if client := NewJiraRESTClient(settings, trackerUrl); client != nil {
+		tasks, err := r.syncFromJiraREST(client, projectKey, trackerUrl)
+		if err == nil {
+			return tasks, nil
+		}
+		// A REST failure must not lose the board: fall back on acli, which is
+		// the path that worked before credentials existed.
+		log.Printf("[SyncFromJira] REST read failed (%v), falling back on acli", err)
+	}
+	return r.syncFromJiraCLI(projectKey, repoPath, trackerUrl)
+}
+
+// syncFromJiraREST reads the project over the REST API, including the fields
+// acli cannot project.
+func (r *Runner) syncFromJiraREST(client *JiraRESTClient, projectKey string, trackerUrl string) ([]models.Task, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), jiraRESTTimeout)
 	defer cancel()
 
-	acliPath, _ := FindCliTool("acli")
-	if acliPath == "" {
-		acliPath = "acli"
-	}
-
-	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
-	if projectKey == "" {
-		return nil, fmt.Errorf("clé de projet Jira manquante: renseignez 'Projet Jira' dans la configuration du projet")
-	}
-
-	// Only Task and Story are imported. Epics are containers reattached to their
-	// children as a property by enrichJiraParents below; the remaining types are
-	// deliberately left out of the board.
-	//
-	// acli queries work items through JQL. 'search' is the current command;
-	// older builds exposed 'list --project', kept here as a fallback.
-	quoted := make([]string, 0, len(jiraSyncedIssueTypes))
-	for _, t := range jiraSyncedIssueTypes {
-		quoted = append(quoted, fmt.Sprintf("%q", t))
-	}
-	jql := fmt.Sprintf("project = %s AND issuetype IN (%s) ORDER BY updated DESC",
-		projectKey, strings.Join(quoted, ", "))
-	// --paginate walks every page: without it acli returns only the first page
-	// and the board silently stops at 100 tickets.
-	attempts := [][]string{
-		{"jira", "workitem", "search", "--jql", jql, "--fields", jiraSearchFields, "--paginate", "--json"},
-		{"jira", "workitem", "search", "--jql", jql, "--paginate", "--json"},
-		{"jira", "workitem", "list", "--project", projectKey, "--output", "json"},
-	}
-
-	var output string
-	var lastErr error
-	for _, args := range attempts {
-		out, err := r.runCommand(ctx, repoPath, acliPath, args...)
-		if err == nil {
-			output = out
-			lastErr = nil
-			break
-		}
-		lastErr = err
-		output = out
-	}
-	if lastErr != nil {
-		return nil, fmt.Errorf("interrogation de Jira via acli impossible: %w", lastErr)
-	}
-
-	items, err := parseJiraSearchOutput(output)
+	result, err := client.SearchProjectIssues(ctx, projectKey)
 	if err != nil {
 		return nil, err
 	}
+	if len(result.Items) == 0 {
+		return nil, fmt.Errorf("aucun ticket renvoyé par l'API Jira pour %s", projectKey)
+	}
 
+	tasks := r.jiraItemsToTasks(result.Items, trackerUrl)
+	for i := range tasks {
+		// The parent comes straight from the payload here, so the epic-walking
+		// pass the acli path needs is not run at all.
+		if item := findJiraItem(result.Items, tasks[i].Key); item != nil && item.Fields.Parent != nil {
+			tasks[i].ParentKey = item.Fields.Parent.Key
+			tasks[i].ParentTitle = item.Fields.Parent.Fields.Summary
+			tasks[i].ParentType = item.Fields.Parent.Fields.IssueType.Name
+		}
+		if values, ok := result.Fields[tasks[i].Key]; ok {
+			tasks[i].Sprint = values.Sprint
+			tasks[i].Team = values.Team
+		}
+	}
+	return tasks, nil
+}
+
+func findJiraItem(items []JiraIssueItem, key string) *JiraIssueItem {
+	for i := range items {
+		if items[i].Key == key {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+// jiraItemsToTasks converts Jira work items into board cards. Shared by the
+// REST and the acli read paths, which return the same payload shape.
+func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string) []models.Task {
 	var tasks []models.Task
 	for i, item := range items {
 		// Second line of defence: the legacy 'workitem list' fallback above
@@ -1343,10 +1346,88 @@ func (r *Runner) SyncFromJira(projectKey string, repoPath string, trackerUrl str
 		})
 	}
 
+	return tasks
+}
+
+func (r *Runner) syncFromJiraCLI(projectKey string, repoPath string, trackerUrl string) ([]models.Task, error) {
+	// A full paginated fetch of a large project (1300+ work items) takes about
+	// 40 seconds, so the old 20s budget silently truncated the import.
+	ctx, cancel := context.WithTimeout(context.Background(), jiraSyncTimeout)
+	defer cancel()
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
+	if projectKey == "" {
+		return nil, fmt.Errorf("clé de projet Jira manquante: renseignez 'Projet Jira' dans la configuration du projet")
+	}
+
+	// Only Task and Story are imported. Epics are containers reattached to their
+	// children as a property by enrichJiraParents below; the remaining types are
+	// deliberately left out of the board.
+	//
+	// acli queries work items through JQL. 'search' is the current command;
+	// older builds exposed 'list --project', kept here as a fallback.
+	quoted := make([]string, 0, len(jiraSyncedIssueTypes))
+	for _, t := range jiraSyncedIssueTypes {
+		quoted = append(quoted, fmt.Sprintf("%q", t))
+	}
+	jql := fmt.Sprintf("project = %s AND issuetype IN (%s) ORDER BY updated DESC",
+		projectKey, strings.Join(quoted, ", "))
+	// --paginate walks every page: without it acli returns only the first page
+	// and the board silently stops at 100 tickets.
+	attempts := [][]string{
+		{"jira", "workitem", "search", "--jql", jql, "--fields", jiraSearchFields, "--paginate", "--json"},
+		{"jira", "workitem", "search", "--jql", jql, "--paginate", "--json"},
+		{"jira", "workitem", "list", "--project", projectKey, "--output", "json"},
+	}
+
+	var output string
+	var lastErr error
+	for _, args := range attempts {
+		out, err := r.runCommand(ctx, repoPath, acliPath, args...)
+		if err == nil {
+			output = out
+			lastErr = nil
+			break
+		}
+		lastErr = err
+		output = out
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("interrogation de Jira via acli impossible: %w", lastErr)
+	}
+
+	items, err := parseJiraSearchOutput(output)
+	if err != nil {
+		return nil, err
+	}
+
+	tasks := r.jiraItemsToTasks(items, trackerUrl)
+
 	// Attach the parent (epic, or parent story for a sub-task) as a property of
 	// each task. Best-effort: a failure here leaves tasks without a parent
 	// rather than failing the whole sync.
 	r.enrichJiraParents(projectKey, tasks, repoPath)
+
+	// Sprint, on this path, is reconstructed from the project's scrum boards:
+	// acli's search cannot project the field, but its agile commands list the
+	// work items of each sprint. Team has no such detour and stays empty.
+	if sprintByKey, notes, err := r.FetchSprintsViaCLI(projectKey, repoPath); err == nil {
+		for i := range tasks {
+			if name, ok := sprintByKey[tasks[i].Key]; ok {
+				tasks[i].Sprint = name
+			}
+		}
+		for _, note := range notes {
+			log.Printf("[SyncFromJira] sprint via acli: %s", note)
+		}
+	} else {
+		log.Printf("[SyncFromJira] sprint via acli indisponible: %v", err)
+	}
 
 	return tasks, nil
 }
@@ -2541,7 +2622,6 @@ func (r *Runner) OpenInEditor(editorCmd string, targetPath string) error {
 	}
 	return nil
 }
-
 
 // runCommandForTest runs a shell snippet and returns its raw stdout. It exists
 // so the escaping tests can assert what the shell actually parses.

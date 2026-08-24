@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { TaskCard } from './TaskCard'
+import { TaskFilters } from './TaskFilters'
 import type { Task, Status, WorkflowStage } from '../types'
 
 interface WorkflowColumnConfig {
@@ -318,6 +319,8 @@ export const BoardView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <TaskFilters />
+
           <button
             onClick={toggleHideDone}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${

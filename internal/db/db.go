@@ -111,6 +111,7 @@ func (d *DB) initSchema() error {
 			color TEXT NOT NULL DEFAULT 'indigo',
 			repo_path TEXT NOT NULL DEFAULT '',
 			repo_paths TEXT NOT NULL DEFAULT '[]',
+			use_worktrees INTEGER NOT NULL DEFAULT 1,
 			linear_team TEXT NOT NULL DEFAULT '',
 			github_repo TEXT NOT NULL DEFAULT '',
 			issue_tracker TEXT NOT NULL DEFAULT 'local',
@@ -136,6 +137,8 @@ func (d *DB) initSchema() error {
 			branch_name TEXT,
 			pr_url TEXT,
 			repo_path TEXT NOT NULL DEFAULT '',
+			sprint TEXT NOT NULL DEFAULT '',
+			team TEXT NOT NULL DEFAULT '',
 			source TEXT NOT NULL DEFAULT 'local',
 			external_url TEXT,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -176,6 +179,7 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN tracker_url TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN skill_overrides TEXT NOT NULL DEFAULT '{}';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN repo_paths TEXT NOT NULL DEFAULT '[]';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN use_worktrees INTEGER NOT NULL DEFAULT 1;")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN ai_provider TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN ai_command_template TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN spec_framework TEXT NOT NULL DEFAULT '';")
@@ -186,6 +190,9 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN branch_name TEXT;")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN pr_url TEXT;")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN repo_path TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN sprint TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN team TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_sprint ON tasks(sprint);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'local';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN external_url TEXT;")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN issue_type TEXT NOT NULL DEFAULT '';")
@@ -231,6 +238,8 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN spec_framework TEXT NOT NULL DEFAULT 'speckit';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_project TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_url TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_email TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_api_token TEXT NOT NULL DEFAULT '';")
 
 	// Migrate the legacy 'openfeature' Spec-Driven Design option to 'openspec'.
 	// OpenFeature is a feature-flag standard, not an SDD framework: the two
@@ -362,9 +371,9 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 				newID = uuid.New().String()
 			}
 			if _, insErr := d.conn.Exec(`
-				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.CreatedAt, now); insErr != nil {
+				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, team, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.Sprint, t.Team, t.CreatedAt, now); insErr != nil {
 				// Never swallow this: a silent failure here makes a sync report
 				// "N tickets imported" while the board stays empty.
 				log.Printf("[DB.ImportOrUpdateTasks] insert of %s failed: %v", t.Key, insErr)
@@ -379,10 +388,13 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 				    parent_key = CASE WHEN ? != '' THEN ? ELSE parent_key END,
 				    parent_title = CASE WHEN ? != '' THEN ? ELSE parent_title END,
 				    parent_type = CASE WHEN ? != '' THEN ? ELSE parent_type END,
+				    sprint = CASE WHEN ? != '' THEN ? ELSE sprint END,
+				    team = CASE WHEN ? != '' THEN ? ELSE team END,
 				    updated_at = ?
 				WHERE id = ?
 			`, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, src, t.ExternalURL,
-				t.IssueType, t.IssueType, t.ParentKey, t.ParentKey, t.ParentTitle, t.ParentTitle, t.ParentType, t.ParentType, now, existingID); updErr != nil {
+				t.IssueType, t.IssueType, t.ParentKey, t.ParentKey, t.ParentTitle, t.ParentTitle, t.ParentType, t.ParentType,
+				t.Sprint, t.Sprint, t.Team, t.Team, now, existingID); updErr != nil {
 				log.Printf("[DB.ImportOrUpdateTasks] update of %s failed: %v", t.Key, updErr)
 				importErrs = append(importErrs, fmt.Sprintf("%s: %v", t.Key, updErr))
 			}
@@ -451,7 +463,59 @@ func (d *DB) computeExternalURLUnsafe(t *models.Task) *string {
 	return nil
 }
 
-func (d *DB) GetTasks(query, status, priority, label, projectID string) ([]models.Task, error) {
+// TaskFacets lists the distinct tracker values present in the board, so the UI
+// can offer a filter only when the tracker actually feeds the field. A GitHub or
+// local project simply returns empty lists.
+type TaskFacets struct {
+	Sprints []string `json:"sprints"`
+	Teams   []string `json:"teams"`
+}
+
+// GetTaskFacets returns the sprints and teams found on the tasks of a project,
+// or of the whole board when projectID is empty. The values must come from a
+// dedicated query rather than from the filtered task list, otherwise selecting
+// a sprint would empty the very dropdown it was picked from.
+func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	facets := &TaskFacets{Sprints: []string{}, Teams: []string{}}
+
+	for _, column := range []string{"sprint", "team"} {
+		query := fmt.Sprintf("SELECT DISTINCT %s FROM tasks WHERE %s != ''", column, column)
+		args := []interface{}{}
+		if projectID != "" {
+			query += " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
+			args = append(args, projectID, projectID, projectID)
+		}
+		query += fmt.Sprintf(" ORDER BY %s DESC", column)
+
+		rows, err := d.conn.Query(query, args...)
+		if err != nil {
+			return facets, err
+		}
+		for rows.Next() {
+			var value string
+			if err := rows.Scan(&value); err != nil {
+				continue
+			}
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if column == "sprint" {
+				facets.Sprints = append(facets.Sprints, value)
+			} else {
+				facets.Teams = append(facets.Teams, value)
+			}
+		}
+		rows.Close()
+	}
+
+	return facets, nil
+}
+
+func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team string) ([]models.Task, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -484,7 +548,17 @@ func (d *DB) GetTasks(query, status, priority, label, projectID string) ([]model
 		args = append(args, "%"+label+"%")
 	}
 
-	sqlQuery := "SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at FROM tasks"
+	if sprint != "" {
+		conditions = append(conditions, "sprint = ?")
+		args = append(args, sprint)
+	}
+
+	if team != "" {
+		conditions = append(conditions, "team = ?")
+		args = append(args, team)
+	}
+
+	sqlQuery := "SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at FROM tasks"
 	if len(conditions) > 0 {
 		sqlQuery += " WHERE " + strings.Join(conditions, " AND ")
 	}
@@ -500,7 +574,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID string) ([]model
 	for rows.Next() {
 		var t models.Task
 		var labelsJSON string
-		var dueDate, branchName, prURL, repoPath, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+		var dueDate, branchName, prURL, repoPath, sprint, team, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
 		var statusStr, priorityStr string
 
 		err := rows.Scan(
@@ -519,6 +593,8 @@ func (d *DB) GetTasks(query, status, priority, label, projectID string) ([]model
 			&branchName,
 			&prURL,
 			&repoPath,
+			&sprint,
+			&team,
 			&source,
 			&extURL,
 			&issueType,
@@ -546,6 +622,12 @@ func (d *DB) GetTasks(query, status, priority, label, projectID string) ([]model
 		if repoPath.Valid && repoPath.String != "" {
 			p := repoPath.String
 			t.RepoPath = &p
+		}
+		if sprint.Valid {
+			t.Sprint = sprint.String
+		}
+		if team.Valid {
+			t.Team = team.String
 		}
 		if source.Valid && source.String != "" {
 			t.Source = source.String
@@ -589,11 +671,11 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 
 	var t models.Task
 	var labelsJSON string
-	var dueDate, branchName, prURL, repoPath, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+	var dueDate, branchName, prURL, repoPath, sprint, team, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
 	var statusStr, priorityStr string
 
 	err := d.conn.QueryRow(`
-		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
 		FROM tasks WHERE id = ? OR key = ?
 	`, id, id).Scan(
 		&t.ID,
@@ -611,6 +693,8 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 		&branchName,
 		&prURL,
 		&repoPath,
+		&sprint,
+		&team,
 		&source,
 		&extURL,
 		&issueType,
@@ -641,6 +725,12 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 	if repoPath.Valid && repoPath.String != "" {
 		p := repoPath.String
 		t.RepoPath = &p
+	}
+	if sprint.Valid {
+		t.Sprint = sprint.String
+	}
+	if team.Valid {
+		t.Team = team.String
 	}
 	if source.Valid && source.String != "" {
 		t.Source = source.String
@@ -720,8 +810,30 @@ func (d *DB) ResolveTaskRepoPath(task *models.Task) string {
 	return ""
 }
 
+// TaskWorktreesEnabled reports whether a task runs in its own Git worktree or
+// directly in the clone. It is a per-project choice: the isolation is valuable
+// when several agents work in parallel, and pure overhead on a solo project.
+// Projects with no explicit setting keep the historical behaviour, enabled.
+func (d *DB) TaskWorktreesEnabled(task *models.Task) bool {
+	if task == nil || task.ProjectID == "" {
+		return true
+	}
+	proj, err := d.GetProjectByID(task.ProjectID)
+	if err != nil || proj == nil {
+		return true
+	}
+	return proj.UseWorktrees
+}
+
 func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string, string, error) {
 	if mainRepoPath == "" || task == nil {
+		return mainRepoPath, "", nil
+	}
+
+	// The project can opt out entirely. Returning the clone with no branch says
+	// "work here, and do not touch the checkout": switching the user's branch
+	// under them would be a surprise, so that stays a manual action.
+	if !d.TaskWorktreesEnabled(task) {
 		return mainRepoPath, "", nil
 	}
 
@@ -889,6 +1001,11 @@ func (d *DB) GetTaskWorktreeInfo(taskIDOrKey string) (*models.WorktreeInfo, erro
 	exists := false
 	if fi, err := os.Stat(worktreePath); err == nil && fi.IsDir() {
 		exists = true
+	}
+	if !d.TaskWorktreesEnabled(task) {
+		// The task works in the clone, so that is the path to report.
+		worktreePath = mainRepoPath
+		exists = false
 	}
 
 	return &models.WorktreeInfo{
@@ -1762,11 +1879,11 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 
 func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 	var s models.Settings
-	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, pClar, pSpec, pImpl, pPR, pPick, editCmd, specFw sql.NullString
+	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, jiraMail, jiraTok, pClar, pSpec, pImpl, pPR, pPick, editCmd, specFw sql.NullString
 
 	err := d.conn.QueryRow(`
 		SELECT id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar,
-		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url,
+		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token,
 		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
@@ -1788,6 +1905,8 @@ func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 		&ghRepo,
 		&jiraProj,
 		&jiraUrl,
+		&jiraMail,
+		&jiraTok,
 		&pClar,
 		&pSpec,
 		&pImpl,
@@ -1828,6 +1947,12 @@ func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 	}
 	if jiraUrl.Valid {
 		s.JiraUrl = jiraUrl.String
+	}
+	if jiraMail.Valid {
+		s.JiraEmail = jiraMail.String
+	}
+	if jiraTok.Valid {
+		s.JiraAPIToken = jiraTok.String
 	}
 	s.SpecFramework = runner.NormalizeSpecFramework(specFw.String)
 	if pClar.Valid {
@@ -1922,11 +2047,11 @@ func (d *DB) DeleteTask(id string) error {
 func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	var t models.Task
 	var labelsJSON string
-	var dueDate, branchName, prURL, repoPath, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+	var dueDate, branchName, prURL, repoPath, sprint, team, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
 	var statusStr, priorityStr string
 
 	err := d.conn.QueryRow(`
-		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
 		FROM tasks WHERE id = ? OR key = ?
 	`, id, id).Scan(
 		&t.ID,
@@ -1944,6 +2069,8 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 		&branchName,
 		&prURL,
 		&repoPath,
+		&sprint,
+		&team,
 		&source,
 		&extURL,
 		&issueType,
@@ -1974,6 +2101,12 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	if repoPath.Valid && repoPath.String != "" {
 		p := repoPath.String
 		t.RepoPath = &p
+	}
+	if sprint.Valid {
+		t.Sprint = sprint.String
+	}
+	if team.Valid {
+		t.Team = team.String
 	}
 	if source.Valid && source.String != "" {
 		t.Source = source.String
@@ -2082,16 +2215,20 @@ func (d *DB) GetTaskActivities(taskID string) ([]models.TaskActivity, error) {
 	return d.getTaskActivitiesUnsafe(taskID)
 }
 
+// JiraTokenClearSentinel is what the UI sends to delete a stored token, since an
+// empty field means "leave it alone".
+const JiraTokenClearSentinel = "__clear__"
+
 func (d *DB) GetSettings() (*models.Settings, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	var s models.Settings
-	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, pClar, pSpec, pImpl, pPR, pPick, specFw sql.NullString
+	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, jiraMail, jiraTok, pClar, pSpec, pImpl, pPR, pPick, specFw sql.NullString
 
 	err := d.conn.QueryRow(`
 		SELECT id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar,
-		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url,
+		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token,
 		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
@@ -2113,6 +2250,8 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 		&ghRepo,
 		&jiraProj,
 		&jiraUrl,
+		&jiraMail,
+		&jiraTok,
 		&pClar,
 		&pSpec,
 		&pImpl,
@@ -2125,30 +2264,30 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return &models.Settings{
-				ID:                 1,
-				Theme:              "dark",
-				AccentColor:        "indigo",
-				Language:           "fr",
-				Density:            "standard",
-				DefaultView:        "board",
-				DetailMode:         "panel",
-				UserName:           "Developer",
-				UserEmail:          "dev@example.com",
-				UserAvatar:         "",
-				AIProvider:         "agy",
-				AICommandTemplate:  "agy --dangerously-skip-permissions -p \"{prompt}\"",
-				RepoPath:           ".",
-				IssueTracker:       "local",
-				LinearTeam:         "",
-				GithubRepo:         "",
-				PromptClarify:      "",
-				PromptSpecify:      "",
-				PromptImplement:    "",
-				PromptCreatePR:     "",
-				PromptPick:         "",
-				EditorCommand:      "code",
-				SpecFramework:      "speckit",
-				UpdatedAt:          time.Now(),
+				ID:                1,
+				Theme:             "dark",
+				AccentColor:       "indigo",
+				Language:          "fr",
+				Density:           "standard",
+				DefaultView:       "board",
+				DetailMode:        "panel",
+				UserName:          "Developer",
+				UserEmail:         "dev@example.com",
+				UserAvatar:        "",
+				AIProvider:        "agy",
+				AICommandTemplate: "agy --dangerously-skip-permissions -p \"{prompt}\"",
+				RepoPath:          ".",
+				IssueTracker:      "local",
+				LinearTeam:        "",
+				GithubRepo:        "",
+				PromptClarify:     "",
+				PromptSpecify:     "",
+				PromptImplement:   "",
+				PromptCreatePR:    "",
+				PromptPick:        "",
+				EditorCommand:     "code",
+				SpecFramework:     "speckit",
+				UpdatedAt:         time.Now(),
 			}, nil
 		}
 		return nil, err
@@ -2195,6 +2334,12 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	if jiraUrl.Valid {
 		s.JiraUrl = jiraUrl.String
 	}
+	if jiraMail.Valid {
+		s.JiraEmail = jiraMail.String
+	}
+	if jiraTok.Valid {
+		s.JiraAPIToken = jiraTok.String
+	}
 	if pClar.Valid {
 		s.PromptClarify = pClar.String
 	}
@@ -2221,53 +2366,139 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 
 	current, _ := d.getSettingsUnsafe()
 	if current != nil {
-		if s.Theme == "" { s.Theme = current.Theme }
-		if s.AccentColor == "" { s.AccentColor = current.AccentColor }
-		if s.Language == "" { s.Language = current.Language }
-		if s.Density == "" { s.Density = current.Density }
-		if s.DefaultView == "" { s.DefaultView = current.DefaultView }
-		if s.DetailMode == "" { s.DetailMode = current.DetailMode }
-		if s.UserName == "" { s.UserName = current.UserName }
-		if s.UserEmail == "" { s.UserEmail = current.UserEmail }
-		if s.AIProvider == "" { s.AIProvider = current.AIProvider }
-		if s.AICommandTemplate == "" { s.AICommandTemplate = current.AICommandTemplate }
-		if s.RepoPath == "" { s.RepoPath = current.RepoPath }
-		if s.IssueTracker == "" { s.IssueTracker = current.IssueTracker }
-		if s.LinearTeam == "" { s.LinearTeam = current.LinearTeam }
-		if s.GithubRepo == "" { s.GithubRepo = current.GithubRepo }
-		if s.JiraProject == "" { s.JiraProject = current.JiraProject }
-		if s.JiraUrl == "" { s.JiraUrl = current.JiraUrl }
-		if s.PromptClarify == "" { s.PromptClarify = current.PromptClarify }
-		if s.PromptSpecify == "" { s.PromptSpecify = current.PromptSpecify }
-		if s.PromptImplement == "" { s.PromptImplement = current.PromptImplement }
-		if s.PromptCreatePR == "" { s.PromptCreatePR = current.PromptCreatePR }
-		if s.PromptPick == "" { s.PromptPick = current.PromptPick }
-		if s.EditorCommand == "" { s.EditorCommand = current.EditorCommand }
-		if s.SpecFramework == "" { s.SpecFramework = current.SpecFramework }
+		if s.Theme == "" {
+			s.Theme = current.Theme
+		}
+		if s.AccentColor == "" {
+			s.AccentColor = current.AccentColor
+		}
+		if s.Language == "" {
+			s.Language = current.Language
+		}
+		if s.Density == "" {
+			s.Density = current.Density
+		}
+		if s.DefaultView == "" {
+			s.DefaultView = current.DefaultView
+		}
+		if s.DetailMode == "" {
+			s.DetailMode = current.DetailMode
+		}
+		if s.UserName == "" {
+			s.UserName = current.UserName
+		}
+		if s.UserEmail == "" {
+			s.UserEmail = current.UserEmail
+		}
+		if s.AIProvider == "" {
+			s.AIProvider = current.AIProvider
+		}
+		if s.AICommandTemplate == "" {
+			s.AICommandTemplate = current.AICommandTemplate
+		}
+		if s.RepoPath == "" {
+			s.RepoPath = current.RepoPath
+		}
+		if s.IssueTracker == "" {
+			s.IssueTracker = current.IssueTracker
+		}
+		if s.LinearTeam == "" {
+			s.LinearTeam = current.LinearTeam
+		}
+		if s.GithubRepo == "" {
+			s.GithubRepo = current.GithubRepo
+		}
+		if s.JiraProject == "" {
+			s.JiraProject = current.JiraProject
+		}
+		if s.JiraUrl == "" {
+			s.JiraUrl = current.JiraUrl
+		}
+		if s.JiraEmail == "" {
+			s.JiraEmail = current.JiraEmail
+		}
+		if s.JiraAPIToken == "" {
+			// The UI never receives the token back, so it sends an empty field
+			// unless the user typed a new one.
+			s.JiraAPIToken = current.JiraAPIToken
+		} else if s.JiraAPIToken == JiraTokenClearSentinel {
+			s.JiraAPIToken = ""
+		}
+		if s.PromptClarify == "" {
+			s.PromptClarify = current.PromptClarify
+		}
+		if s.PromptSpecify == "" {
+			s.PromptSpecify = current.PromptSpecify
+		}
+		if s.PromptImplement == "" {
+			s.PromptImplement = current.PromptImplement
+		}
+		if s.PromptCreatePR == "" {
+			s.PromptCreatePR = current.PromptCreatePR
+		}
+		if s.PromptPick == "" {
+			s.PromptPick = current.PromptPick
+		}
+		if s.EditorCommand == "" {
+			s.EditorCommand = current.EditorCommand
+		}
+		if s.SpecFramework == "" {
+			s.SpecFramework = current.SpecFramework
+		}
 	}
 
-	if s.Theme == "" { s.Theme = "dark" }
-	if s.AccentColor == "" { s.AccentColor = "indigo" }
-	if s.Language == "" { s.Language = "fr" }
-	if s.Density == "" { s.Density = "standard" }
-	if s.DefaultView == "" { s.DefaultView = "board" }
-	if s.DetailMode == "" { s.DetailMode = "panel" }
-	if s.UserName == "" { s.UserName = "Developer" }
-	if s.UserEmail == "" { s.UserEmail = "dev@example.com" }
-	if s.AIProvider == "" { s.AIProvider = "agy" }
-	if s.AICommandTemplate == "" { s.AICommandTemplate = "agy -p \"{prompt}\"" }
-	if s.RepoPath == "" { s.RepoPath = "." }
-	if s.IssueTracker == "" { s.IssueTracker = "local" }
-	if s.LinearTeam == "" { s.LinearTeam = "" }
-	if s.GithubRepo == "" { s.GithubRepo = "" }
-	if s.EditorCommand == "" { s.EditorCommand = "code" }
+	if s.Theme == "" {
+		s.Theme = "dark"
+	}
+	if s.AccentColor == "" {
+		s.AccentColor = "indigo"
+	}
+	if s.Language == "" {
+		s.Language = "fr"
+	}
+	if s.Density == "" {
+		s.Density = "standard"
+	}
+	if s.DefaultView == "" {
+		s.DefaultView = "board"
+	}
+	if s.DetailMode == "" {
+		s.DetailMode = "panel"
+	}
+	if s.UserName == "" {
+		s.UserName = "Developer"
+	}
+	if s.UserEmail == "" {
+		s.UserEmail = "dev@example.com"
+	}
+	if s.AIProvider == "" {
+		s.AIProvider = "agy"
+	}
+	if s.AICommandTemplate == "" {
+		s.AICommandTemplate = "agy -p \"{prompt}\""
+	}
+	if s.RepoPath == "" {
+		s.RepoPath = "."
+	}
+	if s.IssueTracker == "" {
+		s.IssueTracker = "local"
+	}
+	if s.LinearTeam == "" {
+		s.LinearTeam = ""
+	}
+	if s.GithubRepo == "" {
+		s.GithubRepo = ""
+	}
+	if s.EditorCommand == "" {
+		s.EditorCommand = "code"
+	}
 	s.SpecFramework = runner.NormalizeSpecFramework(s.SpecFramework)
 	s.JiraProject = strings.ToUpper(strings.TrimSpace(s.JiraProject))
 
 	now := time.Now()
 	_, err := d.conn.Exec(`
-		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			theme = excluded.theme,
 			accent_color = excluded.accent_color,
@@ -2286,6 +2517,8 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 			github_repo = excluded.github_repo,
 			jira_project = excluded.jira_project,
 			jira_url = excluded.jira_url,
+			jira_email = excluded.jira_email,
+			jira_api_token = excluded.jira_api_token,
 			prompt_clarify = excluded.prompt_clarify,
 			prompt_specify = excluded.prompt_specify,
 			prompt_implement = excluded.prompt_implement,
@@ -2294,7 +2527,7 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 			editor_command = excluded.editor_command,
 			spec_framework = excluded.spec_framework,
 			updated_at = excluded.updated_at
-	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.JiraProject, s.JiraUrl, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, s.SpecFramework, now)
+	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.JiraProject, s.JiraUrl, s.JiraEmail, s.JiraAPIToken, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, s.SpecFramework, now)
 
 	if err != nil {
 		return nil, err
@@ -2536,7 +2769,9 @@ func (d *DB) processSkillJob(job SkillJob) {
 	// 5. Dynamically acquire or create the dedicated Git Worktree for this task
 	executionDir := mainRepoPath
 	var worktreeStep string
-	if mainRepoPath != "" {
+	if mainRepoPath != "" && !d.TaskWorktreesEnabled(task) {
+		worktreeStep = fmt.Sprintf("📂 Worktrees désactivés sur ce projet : exécution directe dans %s", filepath.Base(mainRepoPath))
+	} else if mainRepoPath != "" {
 		wtPath, branch, wtErr := d.EnsureTaskWorktree(mainRepoPath, task)
 		if wtErr != nil {
 			worktreeStep = fmt.Sprintf("⚠️ Avertissement Worktree : %v (repli sur %s)", wtErr, filepath.Base(mainRepoPath))
@@ -2889,10 +3124,10 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 		if repoPath == "" {
 			repoPath = settings.RepoPath
 		}
-		steps = append(steps, fmt.Sprintf("1. Connecting to Atlassian / Jira CLI for project %s...", projectKey))
+		steps = append(steps, fmt.Sprintf("1. Lecture du projet Jira %s via %s...", projectKey, runner.JiraReadSource(settings, trackerUrl)))
 		outputLines = append(outputLines, fmt.Sprintf("### 🔷 Jira Synchronization (Project: %s)\n", projectKey))
 
-		tasks, err := d.runner.SyncFromJira(projectKey, repoPath, trackerUrl)
+		tasks, err := d.runner.SyncFromJira(settings, projectKey, repoPath, trackerUrl)
 		if err != nil {
 			hasError = true
 			errMsg := fmt.Sprintf("Jira synchronization failed: %v", err)
@@ -3004,7 +3239,7 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 				if jPath == "" {
 					jPath = settings.RepoPath
 				}
-				jTasks, jErr := d.runner.SyncFromJira(jKey, jPath, jUrl)
+				jTasks, jErr := d.runner.SyncFromJira(settings, jKey, jPath, jUrl)
 				if jErr != nil {
 					steps = append(steps, fmt.Sprintf("⚠️ Jira (%s): %v", jKey, jErr))
 					outputLines = append(outputLines, fmt.Sprintf("❌ Jira (%s): %v", jKey, jErr))
@@ -3201,12 +3436,22 @@ func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 	repoPath := ""
 	tracker := task.Source
 	if proj != nil {
-		if proj.GithubRepo != "" { repo = proj.GithubRepo }
-		if proj.RepoPath != "" { repoPath = proj.RepoPath }
-		if proj.IssueTracker != "" && tracker == "" { tracker = proj.IssueTracker }
+		if proj.GithubRepo != "" {
+			repo = proj.GithubRepo
+		}
+		if proj.RepoPath != "" {
+			repoPath = proj.RepoPath
+		}
+		if proj.IssueTracker != "" && tracker == "" {
+			tracker = proj.IssueTracker
+		}
 	}
-	if repo == "" && settings != nil { repo = settings.GithubRepo }
-	if repoPath == "" && settings != nil { repoPath = settings.RepoPath }
+	if repo == "" && settings != nil {
+		repo = settings.GithubRepo
+	}
+	if repoPath == "" && settings != nil {
+		repoPath = settings.RepoPath
+	}
 
 	isLinear := tracker == "linear" || task.Source == "linear" || strings.HasPrefix(task.Key, "FRE-")
 	isGithub := tracker == "github" || task.Source == "github" || strings.HasPrefix(task.Key, "#") || strings.HasPrefix(task.Key, "gh-") || strings.HasPrefix(task.Key, "GH-")
@@ -4089,7 +4334,7 @@ func (d *DB) registerProjectRepoPathUnsafe(projectID string, repoPath string) {
 
 func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 	rows, err := d.conn.Query(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
 		       COUNT(t.id) as task_count
 		FROM projects p
 		LEFT JOIN tasks t ON t.project_id = p.id
@@ -4106,9 +4351,10 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		var p models.Project
 		var isDefault int
 		var stageMappingJSON, skillOverridesJSON, repoPathsJSON string
+		var useWorktrees int
 		var aiProv, aiCmd, specFw, jiraProj, projType sql.NullString
 		err := rows.Scan(
-			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 		)
 		if err != nil {
 			return nil, err
@@ -4123,6 +4369,7 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 			_ = json.Unmarshal([]byte(skillOverridesJSON), &p.SkillOverrides)
 		}
 		p.RepoPaths = parseRepoPaths(repoPathsJSON)
+		p.UseWorktrees = useWorktrees == 1
 		if aiProv.Valid {
 			p.AIProvider = aiProv.String
 		}
@@ -4158,14 +4405,15 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	var p models.Project
 	var isDefault int
 	var stageMappingJSON, skillOverridesJSON, repoPathsJSON string
+	var useWorktrees int
 	var aiProv, aiCmd, specFw, jiraProj, projType sql.NullString
 	err := d.conn.QueryRow(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
 		       (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count
 		FROM projects p
 		WHERE p.id = ? OR p.slug = ?
 	`, id, id).Scan(
-		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -4183,6 +4431,7 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 		_ = json.Unmarshal([]byte(skillOverridesJSON), &p.SkillOverrides)
 	}
 	p.RepoPaths = parseRepoPaths(repoPathsJSON)
+	p.UseWorktrees = useWorktrees == 1
 	if aiProv.Valid {
 		p.AIProvider = aiProv.String
 	}
@@ -4267,10 +4516,17 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 
 	repoPathsBytes, _ := json.Marshal(normalizeRepoPaths(req.RepoPaths))
 
+	// Worktrees stay on unless the project explicitly opts out, which keeps the
+	// behaviour projects had before the option existed.
+	useWorktreesInt := 1
+	if req.UseWorktrees != nil && !*req.UseWorktrees {
+		useWorktreesInt = 0
+	}
+
 	_, err := d.conn.Exec(`
-		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, now, now)
+		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, use_worktrees, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), useWorktreesInt, gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -4338,6 +4594,9 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if req.RepoPaths != nil {
 		p.RepoPaths = normalizeRepoPaths(*req.RepoPaths)
 	}
+	if req.UseWorktrees != nil {
+		p.UseWorktrees = *req.UseWorktrees
+	}
 	if req.AIProvider != nil {
 		p.AIProvider = *req.AIProvider
 	}
@@ -4372,12 +4631,16 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	}
 	skillOverridesBytes, _ := json.Marshal(p.SkillOverrides)
 	repoPathsBytes, _ := json.Marshal(normalizeRepoPaths(p.RepoPaths))
+	useWorktreesInt := 0
+	if p.UseWorktrees {
+		useWorktreesInt = 1
+	}
 
 	_, err = d.conn.Exec(`
 		UPDATE projects
-		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, updated_at = ?
+		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, use_worktrees = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, updated_at = ?
 		WHERE id = ?
-	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.UpdatedAt, p.ID)
+	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), useWorktreesInt, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.UpdatedAt, p.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -5154,5 +5417,3 @@ func (d *DB) DetectTrackerStatuses(projectID, tracker, linearTeam, githubRepo st
 
 	return results, nil
 }
-
-

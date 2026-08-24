@@ -34,6 +34,10 @@ export const Header: React.FC = () => {
     setPriorityFilter,
     labelFilter,
     setLabelFilter,
+    sprintFilter,
+    setSprintFilter,
+    teamFilter,
+    setTeamFilter,
     assigneeFilter,
     setAssigneeFilter,
     setIsQuickAddOpen,
@@ -47,7 +51,7 @@ export const Header: React.FC = () => {
 
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  const hasActiveFilters = Boolean(statusFilter || priorityFilter || labelFilter || assigneeFilter || searchQuery)
+  const hasActiveFilters = Boolean(statusFilter || priorityFilter || labelFilter || sprintFilter || teamFilter || assigneeFilter || searchQuery)
 
   return (
     <header
@@ -123,6 +127,22 @@ export const Header: React.FC = () => {
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shrink-0">
               #{labelFilter}
               <button onClick={() => setLabelFilter(null)} className="hover:opacity-75 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {sprintFilter && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shrink-0">
+              {sprintFilter}
+              <button onClick={() => setSprintFilter(null)} className="hover:opacity-75 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {teamFilter && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-violet-500/20 text-violet-300 border border-violet-500/40 shrink-0">
+              {teamFilter}
+              <button onClick={() => setTeamFilter(null)} className="hover:opacity-75 cursor-pointer">
                 <X size={11} />
               </button>
             </span>

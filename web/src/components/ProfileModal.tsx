@@ -63,6 +63,12 @@ export const ProfileModal: React.FC = () => {
   const [aiCommandTemplate, setAiCommandTemplate] = useState(settings.aiCommandTemplate || 'agy -p "{prompt}"')
   const [specFramework, setSpecFramework] = useState<SpecFramework>(settings.specFramework || 'speckit')
 
+  // Jira REST credentials. acli cannot return the Sprint and Team fields, so
+  // importing them needs an API token of its own.
+  const [jiraUrl, setJiraUrl] = useState(settings.jiraUrl || '')
+  const [jiraEmail, setJiraEmail] = useState(settings.jiraEmail || '')
+  const [jiraApiToken, setJiraApiToken] = useState('')
+
   // Skill Prompts
   const [promptClarify, setPromptClarify] = useState(settings.promptClarify || '')
   const [promptSpecify, setPromptSpecify] = useState(settings.promptSpecify || '')
@@ -82,6 +88,9 @@ export const ProfileModal: React.FC = () => {
       setAiProvider(settings.aiProvider || 'agy')
       setAiCommandTemplate(settings.aiCommandTemplate || 'agy -p "{prompt}"')
       setSpecFramework(settings.specFramework || 'speckit')
+      setJiraUrl(settings.jiraUrl || '')
+      setJiraEmail(settings.jiraEmail || '')
+      setJiraApiToken('')
       setPromptClarify(settings.promptClarify || '')
       setPromptSpecify(settings.promptSpecify || '')
       setPromptImplement(settings.promptImplement || '')
@@ -129,6 +138,10 @@ export const ProfileModal: React.FC = () => {
       aiProvider,
       aiCommandTemplate: aiCommandTemplate.trim() || `${aiProvider} -p "{prompt}"`,
       specFramework,
+      jiraUrl: jiraUrl.trim(),
+      jiraEmail: jiraEmail.trim(),
+      // Vide = conserver le jeton stocké, la sentinelle l'efface.
+      jiraApiToken: jiraApiToken.trim(),
       promptClarify: promptClarify.trim(),
       promptSpecify: promptSpecify.trim(),
       promptImplement: promptImplement.trim(),
@@ -437,6 +450,64 @@ export const ProfileModal: React.FC = () => {
                     className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
                   />
                 </div>
+              </div>
+
+              {/* Jira REST access: needed for the Sprint and Team fields, which
+                  acli refuses to return. */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-[var(--text-secondary)] flex items-center gap-1.5">
+                  <span>Accès API Jira (import des champs Sprint et Team)</span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={jiraUrl}
+                    onChange={e => setJiraUrl(e.target.value)}
+                    placeholder="equativ.atlassian.net"
+                    className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
+                  />
+                  <input
+                    type="email"
+                    value={jiraEmail}
+                    onChange={e => setJiraEmail(e.target.value)}
+                    placeholder="prenom.nom@societe.com"
+                    className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={jiraApiToken}
+                    onChange={e => setJiraApiToken(e.target.value)}
+                    placeholder={
+                      settings.jiraApiTokenFromEnv
+                        ? 'Défini par TASKACAO_JIRA_API_TOKEN'
+                        : settings.jiraApiTokenSet
+                          ? '•••••••• (jeton enregistré, laisser vide pour le conserver)'
+                          : "Jeton d'API Jira"
+                    }
+                    disabled={settings.jiraApiTokenFromEnv}
+                    className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all disabled:opacity-60"
+                  />
+                  {settings.jiraApiTokenSet && !settings.jiraApiTokenFromEnv && (
+                    <button
+                      type="button"
+                      onClick={() => setJiraApiToken('__clear__')}
+                      className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-colors cursor-pointer shrink-0"
+                      title="Effacer le jeton enregistré à l'enregistrement"
+                    >
+                      Effacer
+                    </button>
+                  )}
+                </div>
+                {jiraApiToken === '__clear__' && (
+                  <span className="text-[10px] text-rose-300 block">
+                    Le jeton sera effacé à l'enregistrement. Sprint et Team retomberont sur le repli acli, qui ne couvre que le sprint.
+                  </span>
+                )}
+                <span className="text-[10px] text-[var(--text-muted)] block">
+                  Sprint et Team sont des champs personnalisés que le CLI acli refuse de renvoyer. Avec un jeton, la synchro Jira lit tout par l'API en une passe, parent inclus. Sans jeton, elle repasse sur acli : le sprint est reconstruit depuis les boards scrum et Team reste vide. Jeton à créer sur id.atlassian.com, section jetons d'API, ou à fournir par la variable d'environnement TASKACAO_JIRA_API_TOKEN pour qu'il ne soit pas stocké en base.
+                </span>
               </div>
 
               {/* Demo Reset */}

@@ -71,82 +71,89 @@ type ActivityStats struct {
 }
 
 type Project struct {
-	ID                 string            `json:"id"`
-	Name               string            `json:"name"`
-	Slug               string            `json:"slug"`
-	Description        string            `json:"description"`
-	Icon               string            `json:"icon"`         // "Folder", "Terminal", "Flame", "Zap", "Layers", "Code2", "Box", "Cpu"
-	Color              string            `json:"color"`        // "indigo", "emerald", "purple", "amber", "blue", "rose", "cyan", "orange", "neon-cyan", etc.
-	RepoPath           string            `json:"repoPath"`     // CWD for AI skills
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+	Icon        string `json:"icon"`     // "Folder", "Terminal", "Flame", "Zap", "Layers", "Code2", "Box", "Cpu"
+	Color       string `json:"color"`    // "indigo", "emerald", "purple", "amber", "blue", "rose", "cyan", "orange", "neon-cyan", etc.
+	RepoPath    string `json:"repoPath"` // CWD for AI skills
 	// RepoPaths is the list of working directories known for this project.
 	// It is fed automatically: whenever a ticket pins a new CWD, that path is
 	// registered here so the next ticket can pick it instead of retyping it.
-	RepoPaths          []string          `json:"repoPaths,omitempty"`
-	GitRemoteUrl       string            `json:"gitRemoteUrl"` // e.g. "git@github.com:owner/repo.git"
-	LinearTeam         string            `json:"linearTeam"`   // Key / prefix (optionnel)
-	GithubRepo         string            `json:"githubRepo"`   // e.g. "owner/repo"
-	JiraProject        string            `json:"jiraProject"`  // Jira project key, e.g. "PE"
-	IssueTracker       string            `json:"issueTracker"` // "linear", "github", "jira", "local"
-	TrackerUrl         string            `json:"trackerUrl"`   // e.g. "https://linear.app/my-team/project/xxx" or "https://acme.atlassian.net"
+	RepoPaths []string `json:"repoPaths,omitempty"`
+	// UseWorktrees decides whether each task gets its own isolated Git worktree
+	// under .tasks/worktrees, or whether the agent simply runs in the clone. A
+	// solo project rarely needs that isolation and pays the setup cost for
+	// nothing. Default true, which is the historical behaviour.
+	UseWorktrees bool   `json:"useWorktrees"`
+	GitRemoteUrl string `json:"gitRemoteUrl"` // e.g. "git@github.com:owner/repo.git"
+	LinearTeam   string `json:"linearTeam"`   // Key / prefix (optionnel)
+	GithubRepo   string `json:"githubRepo"`   // e.g. "owner/repo"
+	JiraProject  string `json:"jiraProject"`  // Jira project key, e.g. "PE"
+	IssueTracker string `json:"issueTracker"` // "linear", "github", "jira", "local"
+	TrackerUrl   string `json:"trackerUrl"`   // e.g. "https://linear.app/my-team/project/xxx" or "https://acme.atlassian.net"
 	// ProjectType is "standard" (a delivery project) or "personal" (a personal
 	// board). The daily digest is only meaningful on a personal project, so it
 	// is served for that type only.
-	ProjectType        string            `json:"projectType"`
-	IsDefault          bool              `json:"isDefault"`
-	StageMapping       map[string]string `json:"stageMapping,omitempty"`   // mapping AI workflow labels to tracker statuses
-	SkillOverrides     map[string]string `json:"skillOverrides,omitempty"` // skillId -> custom skill name override
-	AIProvider         string            `json:"aiProvider,omitempty"`        // "agy", "claude", "vibe", "gemini", "cursor", "custom"
-	AICommandTemplate  string            `json:"aiCommandTemplate,omitempty"` // e.g. 'agy -p "{prompt}"'
-	SpecFramework      string            `json:"specFramework,omitempty"`      // "speckit", "openspec"
-	TaskCount          int               `json:"taskCount"`
-	CreatedAt          time.Time         `json:"createdAt"`
-	UpdatedAt          time.Time         `json:"updatedAt"`
+	ProjectType       string            `json:"projectType"`
+	IsDefault         bool              `json:"isDefault"`
+	StageMapping      map[string]string `json:"stageMapping,omitempty"`      // mapping AI workflow labels to tracker statuses
+	SkillOverrides    map[string]string `json:"skillOverrides,omitempty"`    // skillId -> custom skill name override
+	AIProvider        string            `json:"aiProvider,omitempty"`        // "agy", "claude", "vibe", "gemini", "cursor", "custom"
+	AICommandTemplate string            `json:"aiCommandTemplate,omitempty"` // e.g. 'agy -p "{prompt}"'
+	SpecFramework     string            `json:"specFramework,omitempty"`     // "speckit", "openspec"
+	TaskCount         int               `json:"taskCount"`
+	CreatedAt         time.Time         `json:"createdAt"`
+	UpdatedAt         time.Time         `json:"updatedAt"`
 }
 
 type CreateProjectRequest struct {
-	Name               string            `json:"name"`
-	Slug               string            `json:"slug,omitempty"`
-	Description        string            `json:"description,omitempty"`
-	Icon               string            `json:"icon,omitempty"`
-	Color              string            `json:"color,omitempty"`
-	RepoPath           string            `json:"repoPath,omitempty"`
-	RepoPaths          []string          `json:"repoPaths,omitempty"`
-	GitRemoteUrl       string            `json:"gitRemoteUrl,omitempty"`
-	LinearTeam         string            `json:"linearTeam,omitempty"`
-	GithubRepo         string            `json:"githubRepo,omitempty"`
-	JiraProject        string            `json:"jiraProject,omitempty"`
-	IssueTracker       string            `json:"issueTracker,omitempty"`
-	TrackerUrl         string            `json:"trackerUrl,omitempty"`
-	ProjectType        string            `json:"projectType,omitempty"`
-	IsDefault          bool              `json:"isDefault,omitempty"`
-	StageMapping       map[string]string `json:"stageMapping,omitempty"`
-	SkillOverrides     map[string]string `json:"skillOverrides,omitempty"`
-	AIProvider         string            `json:"aiProvider,omitempty"`
-	AICommandTemplate  string            `json:"aiCommandTemplate,omitempty"`
-	SpecFramework      string            `json:"specFramework,omitempty"`
+	Name              string            `json:"name"`
+	Slug              string            `json:"slug,omitempty"`
+	Description       string            `json:"description,omitempty"`
+	Icon              string            `json:"icon,omitempty"`
+	Color             string            `json:"color,omitempty"`
+	RepoPath          string            `json:"repoPath,omitempty"`
+	RepoPaths         []string          `json:"repoPaths,omitempty"`
+	UseWorktrees      *bool             `json:"useWorktrees,omitempty"`
+	GitRemoteUrl      string            `json:"gitRemoteUrl,omitempty"`
+	LinearTeam        string            `json:"linearTeam,omitempty"`
+	GithubRepo        string            `json:"githubRepo,omitempty"`
+	JiraProject       string            `json:"jiraProject,omitempty"`
+	IssueTracker      string            `json:"issueTracker,omitempty"`
+	TrackerUrl        string            `json:"trackerUrl,omitempty"`
+	ProjectType       string            `json:"projectType,omitempty"`
+	IsDefault         bool              `json:"isDefault,omitempty"`
+	StageMapping      map[string]string `json:"stageMapping,omitempty"`
+	SkillOverrides    map[string]string `json:"skillOverrides,omitempty"`
+	AIProvider        string            `json:"aiProvider,omitempty"`
+	AICommandTemplate string            `json:"aiCommandTemplate,omitempty"`
+	SpecFramework     string            `json:"specFramework,omitempty"`
 }
 
 type UpdateProjectRequest struct {
-	Name               *string            `json:"name,omitempty"`
-	Slug               *string            `json:"slug,omitempty"`
-	Description        *string            `json:"description,omitempty"`
-	Icon               *string            `json:"icon,omitempty"`
-	Color              *string            `json:"color,omitempty"`
-	RepoPath           *string            `json:"repoPath,omitempty"`
-	RepoPaths          *[]string          `json:"repoPaths,omitempty"`
-	GitRemoteUrl       *string            `json:"gitRemoteUrl,omitempty"`
-	LinearTeam         *string            `json:"linearTeam,omitempty"`
-	GithubRepo         *string            `json:"githubRepo,omitempty"`
-	JiraProject        *string            `json:"jiraProject,omitempty"`
-	IssueTracker       *string            `json:"issueTracker,omitempty"`
-	TrackerUrl         *string            `json:"trackerUrl,omitempty"`
-	ProjectType        *string            `json:"projectType,omitempty"`
-	IsDefault          *bool              `json:"isDefault,omitempty"`
-	StageMapping       *map[string]string `json:"stageMapping,omitempty"`
-	SkillOverrides     *map[string]string `json:"skillOverrides,omitempty"`
-	AIProvider         *string            `json:"aiProvider,omitempty"`
-	AICommandTemplate  *string            `json:"aiCommandTemplate,omitempty"`
-	SpecFramework      *string            `json:"specFramework,omitempty"`
+	Name              *string            `json:"name,omitempty"`
+	Slug              *string            `json:"slug,omitempty"`
+	Description       *string            `json:"description,omitempty"`
+	Icon              *string            `json:"icon,omitempty"`
+	Color             *string            `json:"color,omitempty"`
+	RepoPath          *string            `json:"repoPath,omitempty"`
+	RepoPaths         *[]string          `json:"repoPaths,omitempty"`
+	UseWorktrees      *bool              `json:"useWorktrees,omitempty"`
+	GitRemoteUrl      *string            `json:"gitRemoteUrl,omitempty"`
+	LinearTeam        *string            `json:"linearTeam,omitempty"`
+	GithubRepo        *string            `json:"githubRepo,omitempty"`
+	JiraProject       *string            `json:"jiraProject,omitempty"`
+	IssueTracker      *string            `json:"issueTracker,omitempty"`
+	TrackerUrl        *string            `json:"trackerUrl,omitempty"`
+	ProjectType       *string            `json:"projectType,omitempty"`
+	IsDefault         *bool              `json:"isDefault,omitempty"`
+	StageMapping      *map[string]string `json:"stageMapping,omitempty"`
+	SkillOverrides    *map[string]string `json:"skillOverrides,omitempty"`
+	AIProvider        *string            `json:"aiProvider,omitempty"`
+	AICommandTemplate *string            `json:"aiCommandTemplate,omitempty"`
+	SpecFramework     *string            `json:"specFramework,omitempty"`
 }
 
 type InstalledSkillInfo struct {
@@ -182,7 +189,7 @@ type ProjectGitInitResult struct {
 type DetectedStatus struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
-	Type   string `json:"type,omitempty"`   // "backlog", "unstarted", "started", "completed", "canceled", "triage", "custom"
+	Type   string `json:"type,omitempty"` // "backlog", "unstarted", "started", "completed", "canceled", "triage", "custom"
 	Color  string `json:"color,omitempty"`
 	Source string `json:"source,omitempty"` // "linear", "github", "db", "preset"
 }
@@ -258,27 +265,31 @@ type WorktreeInfo struct {
 }
 
 type Task struct {
-	ID             string         `json:"id"`
-	ProjectID      string         `json:"projectId"`
-	Key            string         `json:"key"`
-	Title          string         `json:"title"`
-	Description    string         `json:"description"`
-	Status         Status         `json:"status"`
-	Priority       Priority       `json:"priority"`
-	Labels         []string       `json:"labels"`
-	Assignee       string         `json:"assignee"`
-	AssigneeAvatar string         `json:"assigneeAvatar"`
-	Position       int            `json:"position"`
-	DueDate        *string        `json:"dueDate"`
-	BranchName     *string        `json:"branchName,omitempty"`
-	PrURL          *string        `json:"prUrl,omitempty"`
-	WorktreePath   *string        `json:"worktreePath,omitempty"`
+	ID             string   `json:"id"`
+	ProjectID      string   `json:"projectId"`
+	Key            string   `json:"key"`
+	Title          string   `json:"title"`
+	Description    string   `json:"description"`
+	Status         Status   `json:"status"`
+	Priority       Priority `json:"priority"`
+	Labels         []string `json:"labels"`
+	Assignee       string   `json:"assignee"`
+	AssigneeAvatar string   `json:"assigneeAvatar"`
+	Position       int      `json:"position"`
+	DueDate        *string  `json:"dueDate"`
+	BranchName     *string  `json:"branchName,omitempty"`
+	PrURL          *string  `json:"prUrl,omitempty"`
+	WorktreePath   *string  `json:"worktreePath,omitempty"`
 	// RepoPath pins the repository this single ticket works in. It overrides the
 	// project's repoPath, for trackers where one epic spans several codebases.
 	// Empty means "inherit the project, then the global setting".
-	RepoPath       *string        `json:"repoPath,omitempty"`
-	Source         string         `json:"source"` // "linear", "github", "jira", "local"
-	ExternalURL    *string        `json:"externalUrl,omitempty"`
+	RepoPath *string `json:"repoPath,omitempty"`
+	// Sprint and Team come from the tracker: the Jira Sprint and Team fields,
+	// imported by the REST enrichment pass of the sync.
+	Sprint      string  `json:"sprint,omitempty"`
+	Team        string  `json:"team,omitempty"`
+	Source      string  `json:"source"` // "linear", "github", "jira", "local"
+	ExternalURL *string `json:"externalUrl,omitempty"`
 	// IssueType is the tracker's own work item type. Only "Task" and "Story"
 	// are imported; epics and other types stay out of the board.
 	IssueType string `json:"issueType,omitempty"`
@@ -289,37 +300,47 @@ type Task struct {
 	ParentTitle string         `json:"parentTitle,omitempty"`
 	ParentType  string         `json:"parentType,omitempty"` // "Epic", "Story", …
 	Activities  []TaskActivity `json:"activities,omitempty"`
-	CreatedAt      time.Time      `json:"createdAt"`
-	UpdatedAt      time.Time      `json:"updatedAt"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
 }
 
 type Settings struct {
-	ID                 int       `json:"id"`
-	Theme              string    `json:"theme"`       // "dark", "light", "system"
-	AccentColor        string    `json:"accentColor"` // "indigo", "violet", "emerald", "amber", "rose", "cyan", "blue", "orange"
-	Language           string    `json:"language"`    // "fr", "en"
-	Density            string    `json:"density"`     // "compact", "standard", "comfortable"
-	DefaultView        string    `json:"defaultView"` // "board", "list"
-	DetailMode         string    `json:"detailMode"`  // "panel", "modal"
-	UserName           string    `json:"userName"`
-	UserEmail          string    `json:"userEmail"`
-	UserAvatar         string    `json:"userAvatar"`
-	AIProvider         string    `json:"aiProvider"`        // "agy", "vibe", "claude", "custom"
-	AICommandTemplate  string    `json:"aiCommandTemplate"` // e.g. 'agy -p "{prompt}"'
-	RepoPath           string    `json:"repoPath"`          // e.g. '/path/to/project'
-	IssueTracker       string    `json:"issueTracker"`      // "linear", "github", "jira", "local"
-	LinearTeam         string    `json:"linearTeam"`        // e.g. "ENG"
-	GithubRepo         string    `json:"githubRepo"`        // e.g. "owner/repo"
-	JiraProject        string    `json:"jiraProject"`       // e.g. "PE"
-	JiraUrl            string    `json:"jiraUrl"`           // e.g. "https://acme.atlassian.net"
-	PromptClarify      string    `json:"promptClarify"`
-	PromptSpecify      string    `json:"promptSpecify"`
-	PromptImplement    string    `json:"promptImplement"`
-	PromptCreatePR     string    `json:"promptCreatePr"`
-	PromptPick         string    `json:"promptPick"`
-	EditorCommand      string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
-	SpecFramework      string    `json:"specFramework"` // "speckit", "openspec"
-	UpdatedAt          time.Time `json:"updatedAt"`
+	ID                int    `json:"id"`
+	Theme             string `json:"theme"`       // "dark", "light", "system"
+	AccentColor       string `json:"accentColor"` // "indigo", "violet", "emerald", "amber", "rose", "cyan", "blue", "orange"
+	Language          string `json:"language"`    // "fr", "en"
+	Density           string `json:"density"`     // "compact", "standard", "comfortable"
+	DefaultView       string `json:"defaultView"` // "board", "list"
+	DetailMode        string `json:"detailMode"`  // "panel", "modal"
+	UserName          string `json:"userName"`
+	UserEmail         string `json:"userEmail"`
+	UserAvatar        string `json:"userAvatar"`
+	AIProvider        string `json:"aiProvider"`        // "agy", "vibe", "claude", "custom"
+	AICommandTemplate string `json:"aiCommandTemplate"` // e.g. 'agy -p "{prompt}"'
+	RepoPath          string `json:"repoPath"`          // e.g. '/path/to/project'
+	IssueTracker      string `json:"issueTracker"`      // "linear", "github", "jira", "local"
+	LinearTeam        string `json:"linearTeam"`        // e.g. "ENG"
+	GithubRepo        string `json:"githubRepo"`        // e.g. "owner/repo"
+	JiraProject       string `json:"jiraProject"`       // e.g. "PE"
+	JiraUrl           string `json:"jiraUrl"`
+	// JiraEmail / JiraAPIToken authenticate the Jira REST calls that fetch the
+	// fields acli cannot return (Sprint and Team are custom fields, and acli's
+	// --fields only accepts a fixed allow-list). Basic auth over HTTPS.
+	JiraEmail string `json:"jiraEmail"`
+	// JiraAPIToken never leaves the server: the API responses carry the two
+	// flags below instead, so the token cannot be read back by anything that
+	// can reach the settings endpoint.
+	JiraAPIToken        string    `json:"jiraApiToken,omitempty"`
+	JiraAPITokenSet     bool      `json:"jiraApiTokenSet"`
+	JiraAPITokenFromEnv bool      `json:"jiraApiTokenFromEnv"` // e.g. "https://acme.atlassian.net"
+	PromptClarify       string    `json:"promptClarify"`
+	PromptSpecify       string    `json:"promptSpecify"`
+	PromptImplement     string    `json:"promptImplement"`
+	PromptCreatePR      string    `json:"promptCreatePr"`
+	PromptPick          string    `json:"promptPick"`
+	EditorCommand       string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
+	SpecFramework       string    `json:"specFramework"` // "speckit", "openspec"
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
 // SpecFrameworkInstallRequest asks Taskacao to bootstrap a Spec-Driven Design
@@ -344,16 +365,16 @@ type SpecFrameworkStep struct {
 
 // SpecFrameworkInstallResult is the outcome of a Spec Kit / OpenSpec bootstrap.
 type SpecFrameworkInstallResult struct {
-	Framework   string              `json:"framework"`
-	FrameworkLabel string           `json:"frameworkLabel"`
-	RepoPath    string              `json:"repoPath"`
-	Installed   bool                `json:"installed"`
-	AlreadyInit bool                `json:"alreadyInit"`
-	Version     string              `json:"version,omitempty"`
-	MarkerPaths []string            `json:"markerPaths,omitempty"`
-	Steps       []SpecFrameworkStep `json:"steps"`
-	Message     string              `json:"message"`
-	Error       string              `json:"error,omitempty"`
+	Framework      string              `json:"framework"`
+	FrameworkLabel string              `json:"frameworkLabel"`
+	RepoPath       string              `json:"repoPath"`
+	Installed      bool                `json:"installed"`
+	AlreadyInit    bool                `json:"alreadyInit"`
+	Version        string              `json:"version,omitempty"`
+	MarkerPaths    []string            `json:"markerPaths,omitempty"`
+	Steps          []SpecFrameworkStep `json:"steps"`
+	Message        string              `json:"message"`
+	Error          string              `json:"error,omitempty"`
 }
 
 // SpecFrameworkStatus reports whether a SDD toolchain is present on the host
@@ -440,7 +461,6 @@ type CliStatus struct {
 type ConvertTaskRequest struct {
 	Target string `json:"target"` // "linear" or "github"
 }
-
 
 // -------------------------------------------------------------
 // DAILY DIGEST

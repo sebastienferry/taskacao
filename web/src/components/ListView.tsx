@@ -23,13 +23,12 @@ import {
   Layers,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { TaskFilters } from './TaskFilters'
 import type { Task, Status, Priority } from '../types'
 
 export const ListView: React.FC = () => {
   const {
     tasks,
-    priorityFilter,
-    setPriorityFilter,
     setSelectedTask,
     setChatTask,
     setDiffTask,
@@ -567,25 +566,8 @@ export const ListView: React.FC = () => {
             </label>
           </div>
 
-          {/* Priority filter + priority sort. The grouped tables have no
-              clickable headers, so the sort has to live in the toolbar. */}
           <div className="flex items-center gap-2 shrink-0">
-            <div className="flex items-center gap-1.5">
-              <Flame size={12} className={priorityFilter ? 'text-rose-400' : 'text-[var(--text-muted)]'} />
-              <select
-                value={priorityFilter || ''}
-                onChange={e => setPriorityFilter((e.target.value || null) as Priority | null)}
-                title="Filtrer par priorité"
-                className="text-xs font-medium bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border-color)] rounded-md px-2 py-1 focus:outline-none focus:border-[var(--accent-color)] cursor-pointer"
-              >
-                <option value="">Toutes priorités</option>
-                <option value="urgent">{t.priority.urgent}</option>
-                <option value="high">{t.priority.high}</option>
-                <option value="medium">{t.priority.medium}</option>
-                <option value="low">{t.priority.low}</option>
-              </select>
-            </div>
-
+            <TaskFilters />
             <button
               type="button"
               onClick={() => handleSort('priority')}
