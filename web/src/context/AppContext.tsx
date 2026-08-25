@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest } from '../types'
+import type { Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 import { resolveAccentAttribute } from '../lib/accents'
 
@@ -107,6 +107,17 @@ interface AppContextType {
   removeToast: (id: string) => void
   createTask: (task: { title: string; description?: string; status?: Status; priority?: Priority; labels?: string[]; assignee?: string; dueDate?: string | null; source?: TaskSource; externalUrl?: string; projectId?: string }) => Promise<Task | null>
   updateTask: (id: string, updates: Partial<Task>) => Promise<Task | null>
+  moveTaskToTrackerStatus: (id: string, status: string) => Promise<Task | null>
+  getTaskComments: (id: string) => Promise<TaskComment[]>
+  listTerminalSessions: () => Promise<TerminalSession[]>
+  resetTerminalSession: (sessionId: string) => Promise<void>
+  postTaskComment: (id: string, body: string) => Promise<TaskComment[] | null>
+  listProjectBoards: (projectId: string) => Promise<TrackerBoard[]>
+  importProjectBoardColumns: (projectId: string, boardId: string) => Promise<Project | null>
+  fetchProjectTrackerStatuses: (projectId: string) => Promise<string[]>
+  fetchProjectEpics: (projectId: string) => Promise<EpicMeta[]>
+  saveEpicMeta: (projectId: string, key: string, patch: { horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[] }) => Promise<EpicMeta | null>
+  createStoryFromEpicTodo: (projectId: string, epicKey: string, todoId: string) => Promise<{ epic: EpicMeta | null; storyKey: string } | null>
   convertTask: (id: string, target: 'linear' | 'github') => Promise<Task | null>
   moveTask: (id: string, newStatus: Status, newPosition: number) => Promise<void>
   moveTaskWorkflowStage: (taskId: string, targetStage: WorkflowStage) => Promise<Task | null>
@@ -245,7 +256,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isDigestEnriching, setIsDigestEnriching] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
-  const [chatTask, setChatTask] = useState<Task | null>(null)
+  // chatTask désigne la tâche dont le PTY est affiché. Il vit dans le panneau
+  // latéral ancré, pas dans une modale : on garde le board visible à côté du
+  // terminal, et une session par tâche reste accessible d'un clic.
+  const [chatTask, setChatTaskState] = useState<Task | null>(null)
+
+  const setChatTask = useCallback((task: Task | null) => {
+    setChatTaskState(task)
+    if (task) {
+      setIsTerminalPanelOpenState(true)
+      try {
+        localStorage.setItem('taskacao_terminal_panel_open', 'true')
+      } catch {}
+    }
+  }, [])
+
   const [diffTask, setDiffTask] = useState<Task | null>(null)
   const [hideDone, setHideDoneState] = useState<boolean>(() => {
     try {
@@ -1121,6 +1146,215 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
+  // Déplacement par colonne de board : la transition dans le tracker est
+  // synchrone, la carte a déjà bougé côté interface et doit revenir en place si
+  // le tracker refuse.
+  const moveTaskToTrackerStatus = async (id: string, status: string): Promise<Task | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/tracker-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || 'Transition refusée par le tracker')
+      }
+      const updated: Task = await res.json()
+      setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+      addToast({
+        type: 'success',
+        title: 'Ticket déplacé',
+        description: `${updated.key} est passé en « ${status} »`,
+      })
+      return updated
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Déplacement impossible',
+        description: err.message,
+      })
+      return null
+    }
+  }
+
+  // Les commentaires vivent dans le tracker quand il y en a un : on les relit à
+  // la demande plutôt que de les recopier en base, ce qui divergerait.
+  // Les sessions PTY survivent à leurs spectateurs : la liste dit ce qui tourne
+  // encore et permet d'y revenir.
+  const listTerminalSessions = async (): Promise<TerminalSession[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/terminal/sessions`)
+      if (!res.ok) return []
+      return (await res.json()) || []
+    } catch {
+      return []
+    }
+  }
+
+  const resetTerminalSession = async (sessionId: string): Promise<void> => {
+    try {
+      await fetch(`${API_BASE}/terminal/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      })
+      addToast({ type: 'info', title: 'Session terminée', description: sessionId })
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Session non terminée', description: err.message })
+    }
+  }
+
+  const getTaskComments = async (id: string): Promise<TaskComment[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/comments`)
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || 'Commentaires indisponibles')
+      }
+      return (await res.json()) || []
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Commentaires', description: err.message })
+      return []
+    }
+  }
+
+  const postTaskComment = async (id: string, body: string): Promise<TaskComment[] | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || 'Publication refusée')
+      }
+      const comments: TaskComment[] = await res.json()
+      addToast({ type: 'success', title: 'Commentaire publié' })
+      return comments
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Commentaire non publié', description: err.message })
+      return null
+    }
+  }
+
+  const listProjectBoards = async (projectId: string): Promise<TrackerBoard[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/boards`)
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || 'Boards indisponibles')
+      }
+      return (await res.json()) || []
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Boards du tracker', description: err.message })
+      return []
+    }
+  }
+
+  const importProjectBoardColumns = async (projectId: string, boardId: string): Promise<Project | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/board-columns`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ boardId }),
+      })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || 'Import des colonnes impossible')
+      }
+      const proj: Project = await res.json()
+      setProjects(prev => prev.map(p => (p.id === proj.id ? proj : p)))
+      addToast({
+        type: 'success',
+        title: 'Colonnes importées',
+        description: `${proj.trackerColumns?.length || 0} colonnes reprises du board`,
+      })
+      return proj
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Import des colonnes', description: err.message })
+      return null
+    }
+  }
+
+  // Méta-épics : l'horizon est une décision produit, la description et la TODO
+  // du travail de cadrage. Rien de tout ça n'existe côté tracker pour un épic,
+  // donc Taskacao le porte.
+  const fetchProjectEpics = async (projectId: string): Promise<EpicMeta[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics`)
+      if (!res.ok) return []
+      return (await res.json()) || []
+    } catch {
+      return []
+    }
+  }
+
+  const saveEpicMeta = async (
+    projectId: string,
+    key: string,
+    patch: { horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[] }
+  ): Promise<EpicMeta | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, ...patch }),
+      })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || 'Enregistrement refusé')
+      }
+      return await res.json()
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Épic non enregistré', description: err.message })
+      return null
+    }
+  }
+
+  // Une ligne de TODO devient une story dans le tracker, sous son épic. La
+  // tâche est insérée localement par le serveur, donc un rafraîchissement suffit
+  // à la voir apparaître sur le board.
+  const createStoryFromEpicTodo = async (
+    projectId: string,
+    epicKey: string,
+    todoId: string
+  ): Promise<{ epic: EpicMeta | null; storyKey: string } | null> => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/${encodeURIComponent(epicKey)}/story`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ todoId }),
+        }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Création refusée')
+      addToast({
+        type: 'success',
+        title: 'Story créée',
+        description: `${data.storyKey} rattachée à ${epicKey}`,
+      })
+      fetchTasks()
+      return { epic: data.epic || null, storyKey: data.storyKey || '' }
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Story non créée', description: err.message })
+      return null
+    }
+  }
+
+  const fetchProjectTrackerStatuses = async (projectId: string): Promise<string[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/tracker-statuses`)
+      if (!res.ok) return []
+      return (await res.json()) || []
+    } catch {
+      return []
+    }
+  }
+
   const convertTask = async (id: string, target: 'linear' | 'github'): Promise<Task | null> => {
     try {
       const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/convert`, {
@@ -1943,6 +2177,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         removeToast,
         createTask,
         updateTask,
+        moveTaskToTrackerStatus,
+        getTaskComments,
+        listTerminalSessions,
+        resetTerminalSession,
+        postTaskComment,
+        listProjectBoards,
+        importProjectBoardColumns,
+        fetchProjectTrackerStatuses,
+        fetchProjectEpics,
+        saveEpicMeta,
+        createStoryFromEpicTodo,
         convertTask,
         moveTask,
         deleteTask,

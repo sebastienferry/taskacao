@@ -47,6 +47,63 @@ export interface ActivityStats {
   canceled: number
 }
 
+export interface TrackerColumn {
+  name: string
+  statuses: string[]
+  /** Colonne retirée du board sans perdre son affectation de statuts. */
+  hidden?: boolean
+}
+
+export interface TerminalSession {
+  id: string
+  cwd: string
+  clients: number
+  createdAt: string
+  lastActiveAt: string
+  historyBytes: number
+}
+
+export interface TaskComment {
+  id: string
+  taskId?: string
+  author: string
+  body: string
+  createdAt?: string
+  source: string
+}
+
+export interface TrackerSprint {
+  name: string
+  /** « active », « future » ou « closed » : ce qui sépare NOW de NEXT. */
+  state: string
+}
+
+export type EpicHorizon = 'now' | 'next' | 'later'
+
+export interface EpicTodo {
+  id: string
+  text: string
+  done: boolean
+  /** Ticket créé depuis cette ligne de TODO, s'il existe. */
+  storyKey?: string
+}
+
+export interface EpicMeta {
+  projectId: string
+  key: string
+  /** Chaîne vide = épic non encore classé. */
+  horizon: EpicHorizon | ''
+  description: string
+  todos: EpicTodo[]
+  updatedAt: string
+}
+
+export interface TrackerBoard {
+  id: string
+  name: string
+  type: string
+}
+
 export interface Project {
   id: string
   name: string
@@ -65,6 +122,17 @@ export interface Project {
    * dans le clone si l'option est désactivée. Vrai par défaut.
    */
   useWorktrees?: boolean
+  /** Board du tracker retenu pour ce projet. */
+  boardId?: string
+  /**
+   * Colonnes du board, à la façon de Jira : un nom et les statuts du tracker
+   * que la colonne regroupe. Importables depuis le board, puis modifiables.
+   */
+  trackerColumns?: TrackerColumn[]
+  /** Sprints du board avec leur état, rafraîchis par la synchro. */
+  sprints?: TrackerSprint[]
+  /** Étape du workflow agentique -> colonnes concernées (une ou plusieurs). */
+  stageColumns?: Record<string, string[]>
   gitRemoteUrl?: string
   linearTeam: string
   githubRepo: string
@@ -114,6 +182,8 @@ export interface Task {
   prUrl?: string
   /** Répertoire de travail propre au ticket. Vide = hérite du projet, puis du réglage global. */
   repoPath?: string
+  /** Statut brut du tracker, tel qu'il l'écrit (« Dev Test », « To Merge »…). */
+  trackerStatus?: string
   /** Sprint / itération du tracker (champ Sprint côté Jira). */
   sprint?: string
   /** Équipe du tracker (champ Team côté Jira). */
@@ -215,7 +285,7 @@ export type Language = 'fr' | 'en'
 
 export type Density = 'compact' | 'standard' | 'comfortable'
 
-export type ViewMode = 'board' | 'list' | 'activities' | 'sync' | 'digest'
+export type ViewMode = 'board' | 'list' | 'roadmap' | 'activities' | 'sync' | 'digest'
 
 export type BoardGroupingMode = 'workflow' | 'status'
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -151,6 +152,55 @@ func (m *Manager) GetOrCreateSession(sessionID string, cwd string, envVars map[s
 	go m.readPtyLoop(sess)
 
 	return sess, nil
+}
+
+// SessionInfo describes a live PTY session for the UI: which shell is running,
+// where, since when, and whether a browser is currently attached. A session
+// survives its viewers, so knowing what is still alive matters.
+type SessionInfo struct {
+	ID           string    `json:"id"`
+	Cwd          string    `json:"cwd"`
+	Clients      int       `json:"clients"`
+	CreatedAt    time.Time `json:"createdAt"`
+	LastActiveAt time.Time `json:"lastActiveAt"`
+	HistoryBytes int       `json:"historyBytes"`
+}
+
+// ListSessions returns the live sessions, most recently active first.
+func (m *Manager) ListSessions() []SessionInfo {
+	m.mu.RLock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, sess := range m.sessions {
+		if sess != nil && !sess.closed {
+			sessions = append(sessions, sess)
+		}
+	}
+	m.mu.RUnlock()
+
+	out := make([]SessionInfo, 0, len(sessions))
+	for _, sess := range sessions {
+		sess.clientsMu.Lock()
+		clients := len(sess.clients)
+		sess.clientsMu.Unlock()
+
+		sess.historyMu.RLock()
+		historyBytes := len(sess.history)
+		sess.historyMu.RUnlock()
+
+		out = append(out, SessionInfo{
+			ID:           sess.ID,
+			Cwd:          sess.Cwd,
+			Clients:      clients,
+			CreatedAt:    sess.CreatedAt,
+			LastActiveAt: sess.LastActiveAt,
+			HistoryBytes: historyBytes,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].LastActiveAt.After(out[j].LastActiveAt)
+	})
+	return out
 }
 
 func (m *Manager) CloseSession(sessionID string) error {

@@ -86,13 +86,23 @@ type Project struct {
 	// under .tasks/worktrees, or whether the agent simply runs in the clone. A
 	// solo project rarely needs that isolation and pays the setup cost for
 	// nothing. Default true, which is the historical behaviour.
-	UseWorktrees bool   `json:"useWorktrees"`
-	GitRemoteUrl string `json:"gitRemoteUrl"` // e.g. "git@github.com:owner/repo.git"
-	LinearTeam   string `json:"linearTeam"`   // Key / prefix (optionnel)
-	GithubRepo   string `json:"githubRepo"`   // e.g. "owner/repo"
-	JiraProject  string `json:"jiraProject"`  // Jira project key, e.g. "PE"
-	IssueTracker string `json:"issueTracker"` // "linear", "github", "jira", "local"
-	TrackerUrl   string `json:"trackerUrl"`   // e.g. "https://linear.app/my-team/project/xxx" or "https://acme.atlassian.net"
+	UseWorktrees bool `json:"useWorktrees"`
+	// BoardID / TrackerColumns mirror the tracker's board: its columns in order,
+	// with the statuses each one groups. Imported from the tracker, not typed by
+	// hand.
+	BoardID        string          `json:"boardId,omitempty"`
+	TrackerColumns []TrackerColumn `json:"trackerColumns,omitempty"`
+	// Sprints mirrors the board's sprints with their state, refreshed by the sync.
+	Sprints []TrackerSprint `json:"sprints,omitempty"`
+	// StageColumns assigns each agentic workflow stage to one or several of those
+	// columns, which is what decides the skill proposed on a card.
+	StageColumns map[string][]string `json:"stageColumns,omitempty"`
+	GitRemoteUrl string              `json:"gitRemoteUrl"` // e.g. "git@github.com:owner/repo.git"
+	LinearTeam   string              `json:"linearTeam"`   // Key / prefix (optionnel)
+	GithubRepo   string              `json:"githubRepo"`   // e.g. "owner/repo"
+	JiraProject  string              `json:"jiraProject"`  // Jira project key, e.g. "PE"
+	IssueTracker string              `json:"issueTracker"` // "linear", "github", "jira", "local"
+	TrackerUrl   string              `json:"trackerUrl"`   // e.g. "https://linear.app/my-team/project/xxx" or "https://acme.atlassian.net"
 	// ProjectType is "standard" (a delivery project) or "personal" (a personal
 	// board). The daily digest is only meaningful on a personal project, so it
 	// is served for that type only.
@@ -108,6 +118,64 @@ type Project struct {
 	UpdatedAt         time.Time         `json:"updatedAt"`
 }
 
+// TrackerColumn is one column of the tracker's own board, with the tracker
+// statuses it groups. A column can group several statuses, as "TO
+// MERGE/DEPLOY" groups "To Merge" and "To Deploy" on the PE board.
+// TaskComment is a comment on a work item. On a tracker-backed task they are
+// read from and written to the tracker, which is the source of truth; a local
+// task keeps them in the local table instead.
+type TaskComment struct {
+	ID        string     `json:"id"`
+	TaskID    string     `json:"taskId,omitempty"`
+	Author    string     `json:"author"`
+	Body      string     `json:"body"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	Source    string     `json:"source"` // "jira", "github", "linear", "local"
+}
+
+type TrackerColumn struct {
+	Name     string   `json:"name"`
+	Statuses []string `json:"statuses"`
+	// Hidden keeps a column out of the board without losing its status
+	// assignment: a team rarely wants Done or Blocked in the way every day.
+	Hidden bool `json:"hidden,omitempty"`
+}
+
+// TrackerSprint is a sprint of the project's board with its state, which is what
+// separates the operational horizons: a ticket belongs to NOW when its sprint is
+// active, and to NEXT when its sprint is still in the future.
+type TrackerSprint struct {
+	Name  string `json:"name"`
+	State string `json:"state"` // "active", "future", "closed"
+}
+
+// EpicMeta is the epic-level data Taskacao owns. Epics are not imported as cards
+// — they are containers referenced by their children — so their horizon, their
+// shaping notes and their todo list have nowhere else to live.
+type EpicMeta struct {
+	ProjectID   string     `json:"projectId"`
+	Key         string     `json:"key"`
+	Horizon     string     `json:"horizon"` // "now", "next", "later", "" = non classé
+	Description string     `json:"description"`
+	Todos       []EpicTodo `json:"todos"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+
+// EpicTodo is one shaping item on an epic, before it becomes a story.
+type EpicTodo struct {
+	ID       string `json:"id"`
+	Text     string `json:"text"`
+	Done     bool   `json:"done"`
+	StoryKey string `json:"storyKey,omitempty"`
+}
+
+// TrackerBoard is a board of the tracker, for the project picker.
+type TrackerBoard struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
 type CreateProjectRequest struct {
 	Name              string            `json:"name"`
 	Slug              string            `json:"slug,omitempty"`
@@ -117,6 +185,7 @@ type CreateProjectRequest struct {
 	RepoPath          string            `json:"repoPath,omitempty"`
 	RepoPaths         []string          `json:"repoPaths,omitempty"`
 	UseWorktrees      *bool             `json:"useWorktrees,omitempty"`
+	BoardID           string            `json:"boardId,omitempty"`
 	GitRemoteUrl      string            `json:"gitRemoteUrl,omitempty"`
 	LinearTeam        string            `json:"linearTeam,omitempty"`
 	GithubRepo        string            `json:"githubRepo,omitempty"`
@@ -133,27 +202,31 @@ type CreateProjectRequest struct {
 }
 
 type UpdateProjectRequest struct {
-	Name              *string            `json:"name,omitempty"`
-	Slug              *string            `json:"slug,omitempty"`
-	Description       *string            `json:"description,omitempty"`
-	Icon              *string            `json:"icon,omitempty"`
-	Color             *string            `json:"color,omitempty"`
-	RepoPath          *string            `json:"repoPath,omitempty"`
-	RepoPaths         *[]string          `json:"repoPaths,omitempty"`
-	UseWorktrees      *bool              `json:"useWorktrees,omitempty"`
-	GitRemoteUrl      *string            `json:"gitRemoteUrl,omitempty"`
-	LinearTeam        *string            `json:"linearTeam,omitempty"`
-	GithubRepo        *string            `json:"githubRepo,omitempty"`
-	JiraProject       *string            `json:"jiraProject,omitempty"`
-	IssueTracker      *string            `json:"issueTracker,omitempty"`
-	TrackerUrl        *string            `json:"trackerUrl,omitempty"`
-	ProjectType       *string            `json:"projectType,omitempty"`
-	IsDefault         *bool              `json:"isDefault,omitempty"`
-	StageMapping      *map[string]string `json:"stageMapping,omitempty"`
-	SkillOverrides    *map[string]string `json:"skillOverrides,omitempty"`
-	AIProvider        *string            `json:"aiProvider,omitempty"`
-	AICommandTemplate *string            `json:"aiCommandTemplate,omitempty"`
-	SpecFramework     *string            `json:"specFramework,omitempty"`
+	Name              *string              `json:"name,omitempty"`
+	Slug              *string              `json:"slug,omitempty"`
+	Description       *string              `json:"description,omitempty"`
+	Icon              *string              `json:"icon,omitempty"`
+	Color             *string              `json:"color,omitempty"`
+	RepoPath          *string              `json:"repoPath,omitempty"`
+	RepoPaths         *[]string            `json:"repoPaths,omitempty"`
+	UseWorktrees      *bool                `json:"useWorktrees,omitempty"`
+	BoardID           *string              `json:"boardId,omitempty"`
+	TrackerColumns    *[]TrackerColumn     `json:"trackerColumns,omitempty"`
+	Sprints           *[]TrackerSprint     `json:"sprints,omitempty"`
+	StageColumns      *map[string][]string `json:"stageColumns,omitempty"`
+	GitRemoteUrl      *string              `json:"gitRemoteUrl,omitempty"`
+	LinearTeam        *string              `json:"linearTeam,omitempty"`
+	GithubRepo        *string              `json:"githubRepo,omitempty"`
+	JiraProject       *string              `json:"jiraProject,omitempty"`
+	IssueTracker      *string              `json:"issueTracker,omitempty"`
+	TrackerUrl        *string              `json:"trackerUrl,omitempty"`
+	ProjectType       *string              `json:"projectType,omitempty"`
+	IsDefault         *bool                `json:"isDefault,omitempty"`
+	StageMapping      *map[string]string   `json:"stageMapping,omitempty"`
+	SkillOverrides    *map[string]string   `json:"skillOverrides,omitempty"`
+	AIProvider        *string              `json:"aiProvider,omitempty"`
+	AICommandTemplate *string              `json:"aiCommandTemplate,omitempty"`
+	SpecFramework     *string              `json:"specFramework,omitempty"`
 }
 
 type InstalledSkillInfo struct {
@@ -284,6 +357,10 @@ type Task struct {
 	// project's repoPath, for trackers where one epic spans several codebases.
 	// Empty means "inherit the project, then the global setting".
 	RepoPath *string `json:"repoPath,omitempty"`
+	// TrackerStatus is the status name as the tracker spells it ("Dev Test", "To
+	// Merge"…). The internal Status folds those onto six values, which is too
+	// lossy to place a card in the tracker's own board columns.
+	TrackerStatus string `json:"trackerStatus,omitempty"`
 	// Sprint and Team come from the tracker: the Jira Sprint and Team fields,
 	// imported by the REST enrichment pass of the sync.
 	Sprint      string  `json:"sprint,omitempty"`
@@ -423,6 +500,7 @@ type UpdateTaskRequest struct {
 	BranchName     *string   `json:"branchName,omitempty"`
 	PrURL          *string   `json:"prUrl,omitempty"`
 	RepoPath       *string   `json:"repoPath,omitempty"`
+	TrackerStatus  *string   `json:"trackerStatus,omitempty"`
 	Source         *string   `json:"source,omitempty"`
 	ExternalURL    *string   `json:"externalUrl,omitempty"`
 }

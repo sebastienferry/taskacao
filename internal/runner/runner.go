@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -1261,6 +1262,28 @@ func findJiraItem(items []JiraIssueItem, key string) *JiraIssueItem {
 	return nil
 }
 
+// jiraStatusIsClosed reports whether a Jira status name means the work item has
+// left the board. Abandoned statuses count as closed just like "Done": WONTDO,
+// Cancelled or Rejected tickets are not work waiting to be done. Recognising
+// them by name matters because a workflow may leave such a status in Jira's
+// "In Progress" (indeterminate) category — the SFE board does exactly that, and
+// its 41 WONTDO tickets were showing up in the daily digest's "À traiter
+// aujourd'hui" section.
+func jiraStatusIsClosed(lowerStatusName string) bool {
+	closedMarkers := []string{
+		"done", "close", "resolved", "finish", "complete",
+		"wontdo", "won't do", "wont do", "won t do", "cancel",
+		"abandon", "annul", "reject", "rejet", "duplicate", "doublon",
+		"obsolete", "invalid",
+	}
+	for _, marker := range closedMarkers {
+		if strings.Contains(lowerStatusName, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // jiraItemsToTasks converts Jira work items into board cards. Shared by the
 // REST and the acli read paths, which return the same payload shape.
 func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string) []models.Task {
@@ -1290,6 +1313,11 @@ func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string) []mo
 		var status models.Status = models.StatusToClarify
 		stName := strings.ToLower(item.Fields.Status.Name)
 		switch {
+		// Closed work is tested first, because a status such as "WONTDO" or
+		// "Closed - Duplicate" is work that left the board and must not fall
+		// through to the status-category fallback below.
+		case jiraStatusIsClosed(stName):
+			status = models.StatusFinished
 		case strings.Contains(stName, "clarif") || strings.Contains(stName, "triage") || strings.Contains(stName, "backlog") || strings.Contains(stName, "open"):
 			status = models.StatusToClarify
 		case strings.Contains(stName, "specif") || strings.Contains(stName, "to do") || strings.Contains(stName, "todo") || strings.Contains(stName, "selected"):
@@ -1298,8 +1326,6 @@ func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string) []mo
 			status = models.StatusToImplement
 		case strings.Contains(stName, "test") || strings.Contains(stName, "qa") || strings.Contains(stName, "validation") || strings.Contains(stName, "review") || strings.Contains(stName, "pr"):
 			status = models.StatusToTest
-		case strings.Contains(stName, "done") || strings.Contains(stName, "closed") || strings.Contains(stName, "resolved") || strings.Contains(stName, "finish"):
-			status = models.StatusFinished
 		default:
 			// The workflow uses a status name Taskacao does not recognise; fall
 			// back to Jira's own status category, which every workflow sets.
@@ -1339,6 +1365,7 @@ func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string) []mo
 			AssigneeAvatar: avatar,
 			Position:       i + 1,
 			Source:         "jira",
+			TrackerStatus:  strings.TrimSpace(item.Fields.Status.Name),
 			ExternalURL:    extURL,
 			IssueType:      itemType,
 			CreatedAt:      time.Now(),
@@ -1564,6 +1591,83 @@ func (r *Runner) enrichJiraParents(projectKey string, tasks []models.Task, repoP
 		found, len(tasks), len(epics))
 }
 
+// jiraKeyPattern matches a work item key such as PE-1234 in acli's plain output.
+var jiraKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9]+-[0-9]+`)
+
+// CreateJiraChildIssue creates a work item of a given type under a parent, which
+// is how a line of epic shaping becomes a real story. Distinct from
+// CreateJiraIssue: that one creates a standalone Task, with no parent and no
+// choice of type.
+func (r *Runner) CreateJiraChildIssue(projectKey string, repoPath string, parentKey string, issueType string, title string, description string, labels []string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
+	parentKey = strings.ToUpper(strings.TrimSpace(parentKey))
+	title = strings.TrimSpace(title)
+	if projectKey == "" {
+		return "", fmt.Errorf("clé de projet Jira manquante")
+	}
+	if parentKey == "" {
+		return "", fmt.Errorf("épic parent manquant")
+	}
+	if title == "" {
+		return "", fmt.Errorf("intitulé de la story manquant")
+	}
+	if strings.TrimSpace(issueType) == "" {
+		issueType = "Story"
+	}
+
+	args := []string{
+		"jira", "workitem", "create",
+		"--project", projectKey,
+		"--type", issueType,
+		"--parent", parentKey,
+		"--summary", title,
+		"--json",
+	}
+	if strings.TrimSpace(description) != "" {
+		args = append(args, "--description", description)
+	}
+	if jiraLabels := filterJiraLabels(labels); len(jiraLabels) > 0 {
+		args = append(args, "--label", strings.Join(jiraLabels, ","))
+	}
+
+	out, err := r.runCommand(ctx, repoPath, acliPath, args...)
+	if err != nil {
+		return "", fmt.Errorf("création de la story sous %s impossible: %w", parentKey, err)
+	}
+	// acli signale un refus sans code de sortie non nul : on lit sa sortie.
+	if failure := jiraCLIFailure(out); failure != "" {
+		return "", fmt.Errorf("création refusée: %s", failure)
+	}
+
+	var created struct {
+		Key string `json:"key"`
+	}
+	// La sortie peut porter un bandeau avant le JSON : on décode le premier
+	// document, comme pour les autres commandes acli.
+	decodeErr := decodeJSONDocuments(out, func(dec *json.Decoder) error {
+		if created.Key != "" {
+			return io.EOF
+		}
+		return dec.Decode(&created)
+	})
+	if decodeErr != nil || created.Key == "" {
+		// Certaines versions n'impriment que « ✓ … PROJ-123 créé ».
+		if m := jiraKeyPattern.FindString(out); m != "" {
+			return m, nil
+		}
+		return "", fmt.Errorf("clé du ticket créé introuvable dans la réponse d'acli")
+	}
+	return created.Key, nil
+}
+
 func (r *Runner) CreateJiraIssue(projectKey string, repoPath string, trackerUrl string, title string, description string, priority models.Priority, labels []string) (*models.Task, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -1691,6 +1795,61 @@ func mapStatusToJiraState(status models.Status) string {
 	}
 }
 
+// TransitionJiraIssueToStatus moves a work item to a status named as the tracker
+// spells it.
+//
+// Two traps here, both learned the hard way. acli takes the *transition* name,
+// not the target status name — a workflow exposing "Close Issue" towards the
+// status "Closed" refuses --status "Closed". And acli exits 0 even when it
+// refuses, printing "✗ Failure: … No allowed transitions found", so the exit
+// code cannot be trusted.
+//
+// So the REST API does it when credentials exist: it lists the transitions,
+// picks the one whose target matches, and posts its id. acli remains the
+// fallback, with its output inspected rather than its exit code.
+func (r *Runner) TransitionJiraIssueToStatus(settings *models.Settings, trackerURL string, issueKey string, statusName string, repoPath string) error {
+	issueKey = strings.TrimSpace(issueKey)
+	statusName = strings.TrimSpace(statusName)
+	if issueKey == "" || statusName == "" {
+		return fmt.Errorf("clé de ticket ou statut cible manquant")
+	}
+
+	if client := NewJiraRESTClient(settings, trackerURL); client != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		return client.TransitionToStatus(ctx, issueKey, statusName)
+	}
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	out, err := r.runCommand(ctx, repoPath, acliPath, "jira", "workitem", "transition",
+		"--key", issueKey, "--status", statusName, "--yes")
+	if err != nil {
+		return fmt.Errorf("transition de %s vers '%s' impossible: %w", issueKey, statusName, err)
+	}
+	if failure := jiraCLIFailure(out); failure != "" {
+		return fmt.Errorf("transition de %s vers '%s' refusée: %s", issueKey, statusName, failure)
+	}
+	return nil
+}
+
+// jiraCLIFailure extracts the failure line acli prints while still exiting 0.
+func jiraCLIFailure(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "✗") || strings.Contains(trimmed, "can't be transitioned") {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, "✗"))
+		}
+	}
+	return ""
+}
+
 func (r *Runner) UpdateJiraIssueState(issueKey string, status models.Status, repoPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -1751,7 +1910,15 @@ func (r *Runner) UpdateJiraIssue(issueKey string, repoPath string, title *string
 	if len(fieldArgs) > 0 {
 		args := append([]string{"jira", "workitem", "edit", "--key", issueKey}, fieldArgs...)
 		args = append(args, "--yes")
-		if _, err := r.runCommand(ctx, repoPath, acliPath, args...); err != nil {
+		out, err := r.runCommand(ctx, repoPath, acliPath, args...)
+		if err == nil {
+			// Même piège que la transition : acli signale un refus sans code de
+			// sortie non nul.
+			if failure := jiraCLIFailure(out); failure != "" {
+				err = fmt.Errorf("%s", failure)
+			}
+		}
+		if err != nil {
 			// Retry without the label mutations: a label the Jira project does
 			// not allow makes the whole edit fail, and losing the label update
 			// is preferable to losing the summary and description update too.
@@ -1765,7 +1932,13 @@ func (r *Runner) UpdateJiraIssue(issueKey string, repoPath string, title *string
 			if len(narrowed) > 0 {
 				retry := append([]string{"jira", "workitem", "edit", "--key", issueKey}, narrowed...)
 				retry = append(retry, "--yes")
-				if _, err2 := r.runCommand(ctx, repoPath, acliPath, retry...); err2 != nil {
+				out2, err2 := r.runCommand(ctx, repoPath, acliPath, retry...)
+				if err2 == nil {
+					if failure := jiraCLIFailure(out2); failure != "" {
+						err2 = fmt.Errorf("%s", failure)
+					}
+				}
+				if err2 != nil {
 					firstErr = fmt.Errorf("acli jira workitem edit %s a échoué: %w", issueKey, err2)
 				}
 			} else {

@@ -108,6 +108,7 @@ func main() {
 
 	// Interactive PTY Terminal Routes & WebSocket
 	mux.HandleFunc("/ws/terminal", h.HandleTerminalWs)
+	mux.HandleFunc("/api/terminal/sessions", h.HandleTerminalSessions)
 	mux.HandleFunc("/api/terminal/send", h.HandleTerminalSend)
 	mux.HandleFunc("/api/terminal/reset", h.HandleTerminalReset)
 
@@ -122,7 +123,16 @@ func main() {
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Route API non trouvée: %s", r.URL.Path)})
 				return
 			}
+			// index.html must never be cached: it is the file that names the
+			// hashed bundle, so a stale copy keeps serving the previous build and
+			// the app looks unchanged after a rebuild. The assets themselves are
+			// content-hashed, so they can be cached hard.
 			path := filepath.Join(webDistDir, r.URL.Path)
+			if strings.HasPrefix(r.URL.Path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-store, must-revalidate")
+			}
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				http.ServeFile(w, r, filepath.Join(webDistDir, "index.html"))
 				return

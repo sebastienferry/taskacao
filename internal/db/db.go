@@ -27,6 +27,18 @@ type SkillJob struct {
 	SkillID       string
 	Prompt        string
 	RemovedLabels []string
+	// TrackerStatus is the status named as the tracker spells it. When set, the
+	// transition targets it directly instead of folding the internal status onto
+	// a guessed tracker state, which cannot distinguish two columns sharing a
+	// stage.
+	TrackerStatus string
+	// SyncTitle / SyncDescription / SyncPriority say which fields the user
+	// actually edited. Pushing a field that did not change is not harmless: Jira
+	// stores rich text, Taskacao a flattened copy, so re-sending an untouched
+	// description destroys its formatting.
+	SyncTitle       bool
+	SyncDescription bool
+	SyncPriority    bool
 }
 
 type DB struct {
@@ -112,6 +124,10 @@ func (d *DB) initSchema() error {
 			repo_path TEXT NOT NULL DEFAULT '',
 			repo_paths TEXT NOT NULL DEFAULT '[]',
 			use_worktrees INTEGER NOT NULL DEFAULT 1,
+			board_id TEXT NOT NULL DEFAULT '',
+			tracker_columns TEXT NOT NULL DEFAULT '[]',
+			sprints TEXT NOT NULL DEFAULT '[]',
+			stage_columns TEXT NOT NULL DEFAULT '{}',
 			linear_team TEXT NOT NULL DEFAULT '',
 			github_repo TEXT NOT NULL DEFAULT '',
 			issue_tracker TEXT NOT NULL DEFAULT 'local',
@@ -139,6 +155,7 @@ func (d *DB) initSchema() error {
 			repo_path TEXT NOT NULL DEFAULT '',
 			sprint TEXT NOT NULL DEFAULT '',
 			team TEXT NOT NULL DEFAULT '',
+			tracker_status TEXT NOT NULL DEFAULT '',
 			source TEXT NOT NULL DEFAULT 'local',
 			external_url TEXT,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -180,6 +197,10 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN skill_overrides TEXT NOT NULL DEFAULT '{}';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN repo_paths TEXT NOT NULL DEFAULT '[]';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN use_worktrees INTEGER NOT NULL DEFAULT 1;")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN board_id TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN tracker_columns TEXT NOT NULL DEFAULT '[]';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN sprints TEXT NOT NULL DEFAULT '[]';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN stage_columns TEXT NOT NULL DEFAULT '{}';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN ai_provider TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN ai_command_template TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN spec_framework TEXT NOT NULL DEFAULT '';")
@@ -192,6 +213,7 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN repo_path TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN sprint TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN team TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN tracker_status TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_sprint ON tasks(sprint);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'local';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN external_url TEXT;")
@@ -371,9 +393,9 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 				newID = uuid.New().String()
 			}
 			if _, insErr := d.conn.Exec(`
-				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, team, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.Sprint, t.Team, t.CreatedAt, now); insErr != nil {
+				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, team, tracker_status, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.Sprint, t.Team, t.TrackerStatus, t.CreatedAt, now); insErr != nil {
 				// Never swallow this: a silent failure here makes a sync report
 				// "N tickets imported" while the board stays empty.
 				log.Printf("[DB.ImportOrUpdateTasks] insert of %s failed: %v", t.Key, insErr)
@@ -390,11 +412,12 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 				    parent_type = CASE WHEN ? != '' THEN ? ELSE parent_type END,
 				    sprint = CASE WHEN ? != '' THEN ? ELSE sprint END,
 				    team = CASE WHEN ? != '' THEN ? ELSE team END,
+				    tracker_status = CASE WHEN ? != '' THEN ? ELSE tracker_status END,
 				    updated_at = ?
 				WHERE id = ?
 			`, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, src, t.ExternalURL,
 				t.IssueType, t.IssueType, t.ParentKey, t.ParentKey, t.ParentTitle, t.ParentTitle, t.ParentType, t.ParentType,
-				t.Sprint, t.Sprint, t.Team, t.Team, now, existingID); updErr != nil {
+				t.Sprint, t.Sprint, t.Team, t.Team, t.TrackerStatus, t.TrackerStatus, now, existingID); updErr != nil {
 				log.Printf("[DB.ImportOrUpdateTasks] update of %s failed: %v", t.Key, updErr)
 				importErrs = append(importErrs, fmt.Sprintf("%s: %v", t.Key, updErr))
 			}
@@ -528,9 +551,12 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 	}
 
 	if query != "" {
-		conditions = append(conditions, "(key LIKE ? OR title LIKE ? OR description LIKE ? OR labels LIKE ? OR assignee LIKE ?)")
+		// Le parent compte dans la recherche : chercher une clé d'épic ou son
+		// titre doit ramener ses enfants, c'est la façon naturelle d'isoler un
+		// chantier alors qu'aucun ticket ne porte l'épic dans son propre titre.
+		conditions = append(conditions, "(key LIKE ? OR title LIKE ? OR description LIKE ? OR labels LIKE ? OR assignee LIKE ? OR parent_key LIKE ? OR parent_title LIKE ?)")
 		pattern := "%" + query + "%"
-		args = append(args, pattern, pattern, pattern, pattern, pattern)
+		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
 	}
 
 	if status != "" {
@@ -558,7 +584,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 		args = append(args, team)
 	}
 
-	sqlQuery := "SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at FROM tasks"
+	sqlQuery := "SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at FROM tasks"
 	if len(conditions) > 0 {
 		sqlQuery += " WHERE " + strings.Join(conditions, " AND ")
 	}
@@ -574,7 +600,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 	for rows.Next() {
 		var t models.Task
 		var labelsJSON string
-		var dueDate, branchName, prURL, repoPath, sprint, team, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+		var dueDate, branchName, prURL, repoPath, sprint, team, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
 		var statusStr, priorityStr string
 
 		err := rows.Scan(
@@ -595,6 +621,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 			&repoPath,
 			&sprint,
 			&team,
+			&trackerStatus,
 			&source,
 			&extURL,
 			&issueType,
@@ -628,6 +655,9 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 		}
 		if team.Valid {
 			t.Team = team.String
+		}
+		if trackerStatus.Valid {
+			t.TrackerStatus = trackerStatus.String
 		}
 		if source.Valid && source.String != "" {
 			t.Source = source.String
@@ -671,11 +701,11 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 
 	var t models.Task
 	var labelsJSON string
-	var dueDate, branchName, prURL, repoPath, sprint, team, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+	var dueDate, branchName, prURL, repoPath, sprint, team, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
 	var statusStr, priorityStr string
 
 	err := d.conn.QueryRow(`
-		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
 		FROM tasks WHERE id = ? OR key = ?
 	`, id, id).Scan(
 		&t.ID,
@@ -695,6 +725,7 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 		&repoPath,
 		&sprint,
 		&team,
+		&trackerStatus,
 		&source,
 		&extURL,
 		&issueType,
@@ -731,6 +762,9 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 	}
 	if team.Valid {
 		t.Team = team.String
+	}
+	if trackerStatus.Valid {
+		t.TrackerStatus = trackerStatus.String
 	}
 	if source.Valid && source.String != "" {
 		t.Source = source.String
@@ -1834,6 +1868,43 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 	if req.PrURL != nil {
 		existing.PrURL = req.PrURL
 	}
+	// Statut du tracker : il pilote l'étape du workflow et le statut interne, via
+	// le mapping du projet. L'inverse est vrai aussi — une étape choisie sans
+	// statut retombe sur le premier statut de la colonne de cette étape.
+	if req.TrackerStatus != nil {
+		trimmedStatus := strings.TrimSpace(*req.TrackerStatus)
+		existing.TrackerStatus = trimmedStatus
+		if proj, _ := d.getProjectByIDUnsafe(existing.ProjectID); proj != nil && trimmedStatus != "" {
+			if stage := StageForTrackerStatus(proj, trimmedStatus); stage != "" {
+				existing.Labels = SetWorkflowLabel(existing.Labels, "#"+stage)
+				if internal, ok := InternalStatusForStage(stage); ok {
+					existing.Status = internal
+				}
+			}
+		}
+	} else if req.Labels != nil {
+		if proj, _ := d.getProjectByIDUnsafe(existing.ProjectID); proj != nil {
+			for _, l := range existing.Labels {
+				stage := strings.ToLower(strings.TrimPrefix(l, "#"))
+				if _, isStage := stageToInternalStatus[stage]; !isStage {
+					continue
+				}
+				if target := TrackerStatusForStage(proj, stage); target != "" && !strings.EqualFold(target, existing.TrackerStatus) {
+					existing.TrackerStatus = target
+				}
+				// Le statut interne suit l'étape aussi, sauf si l'appelant l'a
+				// fixé explicitement : sinon la fiche afficherait une étape et
+				// les vues génériques une autre.
+				if req.Status == nil {
+					if internal, ok := InternalStatusForStage(stage); ok {
+						existing.Status = internal
+					}
+				}
+				break
+			}
+		}
+	}
+
 	if req.RepoPath != nil {
 		trimmed := strings.TrimSpace(*req.RepoPath)
 		if trimmed == "" {
@@ -1858,17 +1929,21 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 
 	_, err = d.conn.Exec(`
 		UPDATE tasks
-		SET project_id = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?, assignee = ?, assignee_avatar = ?, position = ?, due_date = ?, branch_name = ?, pr_url = ?, repo_path = ?, source = ?, external_url = ?, updated_at = ?
+		SET project_id = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?, assignee = ?, assignee_avatar = ?, position = ?, due_date = ?, branch_name = ?, pr_url = ?, repo_path = ?, tracker_status = ?, source = ?, external_url = ?, updated_at = ?
 		WHERE id = ? OR key = ?
-	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, repoPathValue(existing.RepoPath), existing.Source, existing.ExternalURL, existing.UpdatedAt, existing.ID, existing.Key)
+	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, repoPathValue(existing.RepoPath), existing.TrackerStatus, existing.Source, existing.ExternalURL, existing.UpdatedAt, existing.ID, existing.Key)
 
 	if err != nil {
 		return nil, err
 	}
 
 	// Enqueue async CLI tracker sync in task activities queue whenever task is modified
-	if req.Status != nil || req.Labels != nil || req.Title != nil || req.Description != nil || req.Priority != nil {
-		d.enqueueTrackerUpdateUnsafe(existing, req.Status, existing.Labels, removedLabels)
+	if req.Status != nil || req.Labels != nil || req.Title != nil || req.Description != nil || req.Priority != nil || req.TrackerStatus != nil {
+		d.enqueueTrackerUpdateUnsafe(existing, req.Status, existing.Labels, removedLabels, TrackerFieldChanges{
+			Title:       req.Title != nil,
+			Description: req.Description != nil,
+			Priority:    req.Priority != nil,
+		})
 	}
 
 	acts, _ := d.getTaskActivitiesUnsafe(existing.ID)
@@ -2020,7 +2095,8 @@ func (d *DB) MoveTask(id string, newStatus models.Status, newPosition int) (*mod
 	}
 
 	// Enqueue async CLI tracker sync in task activities queue
-	d.enqueueTrackerUpdateUnsafe(existing, &newStatus, existing.Labels, removedLabels)
+	// Déplacement d'étape : seuls le statut et les labels bougent.
+	d.enqueueTrackerUpdateUnsafe(existing, &newStatus, existing.Labels, removedLabels, TrackerFieldChanges{})
 
 	acts, _ := d.getTaskActivitiesUnsafe(existing.ID)
 	existing.Activities = acts
@@ -2047,11 +2123,11 @@ func (d *DB) DeleteTask(id string) error {
 func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	var t models.Task
 	var labelsJSON string
-	var dueDate, branchName, prURL, repoPath, sprint, team, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+	var dueDate, branchName, prURL, repoPath, sprint, team, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
 	var statusStr, priorityStr string
 
 	err := d.conn.QueryRow(`
-		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
 		FROM tasks WHERE id = ? OR key = ?
 	`, id, id).Scan(
 		&t.ID,
@@ -2071,6 +2147,7 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 		&repoPath,
 		&sprint,
 		&team,
+		&trackerStatus,
 		&source,
 		&extURL,
 		&issueType,
@@ -2107,6 +2184,9 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	}
 	if team.Valid {
 		t.Team = team.String
+	}
+	if trackerStatus.Valid {
+		t.TrackerStatus = trackerStatus.String
 	}
 	if source.Valid && source.String != "" {
 		t.Source = source.String
@@ -3151,6 +3231,15 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 			totalImported = len(tasks)
 			summary = fmt.Sprintf("%d Jira issues synchronized successfully", len(tasks))
 
+			// Les colonnes du board suivent le tracker sans import manuel.
+			if job.ProjectID != "" {
+				if note, colErr := d.SyncProjectBoardColumns(job.ProjectID); colErr != nil {
+					steps = append(steps, "ℹ️ Colonnes du board non rafraîchies : "+colErr.Error())
+				} else {
+					steps = append(steps, "4. "+note)
+				}
+			}
+
 			outputLines = append(outputLines, fmt.Sprintf("✅ **%d tickets imported / updated from Jira:**\n", len(tasks)))
 			for _, t := range tasks {
 				outputLines = append(outputLines, fmt.Sprintf("- **[%s]** %s *(Status: %s, Priority: %s)*", t.Key, t.Title, t.Status, t.Priority))
@@ -3247,6 +3336,9 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 					for i := range jTasks {
 						jTasks[i].ProjectID = p.ID
 					}
+					if note, colErr := d.SyncProjectBoardColumns(p.ID); colErr == nil {
+						steps = append(steps, fmt.Sprintf("Jira (%s): %s", jKey, note))
+					}
 					if impErr := d.ImportOrUpdateTasks(jTasks); impErr != nil {
 						hasError = true
 						steps = append(steps, fmt.Sprintf("⚠️ Jira: écriture locale échouée: %v", impErr))
@@ -3280,7 +3372,16 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 	d.mu.Unlock()
 }
 
-func (d *DB) enqueueTrackerUpdateUnsafe(task *models.Task, status *models.Status, labels []string, removedLabels []string) {
+// enqueueTrackerUpdateUnsafe schedules the tracker sync. changed says which
+// editable fields the caller actually touched; anything else is left alone on
+// the tracker side.
+type TrackerFieldChanges struct {
+	Title       bool
+	Description bool
+	Priority    bool
+}
+
+func (d *DB) enqueueTrackerUpdateUnsafe(task *models.Task, status *models.Status, labels []string, removedLabels []string, changed TrackerFieldChanges) {
 	if task == nil {
 		return
 	}
@@ -3398,11 +3499,15 @@ func (d *DB) enqueueTrackerUpdateUnsafe(task *models.Task, status *models.Status
 	_ = d.addTaskActivityDirect(act)
 
 	job := SkillJob{
-		ActivityID:    activityID,
-		TaskID:        task.ID,
-		SkillID:       "tracker_update",
-		Prompt:        stStr,
-		RemovedLabels: removedLabels,
+		ActivityID:      activityID,
+		TaskID:          task.ID,
+		SkillID:         "tracker_update",
+		Prompt:          stStr,
+		RemovedLabels:   removedLabels,
+		TrackerStatus:   strings.TrimSpace(task.TrackerStatus),
+		SyncTitle:       changed.Title,
+		SyncDescription: changed.Description,
+		SyncPriority:    changed.Priority,
 	}
 
 	select {
@@ -3463,9 +3568,23 @@ func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 	var outputText string
 	var hasError bool
 
+	// Champs édités uniquement : renvoyer un titre ou une description inchangés
+	// écraserait la version du tracker par notre copie aplatie.
+	var titleForUpdate, descForUpdate *string
+	var priorityForUpdate *models.Priority
+	if job.SyncTitle {
+		titleForUpdate = &task.Title
+	}
+	if job.SyncDescription {
+		descForUpdate = &task.Description
+	}
+	if job.SyncPriority {
+		priorityForUpdate = &task.Priority
+	}
+
 	if isLinear {
 		steps = append(steps, fmt.Sprintf("Exécution: linear issue update %s (statut: %s, labels: %v)", task.Key, task.Status, task.Labels))
-		err := d.runner.UpdateLinearIssue(task.Key, &task.Title, &task.Description, &task.Priority, &task.Status, task.Labels)
+		err := d.runner.UpdateLinearIssue(task.Key, titleForUpdate, descForUpdate, priorityForUpdate, &task.Status, task.Labels)
 		if err != nil {
 			hasError = true
 			outputText = fmt.Sprintf("Erreur Linear CLI : %v", err)
@@ -3475,8 +3594,37 @@ func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 			steps = append(steps, fmt.Sprintf("✅ Issue Linear %s mise à jour avec succès via la CLI", task.Key))
 		}
 	} else if isJira {
-		steps = append(steps, fmt.Sprintf("Exécution: acli jira workitem edit %s (Statut: %s, Labels: %v, Supprimés: %v)", task.Key, task.Status, task.Labels, job.RemovedLabels))
-		err := d.runner.UpdateJiraIssue(task.Key, repoPath, &task.Title, &task.Description, &task.Priority, &task.Status, task.Labels, job.RemovedLabels)
+		editedFields := []string{}
+		if job.SyncTitle {
+			editedFields = append(editedFields, "titre")
+		}
+		if job.SyncDescription {
+			editedFields = append(editedFields, "description")
+		}
+		if job.SyncPriority {
+			editedFields = append(editedFields, "priorité")
+		}
+		if len(editedFields) == 0 {
+			editedFields = append(editedFields, "aucun champ texte")
+		}
+		steps = append(steps, fmt.Sprintf("Exécution: acli jira workitem edit %s (champs édités: %s, Labels: %v, Supprimés: %v)", task.Key, strings.Join(editedFields, ", "), task.Labels, job.RemovedLabels))
+		// Statut du tracker connu : on transitionne dessus nommément, et on ne
+		// laisse pas UpdateJiraIssue deviner un état à partir du statut interne.
+		var statusForUpdate *models.Status
+		if job.TrackerStatus == "" {
+			statusForUpdate = &task.Status
+		}
+		err := d.runner.UpdateJiraIssue(task.Key, repoPath, titleForUpdate, descForUpdate, priorityForUpdate, statusForUpdate, task.Labels, job.RemovedLabels)
+		if err == nil && job.TrackerStatus != "" {
+			steps = append(steps, fmt.Sprintf("Transition vers le statut « %s »", job.TrackerStatus))
+			trackerURL := ""
+			if proj != nil {
+				trackerURL = proj.TrackerUrl
+			}
+			if trErr := d.runner.TransitionJiraIssueToStatus(settings, trackerURL, task.Key, job.TrackerStatus, repoPath); trErr != nil {
+				err = trErr
+			}
+		}
 		if err != nil {
 			hasError = true
 			outputText = fmt.Sprintf("Erreur Atlassian CLI (acli) : %v", err)
@@ -3487,7 +3635,7 @@ func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 		}
 	} else if isGithub {
 		steps = append(steps, fmt.Sprintf("Exécution: gh issue edit %s (Dépôt: %s, Statut: %s, Labels: %v, Supprimés: %v)", task.Key, repo, task.Status, task.Labels, job.RemovedLabels))
-		err := d.runner.UpdateGithubIssue(repo, repoPath, task.Key, &task.Title, &task.Description, &task.Status, task.Labels, job.RemovedLabels)
+		err := d.runner.UpdateGithubIssue(repo, repoPath, task.Key, titleForUpdate, descForUpdate, &task.Status, task.Labels, job.RemovedLabels)
 		if err != nil {
 			hasError = true
 			outputText = fmt.Sprintf("Erreur GitHub CLI : %v", err)
@@ -4332,9 +4480,46 @@ func (d *DB) registerProjectRepoPathUnsafe(projectID string, repoPath string) {
 	_, _ = d.conn.Exec("UPDATE projects SET repo_paths = ?, updated_at = ? WHERE id = ?", string(payload), time.Now(), proj.ID)
 }
 
+// parseTrackerColumns decodes the stored board columns, tolerating an empty
+// column on projects that never imported a board.
+func parseTrackerColumns(raw string) []models.TrackerColumn {
+	if strings.TrimSpace(raw) == "" || raw == "[]" {
+		return []models.TrackerColumn{}
+	}
+	var list []models.TrackerColumn
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return []models.TrackerColumn{}
+	}
+	return list
+}
+
+// parseSprints decodes the board's sprints and their state.
+func parseSprints(raw string) []models.TrackerSprint {
+	if strings.TrimSpace(raw) == "" || raw == "[]" {
+		return []models.TrackerSprint{}
+	}
+	var list []models.TrackerSprint
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return []models.TrackerSprint{}
+	}
+	return list
+}
+
+// parseStageColumns decodes the workflow stage to columns assignment.
+func parseStageColumns(raw string) map[string][]string {
+	if strings.TrimSpace(raw) == "" || raw == "{}" {
+		return map[string][]string{}
+	}
+	out := map[string][]string{}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return map[string][]string{}
+	}
+	return out
+}
+
 func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 	rows, err := d.conn.Query(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
 		       COUNT(t.id) as task_count
 		FROM projects p
 		LEFT JOIN tasks t ON t.project_id = p.id
@@ -4352,9 +4537,10 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		var isDefault int
 		var stageMappingJSON, skillOverridesJSON, repoPathsJSON string
 		var useWorktrees int
+		var trackerColumnsJSON, stageColumnsJSON, sprintsJSON string
 		var aiProv, aiCmd, specFw, jiraProj, projType sql.NullString
 		err := rows.Scan(
-			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 		)
 		if err != nil {
 			return nil, err
@@ -4370,6 +4556,9 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		}
 		p.RepoPaths = parseRepoPaths(repoPathsJSON)
 		p.UseWorktrees = useWorktrees == 1
+		p.TrackerColumns = parseTrackerColumns(trackerColumnsJSON)
+		p.StageColumns = parseStageColumns(stageColumnsJSON)
+		p.Sprints = parseSprints(sprintsJSON)
 		if aiProv.Valid {
 			p.AIProvider = aiProv.String
 		}
@@ -4406,14 +4595,15 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	var isDefault int
 	var stageMappingJSON, skillOverridesJSON, repoPathsJSON string
 	var useWorktrees int
+	var trackerColumnsJSON, stageColumnsJSON, sprintsJSON string
 	var aiProv, aiCmd, specFw, jiraProj, projType sql.NullString
 	err := d.conn.QueryRow(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
 		       (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count
 		FROM projects p
 		WHERE p.id = ? OR p.slug = ?
 	`, id, id).Scan(
-		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -4432,6 +4622,9 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	}
 	p.RepoPaths = parseRepoPaths(repoPathsJSON)
 	p.UseWorktrees = useWorktrees == 1
+	p.TrackerColumns = parseTrackerColumns(trackerColumnsJSON)
+	p.StageColumns = parseStageColumns(stageColumnsJSON)
+	p.Sprints = parseSprints(sprintsJSON)
 	if aiProv.Valid {
 		p.AIProvider = aiProv.String
 	}
@@ -4524,9 +4717,9 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 	}
 
 	_, err := d.conn.Exec(`
-		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, use_worktrees, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), useWorktreesInt, gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, now, now)
+		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, use_worktrees, board_id, tracker_columns, stage_columns, sprints, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), useWorktreesInt, req.BoardID, "[]", "{}", "[]", gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -4597,6 +4790,18 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if req.UseWorktrees != nil {
 		p.UseWorktrees = *req.UseWorktrees
 	}
+	if req.BoardID != nil {
+		p.BoardID = strings.TrimSpace(*req.BoardID)
+	}
+	if req.TrackerColumns != nil {
+		p.TrackerColumns = *req.TrackerColumns
+	}
+	if req.StageColumns != nil {
+		p.StageColumns = *req.StageColumns
+	}
+	if req.Sprints != nil {
+		p.Sprints = *req.Sprints
+	}
 	if req.AIProvider != nil {
 		p.AIProvider = *req.AIProvider
 	}
@@ -4635,12 +4840,24 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if p.UseWorktrees {
 		useWorktreesInt = 1
 	}
+	if p.TrackerColumns == nil {
+		p.TrackerColumns = []models.TrackerColumn{}
+	}
+	if p.StageColumns == nil {
+		p.StageColumns = map[string][]string{}
+	}
+	trackerColumnsBytes, _ := json.Marshal(p.TrackerColumns)
+	stageColumnsBytes, _ := json.Marshal(p.StageColumns)
+	if p.Sprints == nil {
+		p.Sprints = []models.TrackerSprint{}
+	}
+	sprintsBytes, _ := json.Marshal(p.Sprints)
 
 	_, err = d.conn.Exec(`
 		UPDATE projects
-		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, use_worktrees = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, updated_at = ?
+		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, use_worktrees = ?, board_id = ?, tracker_columns = ?, stage_columns = ?, sprints = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, updated_at = ?
 		WHERE id = ?
-	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), useWorktreesInt, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.UpdatedAt, p.ID)
+	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), useWorktreesInt, p.BoardID, string(trackerColumnsBytes), string(stageColumnsBytes), string(sprintsBytes), p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.UpdatedAt, p.ID)
 	if err != nil {
 		return nil, err
 	}

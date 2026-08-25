@@ -31,8 +31,10 @@ import {
   Minimize2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { Status, Priority, DetailMode, SpecFramework } from '../types'
+import type { Status, Priority, DetailMode, SpecFramework, WorkflowStage } from '../types'
+import { WORKFLOW_ORDER } from '../lib/workflow'
 import { InteractiveTerminal } from './InteractiveTerminal'
+import { TaskComments } from './TaskComments'
 
 export const TaskDetailModal: React.FC = () => {
   const {
@@ -89,12 +91,13 @@ export const TaskDetailModal: React.FC = () => {
   const [branchName, setBranchName] = useState('')
   const [prUrl, setPrUrl] = useState('')
   const [repoPath, setRepoPath] = useState('')
+  const [trackerStatus, setTrackerStatus] = useState('')
   const [labels, setLabels] = useState<string[]>([])
   const [newLabelInput, setNewLabelInput] = useState('')
   const [assignee, setAssignee] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'details' | 'cadrage' | 'skills' | 'history'>('details')
+  const [activeTab, setActiveTab] = useState<'details' | 'cadrage' | 'skills' | 'comments' | 'history'>('details')
   const [customPrompt, setCustomPrompt] = useState('')
   const [copiedBranch, setCopiedBranch] = useState(false)
   const [specFramework, setSpecFramework] = useState<SpecFramework>(settings.specFramework || 'speckit')
@@ -113,6 +116,55 @@ export const TaskDetailModal: React.FC = () => {
   const effectiveRepoPath = repoPath.trim() || inheritedRepoPath
   // Répertoires proposés : celui du projet, puis ceux enregistrés sur le projet
   // (alimentés automatiquement dès qu'un ticket en épingle un nouveau).
+  // Statuts du projet, groupés par colonne, et étape du workflow associée. Les
+  // deux sélecteurs de la fiche sont deux vues du même mapping : changer l'un
+  // met l'autre à jour, et le serveur refait la même dérivation de son côté.
+  const projectColumns = taskProject?.trackerColumns || []
+  const projectStageColumns = taskProject?.stageColumns || {}
+  const hasProjectStatuses = projectColumns.some(c => c.statuses.length > 0)
+
+  const stageOfStatus = (value: string): WorkflowStage | null => {
+    const column = projectColumns.find(c => c.statuses.some(st => st.toLowerCase() === value.toLowerCase()))
+    if (!column) return null
+    for (const stage of WORKFLOW_ORDER) {
+      if ((projectStageColumns[stage] || []).includes(column.name)) return stage
+    }
+    return null
+  }
+
+  const statusOfStage = (stage: WorkflowStage): string => {
+    for (const columnName of projectStageColumns[stage] || []) {
+      const column = projectColumns.find(c => c.name === columnName)
+      if (column?.statuses.length) return column.statuses[0]
+    }
+    return ''
+  }
+
+  const currentStage: WorkflowStage =
+    (trackerStatus && stageOfStatus(trackerStatus)) ||
+    (labels.map(l => l.toLowerCase().replace('#', '')).find(l =>
+      (WORKFLOW_ORDER as string[]).includes(l)
+    ) as WorkflowStage | undefined) ||
+    'new'
+
+  const applyStage = (stage: WorkflowStage) => {
+    // L'étape remplace le label de workflow existant et emmène le statut avec
+    // elle quand le projet dit vers quelle colonne aller.
+    const others = labels.filter(l => !(WORKFLOW_ORDER as string[]).includes(l.toLowerCase().replace('#', '')))
+    setLabels([...others, stage])
+    const target = statusOfStage(stage)
+    if (target) setTrackerStatus(target)
+  }
+
+  const applyTrackerStatus = (value: string) => {
+    setTrackerStatus(value)
+    const stage = stageOfStatus(value)
+    if (stage) {
+      const others = labels.filter(l => !(WORKFLOW_ORDER as string[]).includes(l.toLowerCase().replace('#', '')))
+      setLabels([...others, stage])
+    }
+  }
+
   const knownRepoPaths = Array.from(
     new Set(
       [taskProject?.repoPath || '', ...(taskProject?.repoPaths || [])]
@@ -131,6 +183,7 @@ export const TaskDetailModal: React.FC = () => {
       setBranchName(selectedTask.branchName || '')
       setPrUrl(selectedTask.prUrl || '')
       setRepoPath(selectedTask.repoPath || '')
+      setTrackerStatus(selectedTask.trackerStatus || '')
       setLabels(selectedTask.labels || [])
       setAssignee(selectedTask.assignee || '')
       setDueDate(selectedTask.dueDate || '')
@@ -157,6 +210,7 @@ export const TaskDetailModal: React.FC = () => {
         branchName.trim() !== (selectedTask.branchName || '').trim() ||
         prUrl.trim() !== (selectedTask.prUrl || '').trim() ||
         repoPath.trim() !== (selectedTask.repoPath || '').trim() ||
+        trackerStatus.trim() !== (selectedTask.trackerStatus || '').trim() ||
         assignee.trim() !== (selectedTask.assignee || '').trim() ||
         (dueDate || '') !== (selectedTask.dueDate || '') ||
         JSON.stringify(labels) !== JSON.stringify(selectedTask.labels || [])
@@ -174,6 +228,7 @@ export const TaskDetailModal: React.FC = () => {
           branchName: branchName.trim() || undefined,
           prUrl: prUrl.trim() || undefined,
           repoPath: repoPath.trim(),
+          trackerStatus: trackerStatus.trim(),
         })
       }
     }
@@ -302,6 +357,7 @@ export const TaskDetailModal: React.FC = () => {
       branchName: branchName.trim() || undefined,
       prUrl: prUrl.trim() || undefined,
       repoPath: repoPath.trim(),
+      trackerStatus: trackerStatus.trim(),
     })
     setIsSaving(false)
     setSelectedTask(null)
@@ -915,23 +971,58 @@ export const TaskDetailModal: React.FC = () => {
       </div>
 
       {/* Metadata Grid: Status, Priority, Project, Assignee, Due Date */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* Status */}
         <div>
           <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
             {t.taskModal.status}
           </label>
+          {hasProjectStatuses ? (
+            <select
+              value={trackerStatus}
+              onChange={e => applyTrackerStatus(e.target.value)}
+              className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+              title="Statuts du projet, tels que le tracker les nomme"
+            >
+              <option value="">— non défini —</option>
+              {projectColumns.map(col => (
+                <optgroup key={col.name} label={col.name}>
+                  {col.statuses.map(st => (
+                    <option key={st} value={st}>{st}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          ) : (
+            <select
+              value={status}
+              onChange={e => handleStatusChange(e.target.value as Status)}
+              className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+            >
+              <option value="to_clarify">{t.status.to_clarify} (#new)</option>
+              <option value="to_specify">{t.status.to_specify} (#clarified)</option>
+              <option value="to_implement">{t.status.to_implement} (#specified)</option>
+              <option value="to_test">{t.status.to_test} (#implemented)</option>
+              <option value="to_close">{t.status.to_close} (#reviewed)</option>
+              <option value="finished">{t.status.finished} (#finished)</option>
+            </select>
+          )}
+        </div>
+
+        {/* Étape du workflow agentique, couplée au statut par le mapping */}
+        <div>
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+            Étape agentique
+          </label>
           <select
-            value={status}
-            onChange={e => handleStatusChange(e.target.value as Status)}
+            value={currentStage}
+            onChange={e => applyStage(e.target.value as WorkflowStage)}
             className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+            title="Label du workflow agentique. Le statut suit selon le mapping du projet."
           >
-            <option value="to_clarify">{t.status.to_clarify} (#new)</option>
-            <option value="to_specify">{t.status.to_specify} (#clarified)</option>
-            <option value="to_implement">{t.status.to_implement} (#specified)</option>
-            <option value="to_test">{t.status.to_test} (#implemented)</option>
-            <option value="to_close">{t.status.to_close} (#reviewed)</option>
-            <option value="finished">{t.status.finished} (#finished)</option>
+            {WORKFLOW_ORDER.map(stage => (
+              <option key={stage} value={stage}>#{stage}</option>
+            ))}
           </select>
         </div>
 
@@ -1634,6 +1725,18 @@ export const TaskDetailModal: React.FC = () => {
                 <Sparkles size={13} className="text-purple-400" />
                 <span>Skills & Copilot</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('comments')}
+                className={`pb-2 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'comments'
+                    ? 'border-cyan-400 text-cyan-400 font-bold'
+                    : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <MessageSquare size={13} className="text-cyan-400" />
+                <span>Commentaires</span>
+              </button>
             </div>
 
             {/* Panel Scrollable Content Body */}
@@ -1641,6 +1744,7 @@ export const TaskDetailModal: React.FC = () => {
               {activeTab === 'details' && renderStoryInfoSection()}
               {activeTab === 'cadrage' && renderCadrageSection()}
               {activeTab === 'skills' && renderSkillsCopilotSection()}
+              {activeTab === 'comments' && <TaskComments task={selectedTask} />}
             </div>
 
             {/* Panel Sticky Footer */}
@@ -1821,6 +1925,19 @@ export const TaskDetailModal: React.FC = () => {
               <Sparkles size={14} className="text-purple-400" />
               <span>Skills & Agent Copilot</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('comments')}
+              className={`pb-2.5 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+                activeTab === 'comments'
+                  ? 'border-cyan-400 text-cyan-400 font-bold'
+                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <MessageSquare size={14} className="text-cyan-400" />
+              <span>Commentaires</span>
+            </button>
           </div>
         </div>
 
@@ -1829,6 +1946,7 @@ export const TaskDetailModal: React.FC = () => {
           {activeTab === 'details' && renderStoryInfoSection()}
           {activeTab === 'cadrage' && renderCadrageSection()}
           {activeTab === 'skills' && renderSkillsCopilotSection()}
+          {activeTab === 'comments' && <TaskComments task={selectedTask} />}
         </div>
 
         {/* Modal Footer */}

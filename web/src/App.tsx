@@ -4,12 +4,12 @@ import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { BoardView } from './components/BoardView'
 import { ListView } from './components/ListView'
+import { RoadmapView } from './components/RoadmapView'
 import { ActivitiesView } from './components/ActivitiesView'
 import { SyncView } from './components/SyncView'
 import { DigestView } from './components/DigestView'
 import { QuickAddModal } from './components/QuickAddModal'
 import { TaskDetailModal } from './components/TaskDetailModal'
-import { TaskChatDrawer } from './components/TaskChatDrawer'
 import { CommandPalette } from './components/CommandPalette'
 import { ProfileModal } from './components/ProfileModal'
 import { ProjectModal } from './components/ProjectModal'
@@ -49,6 +49,8 @@ const MainContent: React.FC = () => {
               <BoardView />
             ) : activeView === 'list' ? (
               <ListView />
+            ) : activeView === 'roadmap' ? (
+              <RoadmapView />
             ) : activeView === 'sync' ? (
               <SyncView />
             ) : activeView === 'digest' ? (
@@ -69,7 +71,6 @@ const MainContent: React.FC = () => {
       {/* Global Modals & Overlays */}
       <QuickAddModal />
       <TaskDetailModal />
-      <TaskChatDrawer />
       <ProjectModal />
       <GitDiffModal />
       <BranchSwitcherModal />

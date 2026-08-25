@@ -34,6 +34,13 @@
     --status-warn: #ff9b00;
     --status-danger: #c2360f;
     --status-ok: #1f7a55; /* derived from the logo teal — no green in the brand palette */
+    /* Same trick as --accent-rgb: the triplets let a tint be composed with
+       rgb(var(--x) / .14) instead of hardcoding an rgba(), so a signal colour
+       stays themeable. */
+    --status-info-rgb: 0 94 218;
+    --status-warn-rgb: 255 155 0;
+    --status-danger-rgb: 194 54 15;
+    --status-ok-rgb: 31 122 85;
 
     /* --- Dark (ink) theme: default --- */
     --bg-primary: #0e1c28;

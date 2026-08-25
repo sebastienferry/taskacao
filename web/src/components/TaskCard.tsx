@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Code2,
   MoreHorizontal,
+  Terminal as TerminalIcon,
   FileCode,
   CheckCircle2,
   Eye,
@@ -19,6 +20,7 @@ import {
 } from 'lucide-react'
 import type { Task, Priority } from '../types'
 import { useApp } from '../context/AppContext'
+import { skillForStage, stageFromColumn } from '../lib/workflow'
 
 interface TaskCardProps {
   task: Task
@@ -142,10 +144,90 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     if (onDragStart) onDragStart(e)
   }
 
+  // Skill par identifiant, pour que l'étape résolue et la déduction historique
+  // produisent exactement la même action.
+  const skillAction = (id: string) => {
+    switch (id) {
+      case 'clarify':
+        return {
+          id: 'clarify',
+          label: skillLabel('clarify', 'Clarifier'),
+          icon: <Sparkles size={11} className="text-amber-400" />,
+          title: 'Clarifier les exigences et cadrer la tâche',
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            if (isSkillRunning) return
+            await runSkill(task.id, 'clarify')
+          },
+        }
+      case 'specify':
+        return {
+          id: 'specify',
+          label: skillLabel('specify', 'Spécifier'),
+          icon: <FileCode size={11} className="text-blue-400" />,
+          title: 'Rédiger la spécification technique (Spec Kit / OpenSpec)',
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            if (isSkillRunning) return
+            await runSkill(task.id, 'specify')
+          },
+        }
+      case 'implement':
+        return {
+          id: 'implement',
+          label: skillLabel('implement', 'Coder'),
+          icon: <Flame size={11} className="text-indigo-400" />,
+          title: "Lancer l'implémentation du code par l'agent IA",
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            if (isSkillRunning) return
+            await runSkill(task.id, 'implement')
+          },
+        }
+      case 'create_pr':
+        return {
+          id: 'create_pr',
+          label: skillLabel('create_pr', 'Créer PR'),
+          icon: <GitPullRequest size={11} className="text-purple-400" />,
+          title: 'Lancer la revue de code et générer la Pull Request',
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            if (isSkillRunning) return
+            await runSkill(task.id, 'create_pr')
+          },
+        }
+      default:
+        return null
+    }
+  }
+
   // Determine current workflow stage action (Clarifier ➔ Spécifier ➔ Coder ➔ Créer PR ➔ Merge ➔ #finished)
   const getWorkflowAction = () => {
     const isFinished = task.status === 'finished' || task.status === 'done' || task.labels?.some(l => l.toLowerCase() === 'finished')
     if (isFinished) return null
+
+    // La colonne du board pilote quand le projet a affecté des étapes à ses
+    // colonnes : c'est l'état réel du travail côté équipe, alors qu'un label
+    // peut n'avoir jamais été posé. À défaut, la déduction par labels reprend.
+    const columnStage = stageFromColumn(task, taskProject)
+    if (columnStage) {
+      if (columnStage === 'finished') return null
+      // Une PR déjà ouverte sur une étape de revue : l'action utile est la fusion.
+      if (columnStage === 'reviewed' && task.prUrl) {
+        return {
+          id: 'merge',
+          label: 'Merge',
+          icon: <CheckCircle2 size={11} className="text-emerald-400" />,
+          title: 'Fusionner la Pull Request / branche et finaliser la tâche (#finished)',
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            await moveTaskWorkflowStage(task.id, 'finished')
+          },
+        }
+      }
+      const fromColumn = skillAction(skillForStage(columnStage) || '')
+      if (fromColumn) return fromColumn
+    }
 
     // If PR is already created or task is in reviewed stage -> Action is "Merge"
     if (
@@ -381,8 +463,21 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
           </span>
         )}
 
-        {/* Toutes les actions vivent dans le menu (...) : la carte reste compacte */}
-        <div className="flex items-center gap-1 relative ml-auto" ref={menuRef}>
+        {/* Le terminal de la tâche est l'action la plus fréquente : elle mérite
+            son icône, le reste vit dans le menu (...) */}
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation()
+            setChatTask(task)
+          }}
+          className="ml-auto p-1 rounded-md text-[var(--text-muted)] hover:text-cyan-300 hover:bg-cyan-500/10 border border-transparent hover:border-cyan-500/30 transition-colors cursor-pointer"
+          title={`Ouvrir le terminal de ${task.key} dans le panneau latéral`}
+        >
+          <TerminalIcon size={14} />
+        </button>
+
+        <div className="flex items-center gap-1 relative" ref={menuRef}>
           {/* Menu (...) Button */}
           <button
             type="button"
