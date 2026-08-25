@@ -15,7 +15,7 @@ import {
 import { useApp } from '../context/AppContext'
 import { TaskCard } from './TaskCard'
 import { TaskFilters } from './TaskFilters'
-import type { Task, Status, WorkflowStage } from '../types'
+import type { Task, Status, WorkflowStage, Priority } from '../types'
 
 interface WorkflowColumnConfig {
   id: WorkflowStage
@@ -75,6 +75,13 @@ export const BoardView: React.FC = () => {
 
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null)
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null)
+
+  // Le plus urgent en haut de chaque colonne. Le glisser-déposer ne réordonne
+  // pas à l'intérieur d'une colonne — il change d'étape — donc trier ici
+  // n'écrase aucun ordre manuel.
+  const PRIORITY_RANK: Record<Priority, number> = { urgent: 4, high: 3, medium: 2, low: 1 }
+  const byPriorityDesc = (list: Task[]) =>
+    [...list].sort((a, b) => (PRIORITY_RANK[b.priority] || 0) - (PRIORITY_RANK[a.priority] || 0))
 
   // -------------------------------------------------------------
   // MODE 1: Workflow Labels Columns (Pipeline IA)
@@ -344,7 +351,7 @@ export const BoardView: React.FC = () => {
           {/* ========================================================= */}
           {boardGrouping === 'workflow' &&
             workflowColumns.map(col => {
-              const colTasks = tasks.filter(t => getTaskWorkflowStage(t) === col.id)
+              const colTasks = byPriorityDesc(tasks.filter(t => getTaskWorkflowStage(t) === col.id))
               const isOver = dragOverColumn === col.id
 
               // Collapsed Finished Column when hideDone is enabled
@@ -458,7 +465,7 @@ export const BoardView: React.FC = () => {
           {/* ========================================================= */}
           {boardGrouping === 'status' &&
             statusColumns.map(col => {
-              const colTasks = tasks.filter(t => isTaskInStatusColumn(t.status, col.id))
+              const colTasks = byPriorityDesc(tasks.filter(t => isTaskInStatusColumn(t.status, col.id)))
               const isOver = dragOverColumn === col.id
 
               // Collapsed Done Column when hideDone is enabled

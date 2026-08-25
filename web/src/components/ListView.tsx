@@ -60,7 +60,8 @@ export const ListView: React.FC = () => {
     }
   }
 
-  const [sortField, setSortField] = useState<'key' | 'title' | 'status' | 'priority' | 'dueDate' | 'createdAt'>('createdAt')
+  // Par défaut, le plus urgent en premier.
+  const [sortField, setSortField] = useState<'key' | 'title' | 'status' | 'priority' | 'dueDate' | 'createdAt'>('priority')
   const [sortAsc, setSortAsc] = useState(false)
   const [groupByStatus, setGroupByStatus] = useState(true)
 
@@ -108,37 +109,26 @@ export const ListView: React.FC = () => {
     { id: 'finished', label: t.status.finished, stageLabel: '#finished', stageColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', icon: <CheckCircle2 size={14} />, color: 'text-emerald-400' },
   ]
 
+  // Même pastille que sur les cartes du board : la couleur porte l'information,
+  // le libellé reste en infobulle. La colonne s'appelle déjà « Priorité ».
+  const PRIORITY_DOTS: Record<Priority, { color: string; label: string }> = {
+    urgent: { color: 'var(--status-danger)', label: t.priority.urgent },
+    high: { color: 'var(--status-warn)', label: t.priority.high },
+    medium: { color: 'var(--status-info)', label: t.priority.medium },
+    low: { color: 'var(--text-muted)', label: t.priority.low },
+  }
+
   const getPriorityBadge = (priority: Priority) => {
-    switch (priority) {
-      case 'urgent':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded">
-            <Flame size={12} className="text-rose-500" />
-            {t.priority.urgent}
-          </span>
-        )
-      case 'high':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded">
-            <AlertCircle size={12} className="text-amber-500" />
-            {t.priority.high}
-          </span>
-        )
-      case 'medium':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
-            {t.priority.medium}
-          </span>
-        )
-      case 'low':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 bg-slate-500/10 px-2 py-0.5 rounded">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
-            {t.priority.low}
-          </span>
-        )
-    }
+    const dot = PRIORITY_DOTS[priority]
+    if (!dot) return null
+    return (
+      <span className="inline-flex items-center" title={`Priorité : ${dot.label}`}>
+        <span
+          className="w-2.5 h-2.5 rounded-full shrink-0 ring-1 ring-black/10"
+          style={{ backgroundColor: dot.color }}
+        />
+      </span>
+    )
   }
 
   const getWorkflowAction = (task: Task) => {

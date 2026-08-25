@@ -25,25 +25,51 @@ export const TaskFilters: React.FC = () => {
     t,
   } = useApp()
 
+  // Même palette que les cartes et la vue liste, du plus urgent au moins urgent.
+  const PRIORITY_ORDER: Priority[] = ['urgent', 'high', 'medium', 'low']
+  const PRIORITY_DOTS: Record<Priority, { color: string; label: string }> = {
+    urgent: { color: 'var(--status-danger)', label: t.priority.urgent },
+    high: { color: 'var(--status-warn)', label: t.priority.high },
+    medium: { color: 'var(--status-info)', label: t.priority.medium },
+    low: { color: 'var(--text-muted)', label: t.priority.low },
+  }
+
   const selectClass =
     'text-[11px] font-medium bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border-color)] rounded-md px-2 py-1 focus:outline-none focus:border-[var(--accent-color)] cursor-pointer'
 
   return (
     <div className="flex items-center gap-2 shrink-0">
+      {/* Priorité en pastilles plutôt qu'en liste déroulante : un select natif ne
+          sait afficher que du texte, et la couleur est justement l'information.
+          Un clic filtre, un second clic sur la pastille active l'enlève. */}
       <div className="flex items-center gap-1">
         <Flame size={12} className={priorityFilter ? 'text-rose-400' : 'text-[var(--text-muted)]'} />
-        <select
-          value={priorityFilter || ''}
-          onChange={e => setPriorityFilter((e.target.value || null) as Priority | null)}
-          title="Filtrer par priorité"
-          className={selectClass}
-        >
-          <option value="">Toutes priorités</option>
-          <option value="urgent">{t.priority.urgent}</option>
-          <option value="high">{t.priority.high}</option>
-          <option value="medium">{t.priority.medium}</option>
-          <option value="low">{t.priority.low}</option>
-        </select>
+        <div className="flex items-center gap-1 px-1 py-0.5 rounded-md bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+          {PRIORITY_ORDER.map(level => {
+            const isActive = priorityFilter === level
+            return (
+              <button
+                key={level}
+                type="button"
+                onClick={() => setPriorityFilter(isActive ? null : level)}
+                title={isActive ? `Retirer le filtre ${PRIORITY_DOTS[level].label}` : `Filtrer : ${PRIORITY_DOTS[level].label}`}
+                aria-pressed={isActive}
+                className={`w-4 h-4 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                  isActive
+                    ? 'ring-2 ring-[var(--accent-color)] scale-110'
+                    : priorityFilter
+                      ? 'opacity-40 hover:opacity-100'
+                      : 'hover:scale-110'
+                }`}
+              >
+                <span
+                  className="w-2.5 h-2.5 rounded-full ring-1 ring-black/10"
+                  style={{ backgroundColor: PRIORITY_DOTS[level].color }}
+                />
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {taskFacets.sprints.length > 0 && (

@@ -231,13 +231,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch {}
   }, [])
   const [searchQuery, setSearchQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<Status | null>(null)
-  const [priorityFilter, setPriorityFilter] = useState<Priority | null>(null)
-  const [labelFilter, setLabelFilter] = useState<string | null>(null)
+  const [statusFilter, setStatusFilterState] = useState<Status | null>(null)
+  const [priorityFilter, setPriorityFilterState] = useState<Priority | null>(null)
+  const [labelFilter, setLabelFilterState] = useState<string | null>(null)
   const [taskFacets, setTaskFacets] = useState<{ sprints: string[]; teams: string[] }>({ sprints: [], teams: [] })
-  const [sprintFilter, setSprintFilter] = useState<string | null>(null)
-  const [teamFilter, setTeamFilter] = useState<string | null>(null)
-  const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null)
+  const [sprintFilter, setSprintFilterState] = useState<string | null>(null)
+  const [teamFilter, setTeamFilterState] = useState<string | null>(null)
+  const [assigneeFilter, setAssigneeFilterState] = useState<string | null>(null)
   const [sourceFilter, setSourceFilter] = useState<'all' | TaskSource>('all')
   const [parentFilter, setParentFilter] = useState<string | null>(null)
   const [dailyDigest, setDailyDigest] = useState<DailyDigest | null>(null)
@@ -291,6 +291,63 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       localStorage.setItem('taskacao_selected_project_id', id)
     } catch {}
   }, [])
+
+  // Les filtres sont mémorisés par projet : sprint et équipe n'ont de sens que
+  // dans le projet où ils ont été choisis, et on retrouve son contexte de
+  // travail en revenant sur un projet ou après un rechargement.
+  const filterStorageKey = (projectId: string) => `taskacao_filters_${projectId || 'all'}`
+
+  const readStoredFilters = (projectId: string): Record<string, string | null> => {
+    try {
+      return JSON.parse(localStorage.getItem(filterStorageKey(projectId)) || '{}') || {}
+    } catch {
+      return {}
+    }
+  }
+
+  // L'écriture se fait dans les setters et non dans un effet : au changement de
+  // projet, un effet verrait encore les filtres de l'ancien projet et les
+  // écrirait sous la clé du nouveau.
+  const persistFilter = useCallback((patch: Record<string, string | null>) => {
+    try {
+      const current = readStoredFilters(selectedProjectId)
+      const merged = { ...current, ...patch }
+      localStorage.setItem(filterStorageKey(selectedProjectId), JSON.stringify(merged))
+    } catch {
+      // stockage indisponible : les filtres restent simplement non mémorisés
+    }
+  }, [selectedProjectId])
+
+  const setStatusFilter = useCallback((value: Status | null) => {
+    setStatusFilterState(value)
+    persistFilter({ status: value })
+  }, [persistFilter])
+
+  const setPriorityFilter = useCallback((value: Priority | null) => {
+    setPriorityFilterState(value)
+    persistFilter({ priority: value })
+  }, [persistFilter])
+
+  const setLabelFilter = useCallback((value: string | null) => {
+    setLabelFilterState(value)
+    persistFilter({ label: value })
+  }, [persistFilter])
+
+  const setSprintFilter = useCallback((value: string | null) => {
+    setSprintFilterState(value)
+    persistFilter({ sprint: value })
+  }, [persistFilter])
+
+  const setTeamFilter = useCallback((value: string | null) => {
+    setTeamFilterState(value)
+    persistFilter({ team: value })
+  }, [persistFilter])
+
+  const setAssigneeFilter = useCallback((value: string | null) => {
+    setAssigneeFilterState(value)
+    persistFilter({ assignee: value })
+  }, [persistFilter])
+
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
 
@@ -515,21 +572,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [currentProject?.repoPath, settings.repoPath])
 
+  // Projet et filtres actifs, en un seul endroit : le rafraîchissement de fond
+  // après une synchro ou une skill doit interroger exactement la même liste,
+  // sinon il ramène tout le board et perd le contexte de travail.
+  const buildTaskQuery = useCallback(() => {
+    const params = new URLSearchParams()
+    if (selectedProjectId && selectedProjectId !== 'all') {
+      params.append('projectId', selectedProjectId)
+    }
+    if (searchQuery) params.append('q', searchQuery)
+    if (statusFilter) params.append('status', statusFilter)
+    if (priorityFilter) params.append('priority', priorityFilter)
+    if (labelFilter) params.append('label', labelFilter)
+    if (sprintFilter) params.append('sprint', sprintFilter)
+    if (teamFilter) params.append('team', teamFilter)
+    return params.toString()
+  }, [selectedProjectId, searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter])
+
   const fetchTasks = useCallback(async () => {
     try {
       setIsLoading(true)
-      const params = new URLSearchParams()
-      if (selectedProjectId && selectedProjectId !== 'all') {
-        params.append('projectId', selectedProjectId)
-      }
-      if (searchQuery) params.append('q', searchQuery)
-      if (statusFilter) params.append('status', statusFilter)
-      if (priorityFilter) params.append('priority', priorityFilter)
-      if (labelFilter) params.append('label', labelFilter)
-      if (sprintFilter) params.append('sprint', sprintFilter)
-      if (teamFilter) params.append('team', teamFilter)
-
-      const res = await fetch(`${API_BASE}/tasks?${params.toString()}`)
+      const res = await fetch(`${API_BASE}/tasks?${buildTaskQuery()}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: Task[] = await res.json()
       setTasks(data)
@@ -539,7 +602,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } finally {
       setIsLoading(false)
     }
-  }, [searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, selectedProjectId])
+  }, [buildTaskQuery])
+
+  // Restauration à l'ouverture et à chaque changement de projet. Les setters
+  // bruts sont utilisés ici : réécrire ce qu'on vient de lire serait inutile.
+  useEffect(() => {
+    const stored = readStoredFilters(selectedProjectId)
+    setStatusFilterState((stored.status as Status | null) ?? null)
+    setPriorityFilterState((stored.priority as Priority | null) ?? null)
+    setLabelFilterState(stored.label ?? null)
+    setSprintFilterState(stored.sprint ?? null)
+    setTeamFilterState(stored.team ?? null)
+    setAssigneeFilterState(stored.assignee ?? null)
+  }, [selectedProjectId])
 
   const fetchTaskFacets = useCallback(async () => {
     try {
@@ -559,6 +634,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     fetchTaskFacets()
   }, [fetchTaskFacets, tasks.length])
+
+  // Un filtre mémorisé peut ne plus exister : sprint clos, équipe renommée. Sans
+  // ce garde-fou, le tableau paraîtrait vide avec un sélecteur qui n'affiche
+  // rien de sélectionné.
+  useEffect(() => {
+    if (sprintFilter && taskFacets.sprints.length > 0 && !taskFacets.sprints.includes(sprintFilter)) {
+      setSprintFilter(null)
+    }
+    if (teamFilter && taskFacets.teams.length > 0 && !taskFacets.teams.includes(teamFilter)) {
+      setTeamFilter(null)
+    }
+  }, [taskFacets, sprintFilter, teamFilter, setSprintFilter, setTeamFilter])
 
   // Initial load on mount
   useEffect(() => {
@@ -650,7 +737,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           })
 
           if (needTaskRefresh) {
-            const taskRes = await fetch(`${API_BASE}/tasks`)
+            // Même requête que le chargement normal : sans les paramètres, ce
+            // rafraîchissement remplaçait la liste par tout le board, tous
+            // projets et tous filtres confondus.
+            const taskRes = await fetch(`${API_BASE}/tasks?${buildTaskQuery()}`)
             if (taskRes.ok) {
               const freshTasks = await taskRes.json()
               setTasks(freshTasks)
@@ -684,7 +774,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }, pollInterval)
 
     return () => clearInterval(interval)
-  }, [activeJobCount, selectedProjectId, t, addToast])
+  }, [activeJobCount, selectedProjectId, buildTaskQuery, t, addToast])
 
   const updateSettings = async (newSettings: Partial<UserSettings>) => {
     const merged = { ...settings, ...newSettings }
