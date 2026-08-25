@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Flame,
   Calendar,
@@ -46,8 +47,35 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     addToast,
   } = useApp()
 
+  // Le menu est rendu dans un portail avec un positionnement fixe : les colonnes
+  // du board défilent en overflow-y-auto, ce qui découpait un menu en position
+  // absolue et le faisait passer sous l'en-tête de colonne pour les cartes du
+  // haut. Le portail sort de ce conteneur, et l'ouverture bascule vers le bas
+  // quand il n'y a pas la place au-dessus.
   const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const menuNodeRef = useRef<HTMLDivElement>(null)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+
+  const MENU_WIDTH = 208
+  const MENU_MAX_HEIGHT = 320
+  const MENU_GAP = 6
+
+  const openMenuAt = () => {
+    const rect = menuButtonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const spaceAbove = rect.top
+    const spaceBelow = window.innerHeight - rect.bottom
+    // Un menu ancré à droite du bouton, recadré pour rester dans la fenêtre.
+    const left = Math.max(8, Math.min(rect.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8))
+    if (spaceAbove >= Math.min(MENU_MAX_HEIGHT, spaceBelow) && spaceAbove > 220) {
+      setMenuPos({ left, bottom: window.innerHeight - rect.top + MENU_GAP })
+    } else {
+      setMenuPos({ left, top: rect.bottom + MENU_GAP })
+    }
+    setIsMenuOpen(true)
+  }
 
   const taskProject = projects.find(p => p.id === task.projectId)
   const targetGithubRepo = (taskProject?.githubRepo || settings.githubRepo || '').replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
@@ -60,12 +88,23 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
   useEffect(() => {
     if (!isMenuOpen) return
     const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setIsMenuOpen(false)
-      }
+      const target = e.target as Node
+      // Le menu vit dans un portail : il faut tester les deux racines.
+      if (menuRef.current?.contains(target) || menuNodeRef.current?.contains(target)) return
+      setIsMenuOpen(false)
     }
+    // Le menu est en position fixe : plutôt que de le faire suivre le défilement,
+    // on le referme, ce qui reste prévisible et évite un menu qui flotte loin de
+    // sa carte.
+    const close = () => setIsMenuOpen(false)
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+    }
   }, [isMenuOpen])
 
   const latestActivity = React.useMemo(() => {
@@ -347,7 +386,15 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
           {/* Menu (...) Button */}
           <button
             type="button"
-            onClick={() => setIsMenuOpen(prev => !prev)}
+            ref={menuButtonRef}
+            onClick={e => {
+              e.stopPropagation()
+              if (isMenuOpen) {
+                setIsMenuOpen(false)
+              } else {
+                openMenuAt()
+              }
+            }}
             className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] border border-transparent hover:border-[var(--border-color)]/60 transition-colors cursor-pointer"
             title="Actions"
           >
@@ -355,8 +402,18 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
           </button>
 
           {/* Contextual Dropdown Menu */}
-          {isMenuOpen && (
-            <div className="absolute right-0 bottom-full mb-1 w-52 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-xl p-1 z-50 animate-in fade-in-0 zoom-in-95 duration-100 text-xs">
+          {isMenuOpen && menuPos && createPortal(
+            <div
+              ref={menuNodeRef}
+              style={{
+                position: 'fixed',
+                left: menuPos.left,
+                top: menuPos.top,
+                bottom: menuPos.bottom,
+                width: MENU_WIDTH,
+                maxHeight: MENU_MAX_HEIGHT,
+              }}
+              className="overflow-y-auto rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl p-1 z-[100] animate-in fade-in-0 zoom-in-95 duration-100 text-xs">
               {/* Action de l'étape courante du workflow (nom du skill) */}
               {workflowAction && (
                 <>
@@ -503,7 +560,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
                 <Trash2 size={12} />
                 <span>Supprimer la tâche</span>
               </button>
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       </div>
