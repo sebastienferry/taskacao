@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"tasks/internal/models"
+	"tasks/internal/runner"
 )
 
 // CompleteInteractiveStep closes a workflow step that ran in a TTY session.
@@ -59,6 +60,19 @@ func (d *DB) CompleteInteractiveStep(taskID, skillID, note string) (*models.Task
 		trackerStatusTarget = TrackerStatusForStage(proj, stageLabel)
 	}
 
+	// Une session interactive peut avoir ouvert la MR : on la rattache au ticket
+	// à la confirmation, sinon elle resterait dans le terminal.
+	mrURL := ""
+	if task.PrURL == nil || strings.TrimSpace(*task.PrURL) == "" {
+		branchForMR := ""
+		if task.BranchName != nil {
+			branchForMR = *task.BranchName
+		}
+		if url, _ := d.runner.MergeRequestForStep(d.ResolveTaskRepoPath(task), branchForMR, note); url != "" {
+			mrURL = url
+		}
+	}
+
 	newLabels := SetWorkflowLabel(task.Labels, stageLabel)
 	nowT := time.Now()
 	now := nowT.Format("2006-01-02 15:04:05")
@@ -70,10 +84,18 @@ func (d *DB) CompleteInteractiveStep(taskID, skillID, note string) (*models.Task
 
 	d.mu.Lock()
 	labelsJSON, _ := json.Marshal(newLabels)
-	_, execErr := d.conn.Exec(`
-		UPDATE tasks SET status = ?, labels = ?, tracker_status = ?, updated_at = ?
-		WHERE id = ?
-	`, string(newStatus), string(labelsJSON), trackerStatus, now, task.ID)
+	var execErr error
+	if mrURL != "" {
+		_, execErr = d.conn.Exec(`
+			UPDATE tasks SET status = ?, labels = ?, tracker_status = ?, pr_url = ?, updated_at = ?
+			WHERE id = ?
+		`, string(newStatus), string(labelsJSON), trackerStatus, mrURL, now, task.ID)
+	} else {
+		_, execErr = d.conn.Exec(`
+			UPDATE tasks SET status = ?, labels = ?, tracker_status = ?, updated_at = ?
+			WHERE id = ?
+		`, string(newStatus), string(labelsJSON), trackerStatus, now, task.ID)
+	}
 	d.mu.Unlock()
 	if execErr != nil {
 		return nil, nil, execErr
@@ -81,6 +103,9 @@ func (d *DB) CompleteInteractiveStep(taskID, skillID, note string) (*models.Task
 
 	task.Status = newStatus
 	task.Labels = newLabels
+	if mrURL != "" {
+		task.PrURL = &mrURL
+	}
 	task.TrackerStatus = trackerStatus
 	task.UpdatedAt = nowT
 
@@ -92,15 +117,18 @@ func (d *DB) CompleteInteractiveStep(taskID, skillID, note string) (*models.Task
 		}
 	}
 	act := models.TaskActivity{
-		ID:          uuid.New().String(),
-		TaskID:      task.ID,
-		SkillID:     skillID,
-		SkillName:   skillName,
-		Action:      fmt.Sprintf("%s confirmée en session interactive", skillName),
-		Status:      "completed",
-		Summary:     fmt.Sprintf("Session TTY clôturée par l'utilisateur ➔ Étape: %s [Label: #%s]", newStatus, stageLabel),
-		Output:      note,
-		Steps:       []string{"Session interactive menée dans le terminal de la tâche", "Étape confirmée par l'utilisateur"},
+		ID:        uuid.New().String(),
+		TaskID:    task.ID,
+		SkillID:   skillID,
+		SkillName: skillName,
+		Action:    fmt.Sprintf("%s confirmée en session interactive", skillName),
+		Status:    "completed",
+		Summary:   fmt.Sprintf("Session TTY clôturée par l'utilisateur ➔ Étape: %s [Label: #%s]", newStatus, stageLabel),
+		Output:    note,
+		Steps: append(
+			[]string{"Session interactive menée dans le terminal de la tâche", "Étape confirmée par l'utilisateur"},
+			runner.MergeRequestStep(mrURL, "session interactive"),
+		),
 		StartedAt:   &nowT,
 		CompletedAt: &nowT,
 		CreatedAt:   nowT,

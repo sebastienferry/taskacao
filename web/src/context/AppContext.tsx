@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest } from '../types'
+import type { EpicRequiredField, SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 import { resolveAccentAttribute } from '../lib/accents'
 
@@ -44,6 +44,9 @@ interface AppContextType {
   setPriorityFilter: (priority: Priority | null) => void
   labelFilter: string | null
   taskFacets: { sprints: string[]; teams: string[] }
+  /** N'afficher que les tickets épinglés : le retour rapide aux chantiers en cours. */
+  pinnedOnly: boolean
+  setPinnedOnly: (value: boolean) => void
   sprintFilter: string | null
   setSprintFilter: (sprint: string | null) => void
   teamFilter: string | null
@@ -131,8 +134,10 @@ interface AppContextType {
   pushPendingHorizons: (projectId: string) => Promise<number>
   setTaskEpic: (taskId: string, epicKey: string) => Promise<Task | null>
   createStoryUnderEpic: (projectId: string, epicKey: string, title: string) => Promise<string>
-  createEpic: (projectId: string, title: string, horizon?: EpicHorizon | '') => Promise<EpicMeta | null>
-  moveTasksToEpic: (projectId: string, taskIds: string[], targetEpicKey: string, newEpicTitle?: string) => Promise<string>
+  createEpic: (projectId: string, title: string, horizon?: EpicHorizon | '', fields?: Record<string, string>) => Promise<EpicMeta | null>
+  /** Champs que le tracker impose pour créer un épic sur ce projet. */
+  fetchEpicRequiredFields: (projectId: string) => Promise<EpicRequiredField[]>
+  moveTasksToEpic: (projectId: string, taskIds: string[], targetEpicKey: string, newEpicTitle?: string, fields?: Record<string, string>) => Promise<string>
   advanceTask: (taskId: string, auto?: boolean) => Promise<{ mode: string; skillId?: string; label?: string } | null>
   // Pas interactif en cours : la tâche dont la session TTY attend d'être clôturée.
   pendingInteractive: { taskId: string; taskKey: string; skillId: string; label: string } | null
@@ -282,6 +287,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [labelFilter, setLabelFilterState] = useState<string | null>(null)
   const [taskFacets, setTaskFacets] = useState<{ sprints: string[]; teams: string[] }>({ sprints: [], teams: [] })
   const [sprintFilter, setSprintFilterState] = useState<string | null>(null)
+  const [pinnedOnly, setPinnedOnlyState] = useState<boolean>(false)
   const [teamFilter, setTeamFilterState] = useState<string | null>(null)
   const [assigneeFilter, setAssigneeFilterState] = useState<string | null>(null)
   const [sourceFilter, setSourceFilter] = useState<'all' | TaskSource>('all')
@@ -424,6 +430,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setTeamFilter = useCallback((value: string | null) => {
     setTeamFilterState(value)
     persistFilter({ team: value })
+  }, [persistFilter])
+
+  const setPinnedOnly = useCallback((value: boolean) => {
+    setPinnedOnlyState(value)
+    persistFilter({ pinnedOnly: value ? '1' : null })
   }, [persistFilter])
 
   const setAssigneeFilter = useCallback((value: string | null) => {
@@ -669,8 +680,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (labelFilter) params.append('label', labelFilter)
     if (sprintFilter) params.append('sprint', sprintFilter)
     if (teamFilter) params.append('team', teamFilter)
+    if (pinnedOnly) params.append('pinned', '1')
     return params.toString()
-  }, [selectedProjectId, searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter])
+  }, [selectedProjectId, searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, pinnedOnly])
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -697,6 +709,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setSprintFilterState(stored.sprint ?? null)
     setTeamFilterState(stored.team ?? null)
     setAssigneeFilterState(stored.assignee ?? null)
+    setPinnedOnlyState(stored.pinnedOnly === '1')
   }, [selectedProjectId])
 
   const fetchTaskFacets = useCallback(async () => {
@@ -1451,12 +1464,38 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  const createEpic = async (projectId: string, title: string, horizon?: EpicHorizon | ''): Promise<EpicMeta | null> => {
+  const fetchEpicRequiredFields = async (projectId: string): Promise<EpicRequiredField[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/fields`)
+      if (!res.ok) return []
+      const data = await res.json()
+      if (!Array.isArray(data)) return []
+      // La forme est vérifiée plutôt que supposée : un serveur plus ancien laisse
+      // une autre route attraper cette URL et répond une liste d'épics, qui
+      // produirait un sélecteur bâti sur des données qui n'en sont pas.
+      return data.filter(
+        (f: unknown): f is EpicRequiredField =>
+          Boolean(f) &&
+          typeof (f as EpicRequiredField).id === 'string' &&
+          typeof (f as EpicRequiredField).name === 'string' &&
+          Array.isArray((f as EpicRequiredField).options)
+      )
+    } catch {
+      return []
+    }
+  }
+
+  const createEpic = async (
+    projectId: string,
+    title: string,
+    horizon?: EpicHorizon | '',
+    fields?: Record<string, string>
+  ): Promise<EpicMeta | null> => {
     try {
       const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, horizon: horizon || '' }),
+        body: JSON.stringify({ title, horizon: horizon || '', fields: fields || {} }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Création refusée')
@@ -1474,13 +1513,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     projectId: string,
     taskIds: string[],
     targetEpicKey: string,
-    newEpicTitle?: string
+    newEpicTitle?: string,
+    fields?: Record<string, string>
   ): Promise<string> => {
     try {
       const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/move`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskIds, targetEpicKey, newEpicTitle: newEpicTitle || '' }),
+        body: JSON.stringify({ taskIds, targetEpicKey, newEpicTitle: newEpicTitle || '', fields: fields || {} }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Déplacement refusé')
@@ -1650,6 +1690,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Épinglage refusé')
       await fetchPins()
+      // Le filtre « épinglés » lit la base : la liste doit suivre l'épingle qu'on
+      // vient de poser ou de retirer.
+      if (pinnedOnly) fetchTasks()
       await fetchTasks()
     } catch (err: any) {
       addToast({ type: 'error', title: 'Épinglage impossible', description: err.message })
@@ -2543,6 +2586,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setPriorityFilter,
         labelFilter,
         taskFacets,
+        pinnedOnly,
+        setPinnedOnly,
         sprintFilter,
         setSprintFilter,
         teamFilter,
@@ -2614,6 +2659,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setTaskEpic,
         createStoryUnderEpic,
         createEpic,
+        fetchEpicRequiredFields,
         moveTasksToEpic,
         advanceTask,
         pendingInteractive,

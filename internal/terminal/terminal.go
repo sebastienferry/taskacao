@@ -214,8 +214,10 @@ func (m *Manager) ListSessions() []SessionInfo {
 		})
 	}
 
+	// Ordre alphabétique stable, et non par dernière activité : une liste qui se
+	// réordonne à chaque octet écrit dans un terminal est impossible à viser.
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].LastActiveAt.After(out[j].LastActiveAt)
+		return out[i].ID < out[j].ID
 	})
 	return out
 }

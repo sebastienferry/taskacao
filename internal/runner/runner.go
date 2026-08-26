@@ -1602,19 +1602,25 @@ var jiraKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9]+-[0-9]+`)
 // can be moved into it. Distinct from CreateJiraChildIssue: an epic has no
 // parent, and its type must be Epic.
 func (r *Runner) CreateJiraEpic(projectKey string, repoPath string, title string) (string, error) {
-	return r.CreateJiraEpicWith(nil, "", projectKey, repoPath, title)
+	return r.CreateJiraEpicWith(nil, "", projectKey, repoPath, title, nil)
 }
 
 // CreateJiraEpicWith creates an epic through the REST API when a token is
 // available, and falls back to acli otherwise.
-func (r *Runner) CreateJiraEpicWith(settings *models.Settings, trackerURL, projectKey, repoPath, title string) (string, error) {
+func (r *Runner) CreateJiraEpicWith(settings *models.Settings, trackerURL, projectKey, repoPath, title string, extraFields map[string]string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	if client := NewJiraRESTClient(settings, trackerURL); client != nil {
-		key, err := client.CreateIssue(ctx, projectKey, "Epic", title, "")
+		key, err := client.CreateIssue(ctx, projectKey, "Epic", title, "", extraFields)
 		if err == nil {
 			return key, nil
+		}
+		// Un champ imposé par l'instance manque : acli ne sait pas écrire de
+		// champ personnalisé, le repli ne servirait à rien, autant remonter le
+		// motif de Jira tel quel.
+		if strings.Contains(err.Error(), "is required") {
+			return "", err
 		}
 		log.Printf("[jira] création REST de l'épic refusée (%v), repli sur acli", err)
 	}
@@ -3167,4 +3173,16 @@ func collapseSpaces(s string) string {
 		s = strings.ReplaceAll(s, "  ", " ")
 	}
 	return strings.TrimSpace(s)
+}
+
+// EpicRequiredFields lists what the instance demands on top of the summary to
+// create an epic, so the interface can ask instead of guessing.
+func (r *Runner) EpicRequiredFields(settings *models.Settings, trackerURL, projectKey string) ([]JiraRequiredField, error) {
+	client := NewJiraRESTClient(settings, trackerURL)
+	if client == nil {
+		return nil, fmt.Errorf("jeton d'API Jira absent : les champs obligatoires ne peuvent pas être lus")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return client.RequiredCreateFields(ctx, projectKey, "Epic")
 }

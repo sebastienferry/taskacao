@@ -551,3 +551,10 @@ export interface SkillEditorEntry {
   repoContent?: string
   repoPath?: string
 }
+
+/** Champ que le tracker impose à la création d'un épic, avec ses valeurs permises. */
+export interface EpicRequiredField {
+  id: string
+  name: string
+  options: { id: string; value: string }[]
+}

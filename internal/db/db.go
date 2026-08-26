@@ -570,7 +570,10 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 	return facets, nil
 }
 
-func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team string) ([]models.Task, error) {
+// GetTasks lists the tasks matching the filters. pinnedOnly restricts to the
+// pinned tickets, which is the fastest way back to the two or three chantiers in
+// flight when the board carries three hundred.
+func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team string, pinnedOnly bool) ([]models.Task, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -580,6 +583,10 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 	if projectID != "" && projectID != "all" {
 		conditions = append(conditions, "(project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))")
 		args = append(args, projectID, projectID, projectID)
+	}
+
+	if pinnedOnly {
+		conditions = append(conditions, "pinned = 1")
 	}
 
 	if query != "" {
@@ -2994,11 +3001,28 @@ func (d *DB) processSkillJob(job SkillJob) {
 			}
 		}
 
-		if hasRemote && settings.GithubRepo != "" {
-			prURL := fmt.Sprintf("https://github.com/%s/pull/%s", settings.GithubRepo, strings.TrimPrefix(task.Key, "FRE-"))
-			task.PrURL = &prURL
+		if hasRemote {
+			// L'URL est lue, jamais fabriquée : la forge sait quelle MR porte la
+			// branche, et le compte-rendu de l'agent sert de second recours. La
+			// version précédente collait le numéro du ticket dans une URL GitHub,
+			// ce qui donnait un lien faux sur tout dépôt GitLab.
+			branchForMR := ""
+			if task.BranchName != nil {
+				branchForMR = *task.BranchName
+			}
+			mrURL, mrSource := d.runner.MergeRequestForStep(executionDir, branchForMR, realAIOutput)
+			if mrURL == "" && mainRepoPath != executionDir {
+				mrURL, mrSource = d.runner.MergeRequestForStep(mainRepoPath, branchForMR, realAIOutput)
+			}
+			runnerSteps = append(runnerSteps, runner.MergeRequestStep(mrURL, mrSource))
+
 			action = fmt.Sprintf("Revue & Pull Request préparées avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
-			summary = fmt.Sprintf("PR prête pour revue : %s ➔ Étape: À fermer [Label: Reviewed]", prURL)
+			if mrURL != "" {
+				task.PrURL = &mrURL
+				summary = fmt.Sprintf("MR prête pour revue : %s ➔ Étape: À fermer [Label: Reviewed]", mrURL)
+			} else {
+				summary = "Revue terminée, aucune MR détectée sur la branche ➔ Étape: À fermer [Label: Reviewed]"
+			}
 		} else {
 			// No remote configured: Perform safe local git merge into main/master in the main repository
 			baseBranch := "main"
@@ -3045,6 +3069,20 @@ func (d *DB) processSkillJob(job SkillJob) {
 		task.Labels = SetWorkflowLabel(task.Labels, targetLabel)
 		action = fmt.Sprintf("Auto-Pilot exécuté avec %s ➔ %s", strings.ToUpper(settings.AIProvider), task.Status)
 		summary = fmt.Sprintf("Statut mis à jour vers '%s' [Label: %s]", task.Status, targetLabel)
+	}
+
+	// Une MR peut naître à une autre étape que create_pr : un agent qui finit une
+	// implémentation la propose parfois de lui-même. On la rattache si le ticket
+	// n'en a pas encore, sans jamais écraser celle qui est déjà là.
+	if task.PrURL == nil || strings.TrimSpace(*task.PrURL) == "" {
+		branchForMR := ""
+		if task.BranchName != nil {
+			branchForMR = *task.BranchName
+		}
+		if mrURL, mrSource := d.runner.MergeRequestForStep(executionDir, branchForMR, realAIOutput); mrURL != "" {
+			task.PrURL = &mrURL
+			steps = append(steps, runner.MergeRequestStep(mrURL, mrSource))
+		}
 	}
 
 	task.UpdatedAt = completedTime

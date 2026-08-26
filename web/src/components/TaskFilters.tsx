@@ -1,5 +1,5 @@
 import React from 'react'
-import { Flame, Calendar, Layers } from 'lucide-react'
+import { Flame, Calendar, Layers, Pin } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Priority } from '../types'
 
@@ -22,6 +22,9 @@ export const TaskFilters: React.FC = () => {
     setSprintFilter,
     teamFilter,
     setTeamFilter,
+    pinnedOnly,
+    setPinnedOnly,
+    pinnedTasks,
     t,
   } = useApp()
 
@@ -39,6 +42,33 @@ export const TaskFilters: React.FC = () => {
 
   return (
     <div className="flex items-center gap-2 shrink-0">
+      {/* Épinglés : le retour immédiat aux chantiers en cours quand le board en
+          porte trois cents. Le filtre est tenu par le serveur, sur la colonne
+          indexée, donc il vaut aussi pour la recherche et les autres filtres. */}
+      <button
+        type="button"
+        onClick={() => setPinnedOnly(!pinnedOnly)}
+        disabled={!pinnedOnly && pinnedTasks.length === 0}
+        className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+          pinnedOnly
+            ? 'accent-text bg-[var(--accent-light)] border-[var(--accent-color)]/50 font-bold'
+            : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+        }`}
+        title={
+          pinnedTasks.length === 0
+            ? "Aucun ticket épinglé pour l'instant"
+            : pinnedOnly
+              ? 'Afficher tous les tickets'
+              : `N'afficher que les ${pinnedTasks.length} ticket(s) épinglé(s)`
+        }
+      >
+        <Pin size={12} />
+        <span>Épinglés</span>
+        {pinnedTasks.length > 0 && (
+          <span className="font-mono text-[10px] opacity-70">{pinnedTasks.length}</span>
+        )}
+      </button>
+
       {/* Priorité en pastilles plutôt qu'en liste déroulante : un select natif ne
           sait afficher que du texte, et la couleur est justement l'information.
           Un clic filtre, un second clic sur la pastille active l'enlève. */}

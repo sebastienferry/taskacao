@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -743,7 +744,7 @@ func (c *JiraRESTClient) SearchProjectIssues(ctx context.Context, projectKey str
 // La création passait par acli, qui sort en code zéro même quand Jira refuse :
 // le motif du refus était perdu. Le REST renvoie le corps d'erreur de Jira, ce
 // qui rend un champ obligatoire manquant immédiatement lisible.
-func (c *JiraRESTClient) CreateIssue(ctx context.Context, projectKey, issueType, summary, parentKey string) (string, error) {
+func (c *JiraRESTClient) CreateIssue(ctx context.Context, projectKey, issueType, summary, parentKey string, extraFields map[string]string) (string, error) {
 	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
 	summary = strings.TrimSpace(summary)
 	if projectKey == "" {
@@ -765,6 +766,17 @@ func (c *JiraRESTClient) CreateIssue(ctx context.Context, projectKey, issueType,
 		fields["parent"] = map[string]string{"key": strings.ToUpper(strings.TrimSpace(parentKey))}
 	}
 
+	// Champs imposés par l'instance, passés par identifiant d'option : c'est la
+	// forme que Jira accepte pour une liste de choix.
+	for id, optionID := range extraFields {
+		id = strings.TrimSpace(id)
+		optionID = strings.TrimSpace(optionID)
+		if id == "" || optionID == "" {
+			continue
+		}
+		fields[id] = map[string]string{"id": optionID}
+	}
+
 	body, err := c.post(ctx, "/rest/api/3/issue", map[string]interface{}{"fields": fields})
 	if err != nil {
 		return "", err
@@ -776,4 +788,89 @@ func (c *JiraRESTClient) CreateIssue(ctx context.Context, projectKey, issueType,
 		return "", fmt.Errorf("clé du ticket créé introuvable dans la réponse de Jira")
 	}
 	return created.Key, nil
+}
+
+// JiraFieldOption is one allowed value of a mandatory creation field.
+type JiraFieldOption struct {
+	ID    string `json:"id"`
+	Value string `json:"value"`
+}
+
+// JiraRequiredField is a field an instance makes mandatory on creation, beyond
+// the universal project, type and summary.
+type JiraRequiredField struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Options []JiraFieldOption `json:"options"`
+}
+
+// RequiredCreateFields lists the mandatory creation fields of an issue type that
+// Taskacao cannot guess.
+//
+// Une instance ajoute ce qu'elle veut : PE impose « Epic Type » sur ses épics, et
+// la création échouait en 400 sans que rien ne le dise. Les champs à valeur par
+// défaut sont écartés, Jira les remplit lui-même.
+func (c *JiraRESTClient) RequiredCreateFields(ctx context.Context, projectKey, issueType string) ([]JiraRequiredField, error) {
+	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
+	if projectKey == "" {
+		return nil, fmt.Errorf("clé de projet Jira manquante")
+	}
+	if strings.TrimSpace(issueType) == "" {
+		issueType = "Epic"
+	}
+
+	query := url.Values{}
+	query.Set("projectKeys", projectKey)
+	query.Set("issuetypeNames", issueType)
+	query.Set("expand", "projects.issuetypes.fields")
+
+	body, err := c.get(ctx, "/rest/api/3/issue/createmeta", query)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload struct {
+		Projects []struct {
+			IssueTypes []struct {
+				Fields map[string]struct {
+					Name            string `json:"name"`
+					Required        bool   `json:"required"`
+					HasDefaultValue bool   `json:"hasDefaultValue"`
+					AllowedValues   []struct {
+						ID    string `json:"id"`
+						Value string `json:"value"`
+						Name  string `json:"name"`
+					} `json:"allowedValues"`
+				} `json:"fields"`
+			} `json:"issuetypes"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("métadonnées de création illisibles: %w", err)
+	}
+
+	// Ces trois là sont toujours fournis par l'appelant.
+	known := map[string]bool{"project": true, "issuetype": true, "summary": true, "parent": true}
+
+	out := []JiraRequiredField{}
+	for _, proj := range payload.Projects {
+		for _, it := range proj.IssueTypes {
+			for id, f := range it.Fields {
+				if !f.Required || known[id] || f.HasDefaultValue {
+					continue
+				}
+				field := JiraRequiredField{ID: id, Name: f.Name}
+				for _, av := range f.AllowedValues {
+					label := av.Value
+					if label == "" {
+						label = av.Name
+					}
+					field.Options = append(field.Options, JiraFieldOption{ID: av.ID, Value: label})
+				}
+				out = append(out, field)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
