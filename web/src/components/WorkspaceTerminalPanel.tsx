@@ -40,6 +40,7 @@ export const WorkspaceTerminalPanel: React.FC = () => {
     resetTerminalSession,
     terminalSessionOverride,
     openTerminalSession,
+    setSelectedTask,
     pendingInteractive,
     confirmInteractiveStep,
     dismissInteractiveStep,
@@ -50,7 +51,6 @@ export const WorkspaceTerminalPanel: React.FC = () => {
   const [width, setWidth] = useState<number>(readStoredWidth)
   const [isResizing, setIsResizing] = useState(false)
   const [sessions, setSessions] = useState<TerminalSession[]>([])
-  const [showSessions, setShowSessions] = useState(false)
   // Plein écran : le panneau ancré couvre toute la fenêtre. Le terminal de la
   // fiche tâche avait déjà ce bouton, le panneau ne l'avait jamais eu, alors
   // qu'il est devenu la maison du CLI.
@@ -64,16 +64,15 @@ export const WorkspaceTerminalPanel: React.FC = () => {
   // La liste n'est relue qu'à l'ouverture du volet : c'est une information de
   // diagnostic, pas un flux à rafraîchir en continu.
   useEffect(() => {
-    // Rafraîchi quand la liste est dépliée, mais aussi dès qu'une console de
-    // tâche est affichée : c'est cette liste qui dit si un agent tourne déjà
-    // dedans, et donc l'état du bouton de démarrage.
-    if (!showSessions && !chatTask) return
+    // Interrogée tant que le panneau est ouvert : c'est cette liste qui alimente
+    // le sélecteur de session et qui dit si un agent tourne déjà dans la console
+    // affichée, donc l'état du bouton de démarrage.
     listTerminalSessions().then(setSessions)
     const timer = window.setInterval(() => {
       listTerminalSessions().then(setSessions)
     }, 5000)
     return () => window.clearInterval(timer)
-  }, [showSessions, chatTask?.id, listTerminalSessions])
+  }, [isTerminalPanelOpen, chatTask?.id, listTerminalSessions])
 
   useEffect(() => {
     if (!isFullscreen) return
@@ -131,6 +130,12 @@ export const WorkspaceTerminalPanel: React.FC = () => {
       ? `CLI · ${currentProject.name}`
       : 'CLI · Workspace'
 
+  // La session réellement montrée : celle d'une tâche, celle ouverte par
+  // identifiant, ou celle du projet à défaut. C'est la valeur du sélecteur.
+  const displayedSessionId = chatTask
+    ? `task-${chatTask.id}`
+    : terminalSessionOverride || sessionId
+
   const sessionLabel = (id: string): string => {
     if (id === 'global-workspace') return 'Workspace'
     if (id.startsWith('project-')) {
@@ -143,6 +148,84 @@ export const WorkspaceTerminalPanel: React.FC = () => {
     }
     return id
   }
+
+  // Trié sur le libellé affiché, pas sur l'ordre reçu : l'ordre doit être celui
+  // qu'on lit, et il ne doit pas changer parce qu'une console a écrit une ligne.
+  const sortedSessions = [...sessions].sort((a, b) =>
+    sessionLabel(a.id).localeCompare(sessionLabel(b.id), undefined, { numeric: true })
+  )
+
+  const sessionsList = isFullscreen ? (
+          <div
+            className={`shrink-0 overflow-y-auto rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] divide-y divide-[var(--border-color)]/60 ${
+              isFullscreen ? 'w-60 h-full' : 'mt-2 max-h-36'
+            }`}
+          >
+            {sessions.length === 0 ? (
+              <p className="p-2 text-[10px] text-[var(--text-muted)]">Aucune session active.</p>
+            ) : (
+              sortedSessions.map(sess => (
+                <div
+                  key={sess.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    // La ligne entière ouvre la session : viser un lien de trois
+                    // lettres pour changer de console n'avait aucun intérêt.
+                    const task = tasks.find(t => `task-${t.id}` === sess.id)
+                    if (task) setChatTask(task)
+                    else openTerminalSession(sess.id)
+                  }}
+                  onKeyDown={e => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return
+                    e.preventDefault()
+                    const task = tasks.find(t => `task-${t.id}` === sess.id)
+                    if (task) setChatTask(task)
+                    else openTerminalSession(sess.id)
+                  }}
+                  className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-[var(--bg-tertiary)] transition-colors"
+                  title="Afficher cette session"
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${sess.clients > 0 ? 'bg-emerald-400' : 'bg-[var(--text-muted)]'}`}
+                    title={sess.clients > 0 ? `${sess.clients} vue(s) attachée(s)` : 'Aucune vue attachée, le shell tourne toujours'} />
+                  <div className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5 text-[10px] font-bold text-[var(--text-primary)] truncate">
+                      <span className="truncate">{sessionLabel(sess.id)}</span>
+                      {sess.agentRunning && (
+                        <span
+                          className="shrink-0 text-[8px] font-mono px-1 rounded accent-text bg-[var(--accent-light)]"
+                          title="Un agent tourne dans cette session"
+                        >
+                          agent
+                        </span>
+                      )}
+                      {chatTask && sess.id === `task-${chatTask.id}` && (
+                        <span className="shrink-0 text-[8px] font-mono px-1 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
+                          affichée
+                        </span>
+                      )}
+                    </span>
+                    <span className="block text-[9px] font-mono text-[var(--text-muted)] truncate" title={sess.cwd}>
+                      {sess.cwd}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async e => {
+                      e.stopPropagation()
+                      await resetTerminalSession(sess.id)
+                      listTerminalSessions().then(setSessions)
+                    }}
+                    className="p-0.5 rounded text-[var(--text-muted)] hover:text-rose-400 cursor-pointer shrink-0"
+                    title="Terminer cette session"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+  ) : null
 
   return (
     <aside
@@ -165,85 +248,72 @@ export const WorkspaceTerminalPanel: React.FC = () => {
       )}
 
       <div className="flex-1 min-w-0 p-2 flex flex-col gap-2">
-        {/* Barre des sessions : ce qui tourne encore, et de quoi y revenir. */}
+        {/* Sessions : un sélecteur en haut quand la place manque, la liste en
+            colonne à gauche seulement en plein écran. Une liste dépliée dans un
+            panneau étroit mangeait la hauteur du terminal. */}
         <div className="shrink-0 flex items-center gap-1.5 text-[10px]">
-          <button
-            type="button"
-            onClick={() => setShowSessions(v => !v)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-md font-bold border transition-colors cursor-pointer ${
-              showSessions
-                ? 'bg-[var(--accent-light)] accent-text border-[var(--accent-color)]/40'
-                : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
-            }`}
-            title="Sessions PTY en cours"
-          >
-            <Layers size={11} />
-            <span>Sessions</span>
-          </button>
+          {!isFullscreen && sessions.length > 0 && (
+            <>
+              <Layers size={11} className="text-[var(--text-muted)] shrink-0" />
+              <select
+                value={displayedSessionId}
+                onChange={e => {
+                  const id = e.target.value
+                  const task = tasks.find(t => `task-${t.id}` === id)
+                  if (task) setChatTask(task)
+                  else openTerminalSession(id)
+                }}
+                className="min-w-0 flex-1 px-1.5 py-1 rounded-md font-bold bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border-color)] focus:outline-none focus:border-[var(--accent-color)] cursor-pointer"
+                title="Session affichée dans ce panneau"
+              >
+                {sessions.every(sess => sess.id !== displayedSessionId) && (
+                  <option value={displayedSessionId}>{sessionLabel(displayedSessionId)}</option>
+                )}
+                {sortedSessions.map(sess => (
+                  <option key={sess.id} value={sess.id}>
+                    {sessionLabel(sess.id)}
+                    {sess.agentRunning ? ' · agent' : ''}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={async () => {
+                  await resetTerminalSession(displayedSessionId)
+                  listTerminalSessions().then(setSessions)
+                }}
+                className="p-1 rounded-md text-[var(--text-muted)] hover:text-rose-400 border border-transparent hover:border-[var(--border-color)] cursor-pointer shrink-0"
+                title="Terminer la session affichée"
+              >
+                <X size={11} />
+              </button>
+            </>
+          )}
 
           {chatTask && (
-            <button
-              type="button"
-              onClick={() => setChatTask(null)}
-              className="flex items-center gap-1 px-2 py-1 rounded-md font-bold bg-cyan-500/15 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/25 transition-colors cursor-pointer"
-              title="Revenir au terminal du projet"
-            >
-              <X size={10} />
-              <span>{chatTask.key}</span>
-            </button>
+            <span className="flex items-center gap-1 pl-2 pr-1 py-1 rounded-md font-bold bg-cyan-500/15 text-cyan-300 border border-cyan-500/40">
+              {/* La clé ouvre la fiche, la croix revient au terminal du projet.
+                  Les deux étaient sur le même bouton : cliquer la clé fermait la
+                  console de la tâche, ce qui est l'inverse de l'attendu. */}
+              <button
+                type="button"
+                onClick={() => setSelectedTask(chatTask)}
+                className="hover:underline cursor-pointer"
+                title={`Ouvrir la fiche de ${chatTask.key}`}
+              >
+                {chatTask.key}
+              </button>
+              <button
+                type="button"
+                onClick={() => setChatTask(null)}
+                className="p-0.5 rounded hover:bg-cyan-500/25 cursor-pointer"
+                title="Revenir au terminal du projet"
+              >
+                <X size={10} />
+              </button>
+            </span>
           )}
         </div>
-
-        {showSessions && (
-          <div className="shrink-0 max-h-40 overflow-y-auto rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] divide-y divide-[var(--border-color)]/60">
-            {sessions.length === 0 ? (
-              <p className="p-2 text-[10px] text-[var(--text-muted)]">Aucune session active.</p>
-            ) : (
-              sessions.map(sess => (
-                <div key={sess.id} className="flex items-center gap-2 px-2 py-1.5">
-                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${sess.clients > 0 ? 'bg-emerald-400' : 'bg-[var(--text-muted)]'}`}
-                    title={sess.clients > 0 ? `${sess.clients} vue(s) attachée(s)` : 'Aucune vue attachée, le shell tourne toujours'} />
-                  <div className="min-w-0 flex-1">
-                    <span className="block text-[10px] font-bold text-[var(--text-primary)] truncate">
-                      {sessionLabel(sess.id)}
-                    </span>
-                    <span className="block text-[9px] font-mono text-[var(--text-muted)] truncate" title={sess.cwd}>
-                      {sess.cwd}
-                    </span>
-                  </div>
-                  {(
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // La tâche n'est pas toujours dans la liste courante :
-                        // filtres, autre projet, lot non chargé. On ouvre alors
-                        // la session par son identifiant, ce qui marche toujours.
-                        const task = tasks.find(t => `task-${t.id}` === sess.id)
-                        if (task) setChatTask(task)
-                        else openTerminalSession(sess.id)
-                      }}
-                      className="px-1.5 py-0.5 rounded text-[9px] font-bold text-[var(--accent-color)] hover:underline cursor-pointer shrink-0"
-                      title="Afficher cette session"
-                    >
-                      Ouvrir
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await resetTerminalSession(sess.id)
-                      listTerminalSessions().then(setSessions)
-                    }}
-                    className="p-0.5 rounded text-[var(--text-muted)] hover:text-rose-400 cursor-pointer shrink-0"
-                    title="Terminer cette session"
-                  >
-                    <X size={10} />
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
 
         {pendingInteractive && chatTask && pendingInteractive.taskId === chatTask.id && (
           <InteractiveStepBar
@@ -254,7 +324,13 @@ export const WorkspaceTerminalPanel: React.FC = () => {
           />
         )}
 
-        <div className="flex-1 min-h-0">
+        {/* En plein écran, les sessions passent à gauche en colonne : la largeur
+            ne manque plus, et la liste se lit comme une barre latérale. Sinon
+            elles restent en pied, sous le terminal. */}
+        <div className={`flex-1 min-h-0 flex gap-2 ${isFullscreen ? 'flex-row' : 'flex-col'}`}>
+          {sessionsList}
+
+          <div className="flex-1 min-w-0 min-h-0">
           {chatTask ? (
             <InteractiveTerminal
               key={`task-${chatTask.id}`}
@@ -286,6 +362,8 @@ export const WorkspaceTerminalPanel: React.FC = () => {
               onClose={() => setIsTerminalPanelOpen(false)}
             />
           )}
+          </div>
+
         </div>
       </div>
     </aside>

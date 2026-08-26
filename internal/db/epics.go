@@ -669,7 +669,7 @@ func (d *DB) CreateStoryUnderEpic(projectID string, epicKey string, title string
 // CreateEpic creates the epic in the tracker and records it locally so it shows
 // up in the roadmap immediately, before any sync — that is what makes it usable
 // as a target for a split.
-func (d *DB) CreateEpic(projectID string, title string, horizon string) (*models.EpicMeta, error) {
+func (d *DB) CreateEpic(projectID string, title string, horizon string, fields map[string]string) (*models.EpicMeta, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return nil, fmt.Errorf("intitulé de l'épic manquant")
@@ -691,7 +691,7 @@ func (d *DB) CreateEpic(projectID string, title string, horizon string) (*models
 	}
 
 	settings, _ := d.GetSettings()
-	key, err := d.runner.CreateJiraEpicWith(settings, proj.TrackerUrl, projectKey, projectRepoPath(proj), title)
+	key, err := d.runner.CreateJiraEpicWith(settings, proj.TrackerUrl, projectKey, projectRepoPath(proj), title, fields)
 	if err != nil {
 		return nil, err
 	}
@@ -722,7 +722,7 @@ func (d *DB) CreateEpic(projectID string, title string, horizon string) (*models
 // MoveTasksToEpic moves a batch of tickets to another epic, creating that epic
 // first when only a title is given. This is the actual "split an epic" gesture:
 // pick the stories that belong elsewhere and cut them out in one move.
-func (d *DB) MoveTasksToEpic(projectID string, taskIDs []string, targetEpicKey string, newEpicTitle string) (string, int, []string, error) {
+func (d *DB) MoveTasksToEpic(projectID string, taskIDs []string, targetEpicKey string, newEpicTitle string, fields map[string]string) (string, int, []string, error) {
 	if len(taskIDs) == 0 {
 		return "", 0, nil, fmt.Errorf("aucun ticket sélectionné")
 	}
@@ -732,7 +732,7 @@ func (d *DB) MoveTasksToEpic(projectID string, taskIDs []string, targetEpicKey s
 		if strings.TrimSpace(newEpicTitle) == "" {
 			return "", 0, nil, fmt.Errorf("épic cible ou intitulé du nouvel épic obligatoire")
 		}
-		created, err := d.CreateEpic(projectID, newEpicTitle, "")
+		created, err := d.CreateEpic(projectID, newEpicTitle, "", fields)
 		if err != nil {
 			return "", 0, nil, err
 		}
@@ -774,4 +774,25 @@ func (d *DB) appendActivityStep(activityID string, step string) {
 		return
 	}
 	_, _ = d.conn.Exec("UPDATE task_activities SET steps = ? WHERE id = ?", string(payload), activityID)
+}
+
+// EpicRequiredFields lists the creation fields the tracker imposes for an epic on
+// this project.
+func (d *DB) EpicRequiredFields(projectID string) ([]runner.JiraRequiredField, error) {
+	proj, err := d.GetProjectByID(projectID)
+	if err != nil || proj == nil {
+		return nil, fmt.Errorf("projet non trouvé")
+	}
+	if proj.IssueTracker != "jira" {
+		return []runner.JiraRequiredField{}, nil
+	}
+
+	projectKey := jiraProjectKeyFor(proj)
+	if projectKey == "" {
+		if settings, _ := d.GetSettings(); settings != nil {
+			projectKey = settings.JiraProject
+		}
+	}
+	settings, _ := d.GetSettings()
+	return d.runner.EpicRequiredFields(settings, proj.TrackerUrl, projectKey)
 }

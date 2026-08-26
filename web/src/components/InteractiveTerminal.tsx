@@ -55,7 +55,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   onToggleExpand,
   onClose,
 }) => {
-  const { settings, openInEditor, projects, skills, startTaskAgent, injectTaskSkill } = useApp()
+  const { settings, openInEditor, projects, skills, startTaskAgent, injectTaskSkill, setSelectedTask } = useApp()
   const terminalContainerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -299,7 +299,24 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
         <div className="flex items-center gap-2 overflow-hidden">
           <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-300 font-semibold">
             <TerminalIcon size={14} className="text-indigo-400" />
-            <span>{label || 'ZSH Session'}</span>
+            {task ? (
+              <>
+                {/* La clé ouvre la fiche du ticket : c'est le geste attendu quand
+                    on lit un compte-rendu dans la console et qu'on veut le
+                    contexte. */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedTask(task)}
+                  className="text-indigo-300 hover:text-indigo-200 hover:underline cursor-pointer"
+                  title={`Ouvrir la fiche de ${task.key}`}
+                >
+                  {task.key}
+                </button>
+                <span className="text-slate-500 font-normal truncate max-w-[180px]">{task.title}</span>
+              </>
+            ) : (
+              <span>{label || 'ZSH Session'}</span>
+            )}
           </div>
 
           <span className="text-slate-600">•</span>

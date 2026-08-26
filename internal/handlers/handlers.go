@@ -436,14 +436,15 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 	// a split needs as a target
 	if len(parts) >= 3 && parts[1] == "epics" && parts[2] == "create" && r.Method == http.MethodPost {
 		var req struct {
-			Title   string `json:"title"`
-			Horizon string `json:"horizon"`
+			Title   string            `json:"title"`
+			Horizon string            `json:"horizon"`
+			Fields  map[string]string `json:"fields"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
 			return
 		}
-		meta, err := h.db.CreateEpic(id, req.Title, req.Horizon)
+		meta, err := h.db.CreateEpic(id, req.Title, req.Horizon, req.Fields)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -452,19 +453,33 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sub-action: /api/projects/{id}/epics/fields — ce que l'instance impose pour
+	// créer un épic, au delà du titre. PE exige « Epic Type » et la création
+	// échouait en 400 sans que l'interface puisse le demander.
+	if len(parts) >= 3 && parts[1] == "epics" && parts[2] == "fields" && r.Method == http.MethodGet {
+		fields, err := h.db.EpicRequiredFields(id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, fields)
+		return
+	}
+
 	// Sub-action: /api/projects/{id}/epics/move — cut stories out of an epic into
 	// another one, created on the fly when only a title is given
 	if len(parts) >= 3 && parts[1] == "epics" && parts[2] == "move" && r.Method == http.MethodPost {
 		var req struct {
-			TaskIDs       []string `json:"taskIds"`
-			TargetEpicKey string   `json:"targetEpicKey"`
-			NewEpicTitle  string   `json:"newEpicTitle"`
+			TaskIDs       []string          `json:"taskIds"`
+			TargetEpicKey string            `json:"targetEpicKey"`
+			NewEpicTitle  string            `json:"newEpicTitle"`
+			Fields        map[string]string `json:"fields"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
 			return
 		}
-		target, moved, failures, err := h.db.MoveTasksToEpic(id, req.TaskIDs, req.TargetEpicKey, req.NewEpicTitle)
+		target, moved, failures, err := h.db.MoveTasksToEpic(id, req.TaskIDs, req.TargetEpicKey, req.NewEpicTitle, req.Fields)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -938,8 +953,11 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 		projectID := r.URL.Query().Get("projectId")
 		sprint := r.URL.Query().Get("sprint")
 		team := r.URL.Query().Get("team")
+		// pinned=1 : les seuls tickets épinglés, le raccourci vers les chantiers
+		// en cours quand le board en porte trois cents.
+		pinnedOnly := r.URL.Query().Get("pinned") == "1" || r.URL.Query().Get("pinned") == "true"
 
-		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team)
+		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team, pinnedOnly)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -1515,7 +1533,7 @@ func (h *Handler) HandleSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tasks, _ := h.db.GetTasks("", "", "", "", "", "", "")
+	tasks, _ := h.db.GetTasks("", "", "", "", "", "", "", false)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Database reset & demo tasks reseeded successfully",
 		"tasks":   tasks,

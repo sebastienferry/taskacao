@@ -34,6 +34,8 @@ export const Header: React.FC = () => {
     setPriorityFilter,
     labelFilter,
     setLabelFilter,
+    pinnedOnly,
+    setPinnedOnly,
     sprintFilter,
     setSprintFilter,
     teamFilter,
@@ -51,7 +53,7 @@ export const Header: React.FC = () => {
 
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  const hasActiveFilters = Boolean(statusFilter || priorityFilter || labelFilter || sprintFilter || teamFilter || assigneeFilter || searchQuery)
+  const hasActiveFilters = Boolean(statusFilter || priorityFilter || labelFilter || sprintFilter || teamFilter || assigneeFilter || searchQuery || pinnedOnly)
 
   return (
     <header
@@ -127,6 +129,14 @@ export const Header: React.FC = () => {
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shrink-0">
               #{labelFilter}
               <button onClick={() => setLabelFilter(null)} className="hover:opacity-75 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {pinnedOnly && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold shrink-0 accent-text bg-[var(--accent-light)] border border-[var(--accent-color)]/40">
+              Épinglés
+              <button onClick={() => setPinnedOnly(false)} className="hover:opacity-75 cursor-pointer">
                 <X size={11} />
               </button>
             </span>
