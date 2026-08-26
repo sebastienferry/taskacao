@@ -74,6 +74,10 @@ func main() {
 
 	h := handlers.NewHandler(database)
 
+	// Les pas du workflow tournent dans la session PTY de leur tâche : visibles
+	// pendant qu'ils travaillent, ouvrables d'un clic, et interrogeables.
+	database.SetTerminalRunner(h.TerminalRunner())
+
 	mux := http.NewServeMux()
 
 	// API Routes
@@ -98,6 +102,7 @@ func main() {
 	mux.HandleFunc("/api/projects/", h.HandleProjectDetail)
 	mux.HandleFunc("/api/tasks", h.HandleTasks)
 	mux.HandleFunc("/api/tasks/facets", h.HandleTaskFacets)
+	mux.HandleFunc("/api/tasks/pins", h.HandleTaskPins)
 	mux.HandleFunc("/api/tasks/", h.HandleTaskDetail)
 	mux.HandleFunc("/api/activities", h.HandleActivities)
 	mux.HandleFunc("/api/activities/", h.HandleActivityDetail)
@@ -108,6 +113,7 @@ func main() {
 
 	// Interactive PTY Terminal Routes & WebSocket
 	mux.HandleFunc("/ws/terminal", h.HandleTerminalWs)
+	mux.HandleFunc("/api/terminal/sessions", h.HandleTerminalSessions)
 	mux.HandleFunc("/api/terminal/send", h.HandleTerminalSend)
 	mux.HandleFunc("/api/terminal/reset", h.HandleTerminalReset)
 
@@ -122,7 +128,16 @@ func main() {
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Route API non trouvée: %s", r.URL.Path)})
 				return
 			}
+			// index.html must never be cached: it is the file that names the
+			// hashed bundle, so a stale copy keeps serving the previous build and
+			// the app looks unchanged after a rebuild. The assets themselves are
+			// content-hashed, so they can be cached hard.
 			path := filepath.Join(webDistDir, r.URL.Path)
+			if strings.HasPrefix(r.URL.Path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-store, must-revalidate")
+			}
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				http.ServeFile(w, r, filepath.Join(webDistDir, "index.html"))
 				return

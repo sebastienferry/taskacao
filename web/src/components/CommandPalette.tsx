@@ -391,12 +391,19 @@ export const CommandPalette: React.FC = () => {
     s.keywords?.some(k => k.toLowerCase().includes(qLower))
   )
 
-  const matchingTasks = tasks.filter(t =>
-    t.key.toLowerCase().includes(query.toLowerCase()) ||
-    t.title.toLowerCase().includes(query.toLowerCase()) ||
-    (t.description && t.description.toLowerCase().includes(query.toLowerCase())) ||
-    (t.labels && t.labels.some(l => l.toLowerCase().includes(query.toLowerCase())))
-  ).slice(0, 8)
+  // Même portée que la recherche serveur, parent compris : taper une clé d'épic
+  // doit sortir ses enfants ici aussi.
+  const matchingTasks = tasks.filter(t => {
+    const q = query.toLowerCase()
+    return (
+      t.key.toLowerCase().includes(q) ||
+      t.title.toLowerCase().includes(q) ||
+      (t.description && t.description.toLowerCase().includes(q)) ||
+      (t.labels && t.labels.some(l => l.toLowerCase().includes(q))) ||
+      (t.parentKey && t.parentKey.toLowerCase().includes(q)) ||
+      (t.parentTitle && t.parentTitle.toLowerCase().includes(q))
+    )
+  }).slice(0, 8)
 
   const allItems: { type: 'action' | 'skill' | 'task'; data: any }[] = [
     ...filteredGeneral.map(a => ({ type: 'action' as const, data: a })),

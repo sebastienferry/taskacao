@@ -10,6 +10,8 @@ import {
   HelpCircle,
   ShieldCheck,
   ArrowUpDown,
+  ChevronsDown,
+  ChevronDown,
   Sparkles,
   Loader2,
   GitBranch,
@@ -21,6 +23,7 @@ import {
   MessageSquare,
   Code2,
   Layers,
+  Pin,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { TaskFilters } from './TaskFilters'
@@ -29,21 +32,20 @@ import type { Task, Status, Priority } from '../types'
 export const ListView: React.FC = () => {
   const {
     tasks,
+    advanceTask,
+    launchInteractiveStep,
+    isPinned,
+    togglePin,
     setSelectedTask,
     setChatTask,
     setDiffTask,
     updateTask,
     deleteTask,
-    moveTaskWorkflowStage,
-    runSkill,
-    isSkillRunning,
-    runningSkillId,
     activities,
     hideDone,
     toggleHideDone,
     openInEditor,
     settings,
-    skillLabel,
     t,
   } = useApp()
 
@@ -60,7 +62,11 @@ export const ListView: React.FC = () => {
     }
   }
 
-  const [sortField, setSortField] = useState<'key' | 'title' | 'status' | 'priority' | 'dueDate' | 'createdAt'>('createdAt')
+  // Par défaut, le plus urgent en premier.
+  const [sortField, setSortField] = useState<'key' | 'title' | 'status' | 'priority' | 'dueDate' | 'createdAt'>('priority')
+  // Avance en cours, par tâche : deux lignes ne doivent pas se bloquer l'une
+  // l'autre.
+  const [advancing, setAdvancing] = useState<Record<string, 'step' | 'auto'>>({})
   const [sortAsc, setSortAsc] = useState(false)
   const [groupByStatus, setGroupByStatus] = useState(true)
 
@@ -72,6 +78,20 @@ export const ListView: React.FC = () => {
       // Priority reads best highest-first; the other columns read best ascending.
       setSortAsc(field !== 'priority')
     }
+  }
+
+  const handleAdvance = async (task: Task, auto: boolean) => {
+    if (advancing[task.id]) return
+    setAdvancing(prev => ({ ...prev, [task.id]: auto ? 'auto' : 'step' }))
+    const result = await advanceTask(task.id, auto)
+    if (result?.mode === 'interactive' && result.skillId) {
+      await launchInteractiveStep(task, result.skillId, result.label || 'Étape interactive')
+    }
+    setAdvancing(prev => {
+      const next = { ...prev }
+      delete next[task.id]
+      return next
+    })
   }
 
   const sortedTasks = [...tasks].sort((a, b) => {
@@ -108,133 +128,32 @@ export const ListView: React.FC = () => {
     { id: 'finished', label: t.status.finished, stageLabel: '#finished', stageColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', icon: <CheckCircle2 size={14} />, color: 'text-emerald-400' },
   ]
 
-  const getPriorityBadge = (priority: Priority) => {
-    switch (priority) {
-      case 'urgent':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded">
-            <Flame size={12} className="text-rose-500" />
-            {t.priority.urgent}
-          </span>
-        )
-      case 'high':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded">
-            <AlertCircle size={12} className="text-amber-500" />
-            {t.priority.high}
-          </span>
-        )
-      case 'medium':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
-            {t.priority.medium}
-          </span>
-        )
-      case 'low':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 bg-slate-500/10 px-2 py-0.5 rounded">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
-            {t.priority.low}
-          </span>
-        )
-    }
+  // Même pastille que sur les cartes du board : la couleur porte l'information,
+  // le libellé reste en infobulle. La colonne s'appelle déjà « Priorité ».
+  const PRIORITY_DOTS: Record<Priority, { color: string; label: string }> = {
+    urgent: { color: 'var(--status-danger)', label: t.priority.urgent },
+    high: { color: 'var(--status-warn)', label: t.priority.high },
+    medium: { color: 'var(--status-info)', label: t.priority.medium },
+    low: { color: 'var(--text-muted)', label: t.priority.low },
   }
 
-  const getWorkflowAction = (task: Task) => {
-    const isFinished = task.status === 'finished' || task.status === 'done' || task.labels?.some(l => l.toLowerCase() === 'finished')
-    if (isFinished) return null
-
-    if (
-      task.status === 'to_close' ||
-      task.labels?.some(l => l.toLowerCase() === 'reviewed') ||
-      Boolean(task.prUrl && (task.status === 'to_test' || task.status === 'to_validate'))
-    ) {
-      return {
-        id: 'merge',
-        label: 'Merge',
-        icon: <CheckCircle2 size={11} className="text-emerald-400" />,
-        className: 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/25',
-        title: 'Fusionner la Pull Request / branche et finaliser la tâche (#finished)',
-        action: async (e: React.MouseEvent) => {
-          e.stopPropagation()
-          await moveTaskWorkflowStage(task.id, 'finished')
-        },
-      }
-    }
-
-    if (
-      task.status === 'to_test' ||
-      task.status === 'to_validate' ||
-      task.labels?.some(l => l.toLowerCase() === 'implemented')
-    ) {
-      return {
-        id: 'create_pr',
-        label: skillLabel('create_pr', 'Créer PR'),
-        icon: <GitPullRequest size={11} className="text-purple-400" />,
-        className: 'bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 border border-purple-500/25',
-        title: 'Lancer la revue de code et générer la Pull Request',
-        action: async (e: React.MouseEvent) => {
-          e.stopPropagation()
-          if (isSkillRunning) return
-          await runSkill(task.id, 'create_pr')
-        },
-      }
-    }
-
-    if (
-      task.status === 'to_implement' ||
-      task.status === 'in_progress' ||
-      task.labels?.some(l => l.toLowerCase() === 'specified')
-    ) {
-      return {
-        id: 'implement',
-        label: skillLabel('implement', 'Coder'),
-        icon: <Flame size={11} className="text-indigo-400" />,
-        className: 'bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 border border-indigo-500/25',
-        title: "Lancer l'implémentation du code par l'agent IA",
-        action: async (e: React.MouseEvent) => {
-          e.stopPropagation()
-          if (isSkillRunning) return
-          await runSkill(task.id, 'implement')
-        },
-      }
-    }
-
-    if (
-      task.status === 'to_specify' ||
-      task.labels?.some(l => l.toLowerCase() === 'clarified')
-    ) {
-      return {
-        id: 'specify',
-        label: skillLabel('specify', 'Spécifier'),
-        icon: <FileCode size={11} className="text-blue-400" />,
-        className: 'bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 border border-blue-500/25',
-        title: 'Rédiger la spécification technique (Spec Kit / OpenSpec)',
-        action: async (e: React.MouseEvent) => {
-          e.stopPropagation()
-          if (isSkillRunning) return
-          await runSkill(task.id, 'specify')
-        },
-      }
-    }
-
-    return {
-      id: 'clarify',
-      label: skillLabel('clarify', 'Clarifier'),
-      icon: <Sparkles size={11} className="text-amber-400" />,
-      className: 'bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 border border-amber-500/25',
-      title: 'Clarifier les exigences et cadrer la tâche',
-      action: async (e: React.MouseEvent) => {
-        e.stopPropagation()
-        if (isSkillRunning) return
-        await runSkill(task.id, 'clarify')
-      },
-    }
+  const getPriorityBadge = (priority: Priority) => {
+    const dot = PRIORITY_DOTS[priority]
+    if (!dot) return null
+    return (
+      <span className="inline-flex items-center" title={`Priorité : ${dot.label}`}>
+        <span
+          className="w-2.5 h-2.5 rounded-full shrink-0 ring-1 ring-black/10"
+          style={{ backgroundColor: dot.color }}
+        />
+      </span>
+    )
   }
 
   const renderTaskRow = (task: Task) => {
-    const action = getWorkflowAction(task)
+    // Plus de pas possible sur une tâche terminée : les chevrons sont éteints
+    // plutôt que de renvoyer une erreur au clic.
+    const isFinished = task.status === 'finished' || task.status === 'done'
     const taskActs = activities?.filter(a => a.taskId === task.id) || []
     const latestActivity = taskActs.find(a => a.status === 'running' || a.status === 'queued' || a.status === 'pending') || taskActs[0]
 
@@ -371,6 +290,18 @@ export const ListView: React.FC = () => {
         <td className="py-2.5 px-3 whitespace-nowrap" onClick={e => e.stopPropagation()}>
           <div className="flex items-center gap-1.5">
             <button
+              onClick={() => togglePin(task.id)}
+              className={`inline-flex items-center justify-center p-1 rounded-md border transition-colors cursor-pointer ${
+                isPinned(task.id)
+                  ? 'accent-text bg-[var(--accent-light)] border-[var(--accent-color)]/40'
+                  : 'text-[var(--text-muted)] hover:text-[var(--accent-color)] border-transparent hover:border-[var(--accent-color)]/30'
+              }`}
+              title={isPinned(task.id) ? 'Retirer de la barre des épinglés' : 'Épingler pour basculer vite dessus'}
+            >
+              <Pin size={12} />
+            </button>
+
+            <button
               onClick={() => setChatTask(task)}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold text-white bg-[var(--accent-color)] shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
               title="💬 Discuter de cette tâche avec l'agent Copilot"
@@ -379,37 +310,27 @@ export const ListView: React.FC = () => {
               <span>Discuter</span>
             </button>
 
-            {(task.status === 'to_clarify' || task.status === 'backlog') && (
-              <button
-                onClick={() => runSkill(task.id, 'implement')}
-                disabled={isSkillRunning}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold text-white bg-linear-to-r from-blue-600 to-indigo-600 shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer"
-                title="Passer directement au code (Implémentation)"
-              >
-                <Flame size={10} className="text-amber-300" />
-                <span>Code</span>
-              </button>
-            )}
+            {/* Un pas de workflow, puis la chaîne autonome. Chevrons vers le
+                bas : dans un tableau, l'avancement se lit verticalement. */}
+            <button
+              onClick={() => handleAdvance(task, false)}
+              disabled={Boolean(advancing[task.id]) || isFinished}
+              className="inline-flex items-center justify-center p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border border-transparent hover:border-[var(--accent-color)]/30 transition-colors cursor-pointer disabled:opacity-40"
+              title="Avancer d'un pas dans le workflow agentique"
+            >
+              {advancing[task.id] === 'step' ? <Loader2 size={12} className="animate-spin" /> : <ChevronDown size={12} />}
+            </button>
 
-            {action ? (
-              <button
-                onClick={action.action}
-                disabled={isSkillRunning}
-                className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer ${action.className}`}
-                title={action.title}
-              >
-                {isSkillRunning && runningSkillId === action.id ? (
-                  <Loader2 size={10} className="animate-spin" />
-                ) : (
-                  <>
-                    {action.icon}
-                    <span>{action.label}</span>
-                  </>
-                )}
-              </button>
-            ) : (
-              <span className="text-[10px] text-emerald-400 font-medium">Terminé</span>
-            )}
+            <button
+              onClick={() => handleAdvance(task, true)}
+              disabled={Boolean(advancing[task.id]) || isFinished}
+              className="inline-flex items-center justify-center p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border border-transparent hover:border-[var(--accent-color)]/30 transition-colors cursor-pointer disabled:opacity-40"
+              title="Avancer en autonomie jusqu'à l'étape de revue"
+            >
+              {advancing[task.id] === 'auto' ? <Loader2 size={12} className="animate-spin" /> : <ChevronsDown size={12} />}
+            </button>
+
+            {isFinished && <span className="text-[10px] text-emerald-400 font-medium">Terminé</span>}
           </div>
         </td>
 

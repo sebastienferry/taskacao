@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"tasks/internal/db"
 	"tasks/internal/models"
@@ -428,6 +432,207 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		id = parts[0]
 	}
 
+	// Sub-action: /api/projects/{id}/epics/create — create an epic, the container
+	// a split needs as a target
+	if len(parts) >= 3 && parts[1] == "epics" && parts[2] == "create" && r.Method == http.MethodPost {
+		var req struct {
+			Title   string `json:"title"`
+			Horizon string `json:"horizon"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		meta, err := h.db.CreateEpic(id, req.Title, req.Horizon)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, meta)
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/epics/move — cut stories out of an epic into
+	// another one, created on the fly when only a title is given
+	if len(parts) >= 3 && parts[1] == "epics" && parts[2] == "move" && r.Method == http.MethodPost {
+		var req struct {
+			TaskIDs       []string `json:"taskIds"`
+			TargetEpicKey string   `json:"targetEpicKey"`
+			NewEpicTitle  string   `json:"newEpicTitle"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		target, moved, failures, err := h.db.MoveTasksToEpic(id, req.TaskIDs, req.TargetEpicKey, req.NewEpicTitle)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"targetEpicKey": target, "moved": moved, "failures": failures})
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/epics/push-horizons — mirror the locally
+	// classified epics whose Jira label is missing or stale
+	if len(parts) >= 3 && parts[1] == "epics" && parts[2] == "push-horizons" {
+		switch r.Method {
+		case http.MethodGet:
+			pending, err := h.db.PendingHorizonPushes(id)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, pending)
+			return
+		case http.MethodPost:
+			pushed, failures, err := h.db.PushPendingHorizons(id)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"pushed": pushed, "failures": failures})
+			return
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+	}
+
+	// Sub-action: /api/projects/{id}/epics/{key}/story — turn a shaping todo into
+	// a real story under that epic
+	if len(parts) >= 4 && parts[1] == "epics" && parts[3] == "story" && r.Method == http.MethodPost {
+		epicKey, err := url.PathUnescape(parts[2])
+		if err != nil {
+			epicKey = parts[2]
+		}
+		var req struct {
+			TodoID string `json:"todoId"`
+			Title  string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		// Un titre libre crée une story à la volée ; un todoId transforme une
+		// ligne de cadrage. Les deux atterrissent sous le même épic.
+		if strings.TrimSpace(req.TodoID) == "" {
+			task, err := h.db.CreateStoryUnderEpic(id, epicKey, req.Title)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"task": task, "storyKey": task.Key})
+			return
+		}
+		meta, key, err := h.db.CreateStoryFromEpicTodo(id, epicKey, req.TodoID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"epic": meta, "storyKey": key})
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/epics — the epic metadata Taskacao owns:
+	// horizon (NOW / NEXT / LATER), shaping notes and todos.
+	if len(parts) >= 2 && parts[1] == "epics" {
+		switch r.Method {
+		case http.MethodGet:
+			epics, err := h.db.GetProjectEpics(id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, epics)
+			return
+		case http.MethodPost, http.MethodPut, http.MethodPatch:
+			var req struct {
+				Key         string             `json:"key"`
+				Horizon     *string            `json:"horizon,omitempty"`
+				Description *string            `json:"description,omitempty"`
+				Todos       *[]models.EpicTodo `json:"todos,omitempty"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid epic payload: "+err.Error())
+				return
+			}
+			// La clé peut venir du chemin (/epics/PE-1065) ou du corps.
+			key := req.Key
+			if len(parts) >= 3 && parts[2] != "" {
+				if decoded, err := url.PathUnescape(parts[2]); err == nil {
+					key = decoded
+				}
+			}
+			saved, err := h.db.SaveEpicMeta(id, key, req.Horizon, req.Description, req.Todos)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			// L'horizon est reflété en label sur l'épic dans Jira, mais la
+			// poussée part en arrière-plan : faire attendre le clic rendait le
+			// triage pénible, une seconde et demie par épic. Un échec n'est pas
+			// perdu pour autant — l'épic réapparaît dans « à pousser vers Jira »,
+			// qui compare l'état local aux labels réels.
+			labelNote := ""
+			if req.Horizon != nil {
+				labelNote = "label roadmap en cours de poussée"
+				horizon := saved.Horizon
+				projectID := id
+				epicKey := key
+				go func() {
+					if _, err := h.db.PushEpicHorizonLabel(projectID, epicKey, horizon); err != nil {
+						log.Printf("[epics] label roadmap non posé sur %s: %v", epicKey, err)
+					}
+				}()
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"epic": saved, "labelNote": labelNote})
+			return
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+	}
+
+	// Sub-action: /api/projects/{id}/boards — the tracker's boards, for the picker
+	if len(parts) >= 2 && parts[1] == "boards" && r.Method == http.MethodGet {
+		boards, err := h.db.ListProjectTrackerBoards(id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, boards)
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/board-columns — import the columns of a
+	// tracker board as a starting point for the project's own columns
+	if len(parts) >= 2 && parts[1] == "board-columns" && r.Method == http.MethodPost {
+		var req struct {
+			BoardID string `json:"boardId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		proj, err := h.db.ImportProjectBoardColumns(id, req.BoardID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, proj)
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/tracker-statuses — the statuses actually
+	// seen on this project's tickets, to assign them to columns
+	if len(parts) >= 2 && parts[1] == "tracker-statuses" && r.Method == http.MethodGet {
+		statuses, err := h.db.GetProjectTrackerStatuses(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, statuses)
+		return
+	}
+
 	// Sub-action: /api/projects/{id}/skills-status, /api/projects/{id}/skills, or query repoPath
 	if (len(parts) >= 2 && (parts[1] == "skills-status" || parts[1] == "skills")) || id == "skills-status" || id == "skills" {
 		target := id
@@ -442,6 +647,70 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, status)
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/skill-editor
+	//   GET                          → the five workflow skills, content included
+	//   PUT    /{skillId}            → save the edited content and regenerate the files
+	//   POST   /{skillId}/reset      → back to the built-in template
+	//   POST   /{skillId}/import     → take the file on disk as the new content
+	if len(parts) >= 2 && parts[1] == "skill-editor" {
+		skillID := ""
+		if len(parts) >= 3 {
+			skillID = parts[2]
+		}
+		sub := ""
+		if len(parts) >= 4 {
+			sub = parts[3]
+		}
+
+		switch {
+		case r.Method == http.MethodGet && skillID == "":
+			entries, err := h.db.ListProjectSkillEditor(id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, entries)
+			return
+
+		case r.Method == http.MethodPut && skillID != "":
+			var payload struct {
+				Content string `json:"content"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+				return
+			}
+			entry, err := h.db.SaveProjectSkillContent(id, skillID, payload.Content)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, entry)
+			return
+
+		case r.Method == http.MethodPost && skillID != "" && sub == "reset":
+			entry, err := h.db.ResetProjectSkillContent(id, skillID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, entry)
+			return
+
+		case r.Method == http.MethodPost && skillID != "" && sub == "import":
+			entry, err := h.db.ImportProjectSkillFromRepo(id, skillID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, entry)
+			return
+		}
+
+		writeError(w, http.StatusMethodNotAllowed, "Action non supportée sur skill-editor")
 		return
 	}
 
@@ -757,6 +1026,30 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/worktree"):
 		subAction = "worktree"
 		id = strings.TrimSuffix(rawPath, "/worktree")
+	case strings.HasSuffix(rawPath, "/pin"):
+		subAction = "pin"
+		id = strings.TrimSuffix(rawPath, "/pin")
+	case strings.HasSuffix(rawPath, "/tty-agent"):
+		subAction = "tty-agent"
+		id = strings.TrimSuffix(rawPath, "/tty-agent")
+	case strings.HasSuffix(rawPath, "/tty-skill"):
+		subAction = "tty-skill"
+		id = strings.TrimSuffix(rawPath, "/tty-skill")
+	case strings.HasSuffix(rawPath, "/advance/confirm"):
+		subAction = "advance-confirm"
+		id = strings.TrimSuffix(rawPath, "/advance/confirm")
+	case strings.HasSuffix(rawPath, "/advance"):
+		subAction = "advance"
+		id = strings.TrimSuffix(rawPath, "/advance")
+	case strings.HasSuffix(rawPath, "/epic"):
+		subAction = "epic"
+		id = strings.TrimSuffix(rawPath, "/epic")
+	case strings.HasSuffix(rawPath, "/comments"):
+		subAction = "comments"
+		id = strings.TrimSuffix(rawPath, "/comments")
+	case strings.HasSuffix(rawPath, "/tracker-status"):
+		subAction = "tracker-status"
+		id = strings.TrimSuffix(rawPath, "/tracker-status")
 	case strings.HasSuffix(rawPath, "/messages"):
 		subAction = "messages"
 		id = strings.TrimSuffix(rawPath, "/messages")
@@ -898,6 +1191,208 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			"branch":   branch,
 			"repoPath": repoPath,
 		})
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/pin — épingler ou désépingler un ticket pour
+	// pouvoir basculer vite d'un chantier à l'autre.
+	if subAction == "pin" && (r.Method == http.MethodPost || r.Method == http.MethodDelete) {
+		if r.Method == http.MethodDelete {
+			if err := h.db.SetTaskPinned(id, false); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"pinned": false})
+			return
+		}
+		pinned, err := h.db.ToggleTaskPinned(id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"pinned": pinned})
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/tty-agent — open the task's session and start
+	// the agent configured on its project. Nothing else: typing the skill call is
+	// a separate, deliberate gesture.
+	if subAction == "tty-agent" && r.Method == http.MethodPost {
+		var req struct {
+			Force bool `json:"force"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		launch, err := h.db.StartAgentInTTY(id, req.Force)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, launch)
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/tty-skill — type the skill call into the agent
+	// already running in the task's session.
+	if subAction == "tty-skill" && r.Method == http.MethodPost {
+		var req struct {
+			SkillID string `json:"skillId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if strings.TrimSpace(req.SkillID) == "" {
+			writeError(w, http.StatusBadRequest, "skillId manquant")
+			return
+		}
+		launch, err := h.db.InjectSkillInTTY(id, req.SkillID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, launch)
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/advance/confirm — the user says the interactive
+	// session is over. Taskacao applies the move the worker applies for headless
+	// steps: stage label, internal status, and transition on the tracker. The
+	// repo skill only produces text in the terminal, it never touches the ticket.
+	if subAction == "advance-confirm" && r.Method == http.MethodPost {
+		var req struct {
+			SkillID string `json:"skillId"`
+			Note    string `json:"note"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if strings.TrimSpace(req.SkillID) == "" {
+			writeError(w, http.StatusBadRequest, "skillId manquant")
+			return
+		}
+		task, act, err := h.db.CompleteInteractiveStep(id, req.SkillID, req.Note)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"task": task, "activity": act})
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/advance — one step of the agentic workflow, or
+	// the autonomous chain up to the review stage
+	if subAction == "advance" && r.Method == http.MethodPost {
+		var req struct {
+			Auto bool `json:"auto"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		task, err := h.db.GetTaskByID(id)
+		if err != nil || task == nil {
+			writeError(w, http.StatusNotFound, "Tâche non trouvée")
+			return
+		}
+
+		if req.Auto {
+			_, act, err := h.db.EnqueueAutonomousRun(task.ID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"mode": "auto", "activity": act})
+			return
+		}
+
+		stage := h.db.StageOfTask(task)
+		step, ok := db.NextStep(stage)
+		if !ok {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("aucun pas suivant depuis l'étape %s", stage))
+			return
+		}
+		// Un pas interactif n'est pas mis en file : l'interface ouvre le terminal
+		// de la tâche et y injecte la commande, pour que l'utilisateur voie et
+		// réponde à l'agent.
+		if step.Interactive {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"mode": "interactive", "stage": stage, "skillId": step.SkillID, "label": step.Label,
+			})
+			return
+		}
+		_, act, err := h.db.EnqueueSkillOnTask(task.ID, step.SkillID, "")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"mode": "queued", "stage": stage, "skillId": step.SkillID, "label": step.Label, "activity": act,
+		})
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/epic — attach the ticket to an epic, or detach
+	// it with an empty key. Only REST can do it: acli's edit has no --parent.
+	if subAction == "epic" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
+		var req struct {
+			EpicKey string `json:"epicKey"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		task, err := h.db.SetTaskEpic(id, req.EpicKey)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/comments — read and write the ticket's comments
+	if subAction == "comments" {
+		switch r.Method {
+		case http.MethodGet:
+			comments, err := h.db.GetTaskComments(id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, comments)
+			return
+		case http.MethodPost:
+			var req struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid comment payload: "+err.Error())
+				return
+			}
+			comments, err := h.db.PostTaskComment(id, req.Body)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, comments)
+			return
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+	}
+
+	// Sub-action: /api/tasks/{id}/tracker-status — move a card to a board column,
+	// which means transitioning the ticket to that column's status. Synchronous
+	// on purpose: the front moves the card optimistically and needs to know
+	// whether the tracker accepted it.
+	if subAction == "tracker-status" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
+		var req struct {
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		task, err := h.db.MoveTaskToTrackerStatus(id, req.Status)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
 		return
 	}
 
@@ -1220,6 +1715,16 @@ func (h *Handler) HandleTerminalWs(w http.ResponseWriter, r *http.Request) {
 	h.terminalMgr.HandleWebSocket(w, r, sessionID, workDir, envVars)
 }
 
+// HandleTerminalSessions lists the live PTY sessions. They outlive their viewers,
+// so the UI needs a way to see what is still running and to jump back into it.
+func (h *Handler) HandleTerminalSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, h.terminalMgr.ListSessions())
+}
+
 // HandleTerminalSend allows sending command strings / keystrokes into a running terminal session
 func (h *Handler) HandleTerminalSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1364,4 +1869,89 @@ func (h *Handler) HandleOpenEditor(w http.ResponseWriter, r *http.Request) {
 		"editor":  editorCmd,
 		"message": fmt.Sprintf("Opened %s in %s", targetPath, editorCmd),
 	})
+}
+
+// TerminalRunner exposes the PTY manager so the worker can run a workflow step
+// inside the task's session instead of anonymous pipes. The adapter lives here
+// because the handler owns the manager, and it flattens the terminal package's
+// result into the plain values the database expects.
+func (h *Handler) TerminalRunner() *TerminalRunAdapter {
+	return &TerminalRunAdapter{mgr: h.terminalMgr}
+}
+
+type TerminalRunAdapter struct {
+	mgr *terminal.Manager
+}
+
+func (a *TerminalRunAdapter) RunCommandInSession(
+	ctx context.Context,
+	sessionID string,
+	cwd string,
+	envVars map[string]string,
+	commandLine string,
+	idleBudget time.Duration,
+) (string, int, bool, error) {
+	res, err := a.mgr.RunCommandInSession(ctx, sessionID, cwd, envVars, commandLine, idleBudget)
+	if err != nil {
+		// Une session occupée n'est pas une erreur d'exécution : l'appelant doit
+		// pouvoir se replier sans croire que la commande a tourné.
+		if errors.Is(err, terminal.ErrSessionBusy) {
+			return "", 0, false, db.ErrTerminalBusy
+		}
+		if res != nil {
+			return res.Output, res.ExitCode, res.IdleStopped, err
+		}
+		return "", 0, false, err
+	}
+	return res.Output, res.ExitCode, res.IdleStopped, nil
+}
+
+func (a *TerminalRunAdapter) EnsureAgentReady(
+	ctx context.Context,
+	sessionID string,
+	cwd string,
+	envVars map[string]string,
+	launchLine string,
+) (bool, error) {
+	return a.mgr.EnsureAgentReady(ctx, sessionID, cwd, envVars, launchLine)
+}
+
+func (a *TerminalRunAdapter) InjectLine(sessionID string, line string) error {
+	return a.mgr.InjectLine(sessionID, line)
+}
+
+func (a *TerminalRunAdapter) AgentLaunched(sessionID string) bool {
+	return a.mgr.AgentLaunched(sessionID)
+}
+
+func (a *TerminalRunAdapter) RunInAgentSession(
+	ctx context.Context,
+	sessionID string,
+	line string,
+	turnQuiet time.Duration,
+) (string, int, bool, error) {
+	res, err := a.mgr.RunInAgentSession(ctx, sessionID, line, turnQuiet)
+	if res == nil {
+		return "", 0, false, err
+	}
+	return res.Output, res.ExitCode, res.IdleStopped, err
+}
+
+func (a *TerminalRunAdapter) ForgetAgent(sessionID string) {
+	a.mgr.ForgetAgent(sessionID)
+}
+
+// HandleTaskPins lists the pinned tickets, most recently pinned first. They are
+// returned whole so the pin bar can show a ticket the current filters hide.
+func (h *Handler) HandleTaskPins(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	tasks, err := h.db.PinnedTasks()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tasks)
 }

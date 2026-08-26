@@ -4,12 +4,14 @@ import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { BoardView } from './components/BoardView'
 import { ListView } from './components/ListView'
+import { RoadmapView } from './components/RoadmapView'
 import { ActivitiesView } from './components/ActivitiesView'
 import { SyncView } from './components/SyncView'
 import { DigestView } from './components/DigestView'
+import { SkillsView } from './components/SkillsView'
+import { PinnedBar } from './components/PinnedBar'
 import { QuickAddModal } from './components/QuickAddModal'
 import { TaskDetailModal } from './components/TaskDetailModal'
-import { TaskChatDrawer } from './components/TaskChatDrawer'
 import { CommandPalette } from './components/CommandPalette'
 import { ProfileModal } from './components/ProfileModal'
 import { ProjectModal } from './components/ProjectModal'
@@ -33,6 +35,9 @@ const MainContent: React.FC = () => {
         <div className="flex-1 flex flex-col h-full overflow-hidden">
           <Header />
 
+          {/* Bascule à chaud entre les tickets épinglés */}
+          <PinnedBar />
+
           {/* Dynamic View Body */}
           <main className="flex-1 flex flex-col overflow-hidden relative">
             {isLoading && tasks.length === 0 ? (
@@ -49,10 +54,14 @@ const MainContent: React.FC = () => {
               <BoardView />
             ) : activeView === 'list' ? (
               <ListView />
+            ) : activeView === 'roadmap' ? (
+              <RoadmapView />
             ) : activeView === 'sync' ? (
               <SyncView />
             ) : activeView === 'digest' ? (
               <DigestView />
+            ) : activeView === 'skills' ? (
+              <SkillsView />
             ) : (
               <ActivitiesView />
             )}
@@ -69,7 +78,6 @@ const MainContent: React.FC = () => {
       {/* Global Modals & Overlays */}
       <QuickAddModal />
       <TaskDetailModal />
-      <TaskChatDrawer />
       <ProjectModal />
       <GitDiffModal />
       <BranchSwitcherModal />

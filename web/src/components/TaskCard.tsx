@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Flame,
   Calendar,
@@ -10,14 +11,19 @@ import {
   MessageSquare,
   Code2,
   MoreHorizontal,
+  ChevronsRight,
+  ChevronRight,
+  Terminal as TerminalIcon,
   FileCode,
   CheckCircle2,
   Eye,
   Trash2,
   Copy,
+  Pin,
 } from 'lucide-react'
 import type { Task, Priority } from '../types'
 import { useApp } from '../context/AppContext'
+import { skillForStage, stageFromColumn } from '../lib/workflow'
 
 interface TaskCardProps {
   task: Task
@@ -29,6 +35,10 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
   const {
     setSelectedTask,
     setChatTask,
+    advanceTask,
+    launchInteractiveStep,
+    isPinned,
+    togglePin,
     setDiffTask,
     runSkill,
     isSkillRunning,
@@ -46,8 +56,36 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     addToast,
   } = useApp()
 
+  // Le menu est rendu dans un portail avec un positionnement fixe : les colonnes
+  // du board défilent en overflow-y-auto, ce qui découpait un menu en position
+  // absolue et le faisait passer sous l'en-tête de colonne pour les cartes du
+  // haut. Le portail sort de ce conteneur, et l'ouverture bascule vers le bas
+  // quand il n'y a pas la place au-dessus.
+  const [advancing, setAdvancing] = useState<'step' | 'auto' | null>(null)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const menuNodeRef = useRef<HTMLDivElement>(null)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+
+  const MENU_WIDTH = 208
+  const MENU_MAX_HEIGHT = 320
+  const MENU_GAP = 6
+
+  const openMenuAt = () => {
+    const rect = menuButtonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const spaceAbove = rect.top
+    const spaceBelow = window.innerHeight - rect.bottom
+    // Un menu ancré à droite du bouton, recadré pour rester dans la fenêtre.
+    const left = Math.max(8, Math.min(rect.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8))
+    if (spaceAbove >= Math.min(MENU_MAX_HEIGHT, spaceBelow) && spaceAbove > 220) {
+      setMenuPos({ left, bottom: window.innerHeight - rect.top + MENU_GAP })
+    } else {
+      setMenuPos({ left, top: rect.bottom + MENU_GAP })
+    }
+    setIsMenuOpen(true)
+  }
 
   const taskProject = projects.find(p => p.id === task.projectId)
   const targetGithubRepo = (taskProject?.githubRepo || settings.githubRepo || '').replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
@@ -60,12 +98,23 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
   useEffect(() => {
     if (!isMenuOpen) return
     const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setIsMenuOpen(false)
-      }
+      const target = e.target as Node
+      // Le menu vit dans un portail : il faut tester les deux racines.
+      if (menuRef.current?.contains(target) || menuNodeRef.current?.contains(target)) return
+      setIsMenuOpen(false)
     }
+    // Le menu est en position fixe : plutôt que de le faire suivre le défilement,
+    // on le referme, ce qui reste prévisible et évite un menu qui flotte loin de
+    // sa carte.
+    const close = () => setIsMenuOpen(false)
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+    }
   }, [isMenuOpen])
 
   const latestActivity = React.useMemo(() => {
@@ -103,10 +152,103 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     if (onDragStart) onDragStart(e)
   }
 
+  // Skill par identifiant, pour que l'étape résolue et la déduction historique
+  // produisent exactement la même action.
+  const skillAction = (id: string) => {
+    switch (id) {
+      case 'clarify':
+        return {
+          id: 'clarify',
+          label: skillLabel('clarify', 'Clarifier'),
+          icon: <Sparkles size={11} className="text-amber-400" />,
+          title: 'Clarifier les exigences et cadrer la tâche',
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            if (isSkillRunning) return
+            await runSkill(task.id, 'clarify')
+          },
+        }
+      case 'specify':
+        return {
+          id: 'specify',
+          label: skillLabel('specify', 'Spécifier'),
+          icon: <FileCode size={11} className="text-blue-400" />,
+          title: 'Rédiger la spécification technique (Spec Kit / OpenSpec)',
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            if (isSkillRunning) return
+            await runSkill(task.id, 'specify')
+          },
+        }
+      case 'implement':
+        return {
+          id: 'implement',
+          label: skillLabel('implement', 'Coder'),
+          icon: <Flame size={11} className="text-indigo-400" />,
+          title: "Lancer l'implémentation du code par l'agent IA",
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            if (isSkillRunning) return
+            await runSkill(task.id, 'implement')
+          },
+        }
+      case 'create_pr':
+        return {
+          id: 'create_pr',
+          label: skillLabel('create_pr', 'Créer PR'),
+          icon: <GitPullRequest size={11} className="text-purple-400" />,
+          title: 'Lancer la revue de code et générer la Pull Request',
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            if (isSkillRunning) return
+            await runSkill(task.id, 'create_pr')
+          },
+        }
+      default:
+        return null
+    }
+  }
+
+  // Un pas du workflow. Le serveur décide de la skill depuis l'étape de la
+  // tâche ; un pas interactif — la clarification — ouvre le terminal de la tâche
+  // et y injecte la commande, pour qu'on voie et réponde à l'agent.
+  const handleAdvance = async (auto: boolean) => {
+    if (advancing) return
+    setAdvancing(auto ? 'auto' : 'step')
+    const result = await advanceTask(task.id, auto)
+    if (result?.mode === 'interactive' && result.skillId) {
+      await launchInteractiveStep(task, result.skillId, result.label || 'Étape interactive')
+    }
+    setAdvancing(null)
+  }
+
   // Determine current workflow stage action (Clarifier ➔ Spécifier ➔ Coder ➔ Créer PR ➔ Merge ➔ #finished)
   const getWorkflowAction = () => {
     const isFinished = task.status === 'finished' || task.status === 'done' || task.labels?.some(l => l.toLowerCase() === 'finished')
     if (isFinished) return null
+
+    // La colonne du board pilote quand le projet a affecté des étapes à ses
+    // colonnes : c'est l'état réel du travail côté équipe, alors qu'un label
+    // peut n'avoir jamais été posé. À défaut, la déduction par labels reprend.
+    const columnStage = stageFromColumn(task, taskProject)
+    if (columnStage) {
+      if (columnStage === 'finished') return null
+      // Une PR déjà ouverte sur une étape de revue : l'action utile est la fusion.
+      if (columnStage === 'reviewed' && task.prUrl) {
+        return {
+          id: 'merge',
+          label: 'Merge',
+          icon: <CheckCircle2 size={11} className="text-emerald-400" />,
+          title: 'Fusionner la Pull Request / branche et finaliser la tâche (#finished)',
+          action: async (e: React.MouseEvent) => {
+            e.stopPropagation()
+            await moveTaskWorkflowStage(task.id, 'finished')
+          },
+        }
+      }
+      const fromColumn = skillAction(skillForStage(columnStage) || '')
+      if (fromColumn) return fromColumn
+    }
 
     // If PR is already created or task is in reviewed stage -> Action is "Merge"
     if (
@@ -342,12 +484,76 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
           </span>
         )}
 
-        {/* Toutes les actions vivent dans le menu (...) : la carte reste compacte */}
-        <div className="flex items-center gap-1 relative ml-auto" ref={menuRef}>
+        {/* Épingle : le ticket rejoint la barre de bascule à chaud, en haut. */}
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation()
+            togglePin(task.id)
+          }}
+          className={`p-1 rounded-md border transition-colors cursor-pointer ${
+            isPinned(task.id)
+              ? 'accent-text bg-[var(--accent-light)] border-[var(--accent-color)]/40'
+              : 'text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border-transparent hover:border-[var(--accent-color)]/30'
+          }`}
+          title={isPinned(task.id) ? 'Retirer de la barre des épinglés' : 'Épingler pour basculer vite dessus'}
+        >
+          <Pin size={14} />
+        </button>
+
+        {/* Le terminal de la tâche est l'action la plus fréquente : elle mérite
+            son icône, le reste vit dans le menu (...) */}
+        <button
+          type="button"
+          disabled={advancing !== null}
+          onClick={e => {
+            e.stopPropagation()
+            handleAdvance(false)
+          }}
+          className="ml-auto p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border border-transparent hover:border-[var(--accent-color)]/30 transition-colors cursor-pointer disabled:opacity-40"
+          title="Avancer d'un pas dans le workflow agentique"
+        >
+          {advancing === 'step' ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
+        </button>
+
+        <button
+          type="button"
+          disabled={advancing !== null}
+          onClick={e => {
+            e.stopPropagation()
+            handleAdvance(true)
+          }}
+          className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border border-transparent hover:border-[var(--accent-color)]/30 transition-colors cursor-pointer disabled:opacity-40"
+          title="Avancer en autonomie jusqu'à l'étape de revue"
+        >
+          {advancing === 'auto' ? <Loader2 size={14} className="animate-spin" /> : <ChevronsRight size={14} />}
+        </button>
+
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation()
+            setChatTask(task)
+          }}
+          className="p-1 rounded-md text-[var(--text-muted)] hover:text-cyan-300 hover:bg-cyan-500/10 border border-transparent hover:border-cyan-500/30 transition-colors cursor-pointer"
+          title={`Ouvrir le terminal de ${task.key} dans le panneau latéral`}
+        >
+          <TerminalIcon size={14} />
+        </button>
+
+        <div className="flex items-center gap-1 relative" ref={menuRef}>
           {/* Menu (...) Button */}
           <button
             type="button"
-            onClick={() => setIsMenuOpen(prev => !prev)}
+            ref={menuButtonRef}
+            onClick={e => {
+              e.stopPropagation()
+              if (isMenuOpen) {
+                setIsMenuOpen(false)
+              } else {
+                openMenuAt()
+              }
+            }}
             className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] border border-transparent hover:border-[var(--border-color)]/60 transition-colors cursor-pointer"
             title="Actions"
           >
@@ -355,8 +561,18 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
           </button>
 
           {/* Contextual Dropdown Menu */}
-          {isMenuOpen && (
-            <div className="absolute right-0 bottom-full mb-1 w-52 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-xl p-1 z-50 animate-in fade-in-0 zoom-in-95 duration-100 text-xs">
+          {isMenuOpen && menuPos && createPortal(
+            <div
+              ref={menuNodeRef}
+              style={{
+                position: 'fixed',
+                left: menuPos.left,
+                top: menuPos.top,
+                bottom: menuPos.bottom,
+                width: MENU_WIDTH,
+                maxHeight: MENU_MAX_HEIGHT,
+              }}
+              className="overflow-y-auto rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl p-1 z-[100] animate-in fade-in-0 zoom-in-95 duration-100 text-xs">
               {/* Action de l'étape courante du workflow (nom du skill) */}
               {workflowAction && (
                 <>
@@ -503,7 +719,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
                 <Trash2 size={12} />
                 <span>Supprimer la tâche</span>
               </button>
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       </div>

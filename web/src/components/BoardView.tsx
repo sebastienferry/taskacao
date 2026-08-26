@@ -15,7 +15,8 @@ import {
 import { useApp } from '../context/AppContext'
 import { TaskCard } from './TaskCard'
 import { TaskFilters } from './TaskFilters'
-import type { Task, Status, WorkflowStage } from '../types'
+import type { Task, Status, WorkflowStage, Priority } from '../types'
+import { resolveTaskStage, stageFromLabels } from '../lib/workflow'
 
 interface WorkflowColumnConfig {
   id: WorkflowStage
@@ -41,23 +42,9 @@ interface StatusColumnConfig {
   description: string
 }
 
-export const getTaskWorkflowStage = (task: Task): WorkflowStage => {
-  const labels = (task.labels || []).map(l => l.toLowerCase())
-  if (labels.includes('finished') || labels.includes('closed') || labels.includes('done')) return 'finished'
-  if (labels.includes('reviewed')) return 'reviewed'
-  if (labels.includes('implemented')) return 'implemented'
-  if (labels.includes('specified')) return 'specified'
-  if (labels.includes('clarified')) return 'clarified'
-  if (labels.includes('new') || labels.includes('untouched')) return 'new'
-
-  // Fallback from status if no workflow label is present
-  if (task.status === 'finished' || task.status === 'done') return 'finished'
-  if (task.status === 'to_close') return 'reviewed'
-  if (task.status === 'to_test' || task.status === 'to_validate') return 'implemented'
-  if (task.status === 'to_implement' || task.status === 'in_progress') return 'specified'
-  if (task.status === 'to_specify' || task.status === 'specified') return 'clarified'
-  return 'new'
-}
+// Conservée pour l'API publique du module : la déduction par labels vit
+// désormais dans lib/workflow, aux côtés de la déduction par colonne.
+export const getTaskWorkflowStage = stageFromLabels
 
 export const BoardView: React.FC = () => {
   const {
@@ -68,13 +55,23 @@ export const BoardView: React.FC = () => {
     setBoardGrouping,
     hideDone,
     toggleHideDone,
+    currentProject,
+    moveTaskToTrackerStatus,
     setIsQuickAddOpen,
     setQuickAddInitialStatus,
     t,
   } = useApp()
 
+  const [showHiddenColumns, setShowHiddenColumns] = useState(false)
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null)
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null)
+
+  // Le plus urgent en haut de chaque colonne. Le glisser-déposer ne réordonne
+  // pas à l'intérieur d'une colonne — il change d'étape — donc trier ici
+  // n'écrase aucun ordre manuel.
+  const PRIORITY_RANK: Record<Priority, number> = { urgent: 4, high: 3, medium: 2, low: 1 }
+  const byPriorityDesc = (list: Task[]) =>
+    [...list].sort((a, b) => (PRIORITY_RANK[b.priority] || 0) - (PRIORITY_RANK[a.priority] || 0))
 
   // -------------------------------------------------------------
   // MODE 1: Workflow Labels Columns (Pipeline IA)
@@ -249,10 +246,91 @@ export const BoardView: React.FC = () => {
     const task = tasks.find(t => t.id === taskId || t.key === taskId)
     if (!task) return
 
-    const currentStage = getTaskWorkflowStage(task)
+    const currentStage = resolveTaskStage(task, currentProject)
     if (currentStage === targetStage) return
 
     await moveTaskWorkflowStage(task.id, targetStage)
+  }
+
+  // Les colonnes du projet, à la façon de Jira : un nom et les statuts du tracker
+  // qu'elles regroupent. Dès qu'un projet en définit, elles remplacent les
+  // colonnes de statuts génériques — ce mode n'est qu'une extension de celui-ci.
+  const trackerColumns = currentProject?.trackerColumns || []
+  const useTrackerBoard = trackerColumns.length > 0
+  const stageColumns = currentProject?.stageColumns || {}
+
+  // Étapes agentiques affectées à une colonne, pour l'afficher dans son en-tête.
+  const stagesForColumn = (columnName: string): string[] =>
+    Object.entries(stageColumns)
+      .filter(([, cols]) => (cols || []).includes(columnName))
+      .map(([stage]) => stage)
+
+  // Les colonnes masquées sortent du board sans perdre leur affectation de
+  // statuts : leurs tickets ne sont simplement pas affichés, et un bouton dans
+  // la barre d'outils permet de les remontrer sans passer par les réglages.
+  const hiddenColumns = trackerColumns.filter(c => c.hidden)
+  const visibleTrackerColumns = showHiddenColumns
+    ? trackerColumns
+    : trackerColumns.filter(c => !c.hidden)
+
+  const effectiveStatusColumns: StatusColumnConfig[] = useTrackerBoard
+    ? visibleTrackerColumns.map(col => ({
+        id: col.name as unknown as Status,
+        title: col.name,
+        stageLabel: stagesForColumn(col.name).map(st => `#${st}`).join(' ') || col.statuses.join(', '),
+        stageColor: 'bg-[var(--accent-light)] accent-text border-[var(--accent-color)]/30',
+        icon: <Kanban size={16} className="text-[var(--accent-color)]" />,
+        color: 'text-[var(--text-primary)]',
+        borderColor: 'border-[var(--border-color)]',
+        badgeBg: 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]',
+        description: col.statuses.join(', '),
+      }))
+    : statusColumns
+
+  const columnStatuses = (columnName: string): string[] =>
+    trackerColumns.find(c => c.name === columnName)?.statuses || []
+
+  const tasksForColumn = (col: StatusColumnConfig): Task[] => {
+    if (!useTrackerBoard) {
+      return byPriorityDesc(tasks.filter(t => isTaskInStatusColumn(t.status, col.id)))
+    }
+    const statuses = columnStatuses(col.title).map(st => st.toLowerCase())
+    return byPriorityDesc(
+      tasks.filter(t => statuses.includes((t.trackerStatus || '').toLowerCase()))
+    )
+  }
+
+  // Aucun ticket ne doit disparaître : ceux dont le statut n'est réclamé par
+  // aucune colonne atterrissent dans une colonne dédiée, affichée seulement si
+  // elle contient quelque chose.
+  const unassignedTasks = useTrackerBoard
+    ? byPriorityDesc(
+        tasks.filter(t => {
+          const st = (t.trackerStatus || '').toLowerCase()
+          if (!st) return true
+          // Une colonne masquée réclame toujours ses statuts : ses tickets sont
+          // cachés, pas orphelins.
+          return !trackerColumns.some(c => c.statuses.some(cs => cs.toLowerCase() === st))
+        })
+      )
+    : []
+
+  // Déplacement sur un board de tracker : la colonne cible impose son premier
+  // statut, et la transition part dans le tracker.
+  const handleDropTrackerColumn = async (e: React.DragEvent, columnName: string) => {
+    e.preventDefault()
+    setDragOverColumn(null)
+    const taskId = e.dataTransfer.getData('text/plain') || draggingTaskId
+    setDraggingTaskId(null)
+    if (!taskId) return
+
+    const task = tasks.find(t => t.id === taskId || t.key === taskId)
+    const statuses = columnStatuses(columnName)
+    if (!task || statuses.length === 0) return
+    // Déjà dans la colonne : rien à transitionner.
+    if (statuses.some(st => st.toLowerCase() === (task.trackerStatus || '').toLowerCase())) return
+
+    await moveTaskToTrackerStatus(task.id, statuses[0])
   }
 
   const handleDropStatus = async (e: React.DragEvent, targetStatus: Status) => {
@@ -321,6 +399,21 @@ export const BoardView: React.FC = () => {
         <div className="flex items-center gap-2">
           <TaskFilters />
 
+          {hiddenColumns.length > 0 && (
+            <button
+              onClick={() => setShowHiddenColumns(v => !v)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                showHiddenColumns
+                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                  : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+              }`}
+              title={hiddenColumns.map(c => c.name).join(', ')}
+            >
+              {showHiddenColumns ? <EyeOff size={13} /> : <Eye size={13} />}
+              <span>{showHiddenColumns ? 'Masquer' : `${hiddenColumns.length} colonne${hiddenColumns.length > 1 ? 's' : ''} masquée${hiddenColumns.length > 1 ? 's' : ''}`}</span>
+            </button>
+          )}
+
           <button
             onClick={toggleHideDone}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
@@ -344,7 +437,7 @@ export const BoardView: React.FC = () => {
           {/* ========================================================= */}
           {boardGrouping === 'workflow' &&
             workflowColumns.map(col => {
-              const colTasks = tasks.filter(t => getTaskWorkflowStage(t) === col.id)
+              const colTasks = byPriorityDesc(tasks.filter(t => resolveTaskStage(t, currentProject) === col.id))
               const isOver = dragOverColumn === col.id
 
               // Collapsed Finished Column when hideDone is enabled
@@ -457,18 +550,23 @@ export const BoardView: React.FC = () => {
           {/* RENDER MODE 2: OPERATIONAL STATUS COLUMNS                 */}
           {/* ========================================================= */}
           {boardGrouping === 'status' &&
-            statusColumns.map(col => {
-              const colTasks = tasks.filter(t => isTaskInStatusColumn(t.status, col.id))
+            effectiveStatusColumns.map(col => {
+              const colTasks = tasksForColumn(col)
               const isOver = dragOverColumn === col.id
+              const onDropColumn = useTrackerBoard
+                ? (e: React.DragEvent) => handleDropTrackerColumn(e, col.title)
+                : (e: React.DragEvent) => handleDropStatus(e, col.id)
 
-              // Collapsed Done Column when hideDone is enabled
-              if (col.id === 'finished' && hideDone) {
+              // Collapsed Done Column when hideDone is enabled. Sur un board de
+              // tracker, les colonnes viennent du projet : aucune n'est « la »
+              // colonne terminée, donc pas de repli automatique.
+              if (!useTrackerBoard && col.id === 'finished' && hideDone) {
                 return (
                   <div
                     key={col.id}
                     onDragOver={e => handleDragOver(e, col.id)}
                     onDragLeave={e => handleDragLeave(e, col.id)}
-                    onDrop={e => handleDropStatus(e, col.id)}
+                    onDrop={onDropColumn}
                     onClick={toggleHideDone}
                     className={`w-14 shrink-0 flex flex-col items-center justify-between py-4 rounded-2xl bg-[var(--bg-secondary)]/60 border transition-all duration-200 cursor-pointer group hover:bg-[var(--bg-secondary)] select-none ${
                       isOver
@@ -502,7 +600,7 @@ export const BoardView: React.FC = () => {
                   key={col.id}
                   onDragOver={e => handleDragOver(e, col.id)}
                   onDragLeave={e => handleDragLeave(e, col.id)}
-                  onDrop={e => handleDropStatus(e, col.id)}
+                  onDrop={onDropColumn}
                   className={`kanban-column w-[320px] min-w-[290px] shrink-0 flex flex-col rounded-2xl bg-[var(--bg-secondary)]/70 border transition-all duration-200 ${
                     isOver
                       ? 'border-[var(--accent-color)] ring-2 ring-[var(--accent-glow)] bg-[var(--accent-light)]/20'
@@ -566,6 +664,37 @@ export const BoardView: React.FC = () => {
                 </div>
               )
             })}
+
+          {/* Colonne de repli : les tickets dont le statut n'est réclamé par
+              aucune colonne. Visible seulement si elle contient quelque chose,
+              pour qu'un statut oublié se remarque au lieu de faire disparaître
+              des tickets. */}
+          {boardGrouping === 'status' && unassignedTasks.length > 0 && (
+            <div className="kanban-column w-[320px] min-w-[290px] shrink-0 flex flex-col rounded-2xl bg-[var(--bg-secondary)]/70 border border-amber-500/40">
+              <div className="flex items-center justify-between p-3 border-b border-[var(--border-color)]">
+                <div className="flex items-center gap-2">
+                  <ListFilter size={16} className="text-amber-400" />
+                  <h3 className="text-xs font-bold text-[var(--text-primary)] tracking-wide">Non classé</h3>
+                  <span className="text-[11px] font-mono px-1.5 py-0.2 rounded-full font-bold bg-amber-500/20 text-amber-300">
+                    {unassignedTasks.length}
+                  </span>
+                </div>
+              </div>
+              <div className="px-3 py-1.5 text-[10px] text-[var(--text-muted)] border-b border-[var(--border-color)]/60">
+                Statuts non affectés à une colonne : {Array.from(new Set(unassignedTasks.map(t => t.trackerStatus || 'sans statut'))).join(', ')}
+              </div>
+              <div className="flex-1 overflow-y-auto p-2.5 space-y-2.5">
+                {unassignedTasks.map(task => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    isDragging={draggingTaskId === task.id}
+                    onDragStart={() => setDraggingTaskId(task.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Columns,
   ListFilter,
+  Map as MapIcon,
   Activity,
   Tag,
   Settings,
@@ -29,6 +30,7 @@ import {
   Plus,
   Settings2,
   CalendarDays,
+  FileCode2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { accentBadgeStyle } from '../lib/accents'
@@ -372,6 +374,26 @@ export const Sidebar: React.FC = () => {
               <ListFilter size={15} className="shrink-0" />
               {!sidebarCollapsed && <span className="truncate">{t.nav.list}</span>}
             </button>
+            {/* Roadmap : les épics par horizon, d'après le design Equativ */}
+            <button
+              onClick={() => setActiveView('roadmap')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'roadmap'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Roadmap des épics : NOW / NEXT / FUTURE"
+            >
+              <span className="flex items-center gap-2.5 min-w-0">
+                <MapIcon size={15} className="shrink-0" />
+                {!sidebarCollapsed && <span className="truncate">Roadmap</span>}
+              </span>
+              {!sidebarCollapsed && (
+                <span className="text-[9px] font-bold px-1.5 rounded text-[var(--accent-color)] bg-[var(--accent-light)] border border-[var(--accent-color)]/30">
+                  EPICS
+                </span>
+              )}
+            </button>
             <button
               onClick={() => setActiveView('activities')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -396,6 +418,21 @@ export const Sidebar: React.FC = () => {
                   </span>
                 ) : null
               )}
+            </button>
+            {/* Skills du workflow : une par pas, éditables dans l'outil */}
+            <button
+              onClick={() => setActiveView('skills')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'skills'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Skills du workflow agentique : une par étape, éditables ici"
+            >
+              <div className="flex items-center gap-2.5 min-w-0 truncate">
+                <FileCode2 size={15} className="shrink-0 text-amber-400" />
+                {!sidebarCollapsed && <span className="truncate">Skills</span>}
+              </div>
             </button>
             <button
               onClick={() => setActiveView('sync')}

@@ -33,6 +33,7 @@ import {
   Info,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { BoardColumnsEditor } from './BoardColumnsEditor'
 import type {
   AccentColor,
   IssueTracker,
@@ -41,6 +42,7 @@ import type {
   WorkflowStage,
   DetectedStatus,
   AIProvider,
+  TrackerColumn,
   SpecFramework,
   SpecFrameworkStatus,
   SpecFrameworkInstallResult,
@@ -112,7 +114,7 @@ const WORKFLOW_SKILLS: { id: string; defaultName: string; code: string; desc: st
   { id: 'specify', defaultName: 'Specify', code: 'specify-issue', desc: 'Spécification technique (Spec Kit / OpenSpec)', icon: FileCode, color: 'blue' },
   { id: 'implement', defaultName: 'Implement', code: 'code-issue', desc: 'Développement & codage de la story', icon: Flame, color: 'indigo' },
   { id: 'create_pr', defaultName: 'Review & PR', code: 'create-pr', desc: 'Revue de code, tests & Pull Request', icon: ShieldCheck, color: 'purple' },
-  { id: 'pick', defaultName: 'Auto-Pilot', code: 'pick-issue', desc: 'Prise en charge et analyse autonome', icon: Sparkles, color: 'emerald' },
+  { id: 'handoff', defaultName: 'Handoff', code: 'handoff-issue', desc: 'Compte-rendu de passation & nettoyage local', icon: Sparkles, color: 'emerald' },
 ]
 
 const extractGithubRepoFromGitUrl = (url: string): string => {
@@ -153,6 +155,8 @@ export const ProjectModal: React.FC = () => {
   const [repoPath, setRepoPath] = useState('')
   const [repoPaths, setRepoPaths] = useState<string[]>([])
   const [useWorktrees, setUseWorktrees] = useState(true)
+  const [trackerColumns, setTrackerColumns] = useState<TrackerColumn[]>([])
+  const [stageColumns, setStageColumns] = useState<Record<string, string[]>>({})
   const [newRepoPathInput, setNewRepoPathInput] = useState('')
   const [gitRemoteUrl, setGitRemoteUrl] = useState('')
 
@@ -382,6 +386,8 @@ export const ProjectModal: React.FC = () => {
       setRepoPath(editingProject.repoPath || '')
       setRepoPaths(editingProject.repoPaths || [])
       setUseWorktrees(editingProject.useWorktrees !== false)
+      setTrackerColumns(editingProject.trackerColumns || [])
+      setStageColumns(editingProject.stageColumns || {})
       setGitRemoteUrl(editingProject.gitRemoteUrl || '')
 
       const hasCustomAgent = Boolean(editingProject.aiProvider || editingProject.aiCommandTemplate)
@@ -564,6 +570,8 @@ export const ProjectModal: React.FC = () => {
         repoPath: repoPath.trim(),
         repoPaths,
         useWorktrees,
+        trackerColumns,
+        stageColumns,
         gitRemoteUrl: gitRemoteUrl.trim(),
         aiProvider: useCustomAgent && aiProvider ? (aiProvider as AIProvider) : undefined,
         aiCommandTemplate: useCustomAgent && aiCommandTemplate.trim() ? aiCommandTemplate.trim() : undefined,
@@ -605,7 +613,7 @@ export const ProjectModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150 select-none">
-      <div className="relative w-full max-w-3xl rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+      <div className="relative w-full max-w-5xl xl:max-w-6xl 2xl:max-w-[1400px] h-[92vh] rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 shrink-0">
           <div className="flex items-center gap-2.5">
@@ -1514,6 +1522,19 @@ export const ProjectModal: React.FC = () => {
                     )
                   })}
                 </div>
+              </div>
+
+              {/* Colonnes du board : sa place est ici, avec le tracker dont
+                  elles viennent. Colonnes, statuts affectés, et étapes du
+                  workflow agentique par colonne. */}
+              <div className="pt-3 border-t border-[var(--border-color)]">
+                <BoardColumnsEditor
+                  project={editingProject}
+                  columns={trackerColumns}
+                  onColumnsChange={setTrackerColumns}
+                  stageColumns={stageColumns}
+                  onStageColumnsChange={setStageColumns}
+                />
               </div>
             </div>
           )}

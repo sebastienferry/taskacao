@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -78,6 +79,271 @@ func NewJiraRESTClient(settings *models.Settings, trackerURL string) *JiraRESTCl
 	}
 }
 
+// ListBoards returns the tracker boards attached to a project, for the picker in
+// the project settings.
+func (c *JiraRESTClient) ListBoards(ctx context.Context, projectKey string) ([]models.TrackerBoard, error) {
+	query := url.Values{}
+	query.Set("projectKeyOrId", strings.ToUpper(strings.TrimSpace(projectKey)))
+	query.Set("maxResults", "50")
+
+	body, err := c.get(ctx, "/rest/agile/1.0/board", query)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload struct {
+		Values []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"values"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("liste des boards illisible: %w", err)
+	}
+
+	boards := make([]models.TrackerBoard, 0, len(payload.Values))
+	for _, b := range payload.Values {
+		boards = append(boards, models.TrackerBoard{
+			ID:   fmt.Sprintf("%d", b.ID),
+			Name: b.Name,
+			Type: b.Type,
+		})
+	}
+	return boards, nil
+}
+
+// UpdateIssueLabels adds and removes labels on a work item over REST. Spawning
+// acli costs about 1.3 s per call, most of it process start-up and its own
+// authentication; the REST round-trip is roughly six times faster, which matters
+// when triaging a roadmap epic by epic.
+func (c *JiraRESTClient) UpdateIssueLabels(ctx context.Context, issueKey string, add []string, remove []string) error {
+	issueKey = strings.TrimSpace(issueKey)
+	if issueKey == "" {
+		return fmt.Errorf("clé de ticket manquante")
+	}
+
+	ops := make([]map[string]string, 0, len(add)+len(remove))
+	for _, label := range add {
+		if label = strings.TrimSpace(label); label != "" {
+			ops = append(ops, map[string]string{"add": label})
+		}
+	}
+	for _, label := range remove {
+		if label = strings.TrimSpace(label); label != "" {
+			ops = append(ops, map[string]string{"remove": label})
+		}
+	}
+	if len(ops) == 0 {
+		return nil
+	}
+
+	// Un PUT partiel : seuls les labels bougent, la description riche n'est
+	// jamais renvoyée.
+	payload := map[string]interface{}{"update": map[string]interface{}{"labels": ops}}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		c.baseURL+"/rest/api/3/issue/"+url.PathEscape(issueKey), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.token)))
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		snippet := strings.TrimSpace(string(respBody))
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return fmt.Errorf("Jira a refusé la mise à jour des labels de %s (%d): %s", issueKey, resp.StatusCode, snippet)
+	}
+	return nil
+}
+
+// SetIssueParent attaches a work item to an epic, or detaches it when parentKey
+// is empty. acli's edit command exposes no --parent, so this only works over
+// REST — the operation is what lets a roadmap epic be prototyped by pulling
+// existing tickets into it.
+func (c *JiraRESTClient) SetIssueParent(ctx context.Context, issueKey string, parentKey string) error {
+	issueKey = strings.TrimSpace(issueKey)
+	if issueKey == "" {
+		return fmt.Errorf("clé de ticket manquante")
+	}
+
+	var parent interface{}
+	if key := strings.TrimSpace(parentKey); key != "" {
+		parent = map[string]string{"key": strings.ToUpper(key)}
+	} else {
+		// null détache : le ticket n'a plus d'épic.
+		parent = nil
+	}
+
+	body, err := json.Marshal(map[string]interface{}{"fields": map[string]interface{}{"parent": parent}})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		c.baseURL+"/rest/api/3/issue/"+url.PathEscape(issueKey), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.token)))
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		snippet := strings.TrimSpace(string(respBody))
+		if len(snippet) > 250 {
+			snippet = snippet[:250]
+		}
+		return fmt.Errorf("Jira a refusé le rattachement de %s (%d): %s", issueKey, resp.StatusCode, snippet)
+	}
+	return nil
+}
+
+// ListBoardSprints returns the board's sprints with their state. The state is
+// what separates the operational horizons: active means the work is in flight,
+// future means it is planned but not started.
+func (c *JiraRESTClient) ListBoardSprints(ctx context.Context, boardID string) ([]models.TrackerSprint, error) {
+	boardID = strings.TrimSpace(boardID)
+	if boardID == "" {
+		return nil, fmt.Errorf("identifiant de board manquant")
+	}
+
+	out := []models.TrackerSprint{}
+	startAt := 0
+	for page := 0; page < 20; page++ {
+		query := url.Values{}
+		query.Set("state", "active,future")
+		query.Set("maxResults", "50")
+		query.Set("startAt", fmt.Sprintf("%d", startAt))
+
+		body, err := c.get(ctx, "/rest/agile/1.0/board/"+url.PathEscape(boardID)+"/sprint", query)
+		if err != nil {
+			return out, err
+		}
+		var payload struct {
+			Values []struct {
+				Name      string `json:"name"`
+				State     string `json:"state"`
+				StartDate string `json:"startDate"`
+				EndDate   string `json:"endDate"`
+			} `json:"values"`
+			IsLast bool `json:"isLast"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return out, fmt.Errorf("sprints du board illisibles: %w", err)
+		}
+		for _, sp := range payload.Values {
+			if strings.TrimSpace(sp.Name) == "" {
+				continue
+			}
+			out = append(out, models.TrackerSprint{
+				Name:      sp.Name,
+				State:     strings.ToLower(sp.State),
+				StartDate: sp.StartDate,
+				EndDate:   sp.EndDate,
+			})
+		}
+		if payload.IsLast || len(payload.Values) == 0 {
+			break
+		}
+		startAt += len(payload.Values)
+	}
+	return out, nil
+}
+
+// FetchBoardColumns returns the columns of a board in their board order, with
+// the status names each one groups. The board configuration only carries status
+// ids, so they are resolved against the instance's status list.
+func (c *JiraRESTClient) FetchBoardColumns(ctx context.Context, boardID string) ([]models.TrackerColumn, error) {
+	boardID = strings.TrimSpace(boardID)
+	if boardID == "" {
+		return nil, fmt.Errorf("identifiant de board manquant")
+	}
+
+	body, err := c.get(ctx, "/rest/agile/1.0/board/"+url.PathEscape(boardID)+"/configuration", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg struct {
+		ColumnConfig struct {
+			Columns []struct {
+				Name     string `json:"name"`
+				Statuses []struct {
+					ID string `json:"id"`
+				} `json:"statuses"`
+			} `json:"columns"`
+		} `json:"columnConfig"`
+	}
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return nil, fmt.Errorf("configuration du board illisible: %w", err)
+	}
+
+	statusNames, err := c.statusNamesByID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	columns := make([]models.TrackerColumn, 0, len(cfg.ColumnConfig.Columns))
+	for _, col := range cfg.ColumnConfig.Columns {
+		names := make([]string, 0, len(col.Statuses))
+		for _, st := range col.Statuses {
+			if name, ok := statusNames[st.ID]; ok && name != "" {
+				names = append(names, name)
+			}
+		}
+		// A column with no status holds no card; keeping it would only add an
+		// empty lane to the board.
+		if len(names) == 0 {
+			continue
+		}
+		columns = append(columns, models.TrackerColumn{Name: col.Name, Statuses: names})
+	}
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("aucune colonne exploitable sur le board %s", boardID)
+	}
+	return columns, nil
+}
+
+func (c *JiraRESTClient) statusNamesByID(ctx context.Context) (map[string]string, error) {
+	body, err := c.get(ctx, "/rest/api/3/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	var statuses []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &statuses); err != nil {
+		return nil, fmt.Errorf("liste des statuts Jira illisible: %w", err)
+	}
+	out := make(map[string]string, len(statuses))
+	for _, st := range statuses {
+		out[st.ID] = st.Name
+	}
+	return out, nil
+}
+
 // JiraReadSource names the path the sync will read through, for the activity log.
 func JiraReadSource(settings *models.Settings, trackerURL string) string {
 	if NewJiraRESTClient(settings, trackerURL) != nil {
@@ -147,6 +413,101 @@ func (c *JiraRESTClient) get(ctx context.Context, path string, query url.Values)
 		return nil, readErr
 	}
 	return body, nil
+}
+
+func (c *JiraRESTClient) post(ctx context.Context, path string, payload interface{}) ([]byte, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.token)))
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("Jira a refusé l'authentification (%d)", resp.StatusCode)
+	}
+	if resp.StatusCode >= 300 {
+		snippet := strings.TrimSpace(string(respBody))
+		if len(snippet) > 300 {
+			snippet = snippet[:300]
+		}
+		return nil, fmt.Errorf("Jira %s a répondu %d: %s", path, resp.StatusCode, snippet)
+	}
+	return respBody, nil
+}
+
+// JiraTransition is one workflow transition available from the current status.
+// Its name is what the workflow calls the action ("Close Issue"), which is not
+// the name of the status it leads to ("Closed") — the distinction is exactly
+// what made acli refuse a valid move.
+type JiraTransition struct {
+	ID       string
+	Name     string
+	ToStatus string
+}
+
+// ListTransitions returns the transitions currently available on a work item.
+func (c *JiraRESTClient) ListTransitions(ctx context.Context, issueKey string) ([]JiraTransition, error) {
+	body, err := c.get(ctx, "/rest/api/3/issue/"+url.PathEscape(strings.TrimSpace(issueKey))+"/transitions", nil)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Transitions []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+			To   struct {
+				Name string `json:"name"`
+			} `json:"to"`
+		} `json:"transitions"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("transitions Jira illisibles: %w", err)
+	}
+	out := make([]JiraTransition, 0, len(payload.Transitions))
+	for _, tr := range payload.Transitions {
+		out = append(out, JiraTransition{ID: tr.ID, Name: tr.Name, ToStatus: tr.To.Name})
+	}
+	return out, nil
+}
+
+// TransitionToStatus moves a work item to a target status by finding the
+// transition that leads there and posting its id. Deterministic: no name
+// matching, and a refusal comes back as a real error instead of a success.
+func (c *JiraRESTClient) TransitionToStatus(ctx context.Context, issueKey string, statusName string) error {
+	statusName = strings.TrimSpace(statusName)
+	transitions, err := c.ListTransitions(ctx, issueKey)
+	if err != nil {
+		return err
+	}
+
+	for _, tr := range transitions {
+		if strings.EqualFold(tr.ToStatus, statusName) {
+			_, err := c.post(ctx, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/transitions",
+				map[string]interface{}{"transition": map[string]string{"id": tr.ID}})
+			return err
+		}
+	}
+
+	available := make([]string, 0, len(transitions))
+	for _, tr := range transitions {
+		available = append(available, tr.ToStatus)
+	}
+	return fmt.Errorf("aucune transition de %s ne mène à « %s » depuis son statut actuel (possibles : %s)",
+		issueKey, statusName, strings.Join(available, ", "))
 }
 
 type jiraFieldMeta struct {
@@ -375,4 +736,44 @@ func (c *JiraRESTClient) SearchProjectIssues(ctx context.Context, projectKey str
 	}
 
 	return result, nil
+}
+
+// CreateIssue creates an issue and returns its key.
+//
+// La création passait par acli, qui sort en code zéro même quand Jira refuse :
+// le motif du refus était perdu. Le REST renvoie le corps d'erreur de Jira, ce
+// qui rend un champ obligatoire manquant immédiatement lisible.
+func (c *JiraRESTClient) CreateIssue(ctx context.Context, projectKey, issueType, summary, parentKey string) (string, error) {
+	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
+	summary = strings.TrimSpace(summary)
+	if projectKey == "" {
+		return "", fmt.Errorf("clé de projet Jira manquante")
+	}
+	if summary == "" {
+		return "", fmt.Errorf("intitulé manquant")
+	}
+	if strings.TrimSpace(issueType) == "" {
+		issueType = "Epic"
+	}
+
+	fields := map[string]interface{}{
+		"project":   map[string]string{"key": projectKey},
+		"issuetype": map[string]string{"name": issueType},
+		"summary":   summary,
+	}
+	if strings.TrimSpace(parentKey) != "" {
+		fields["parent"] = map[string]string{"key": strings.ToUpper(strings.TrimSpace(parentKey))}
+	}
+
+	body, err := c.post(ctx, "/rest/api/3/issue", map[string]interface{}{"fields": fields})
+	if err != nil {
+		return "", err
+	}
+	var created struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || strings.TrimSpace(created.Key) == "" {
+		return "", fmt.Errorf("clé du ticket créé introuvable dans la réponse de Jira")
+	}
+	return created.Key, nil
 }
