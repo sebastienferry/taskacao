@@ -164,3 +164,81 @@ func TestHandleOpenEditor(t *testing.T) {
 	}
 }
 
+func TestHandleTaskPinAndListPins(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	database, err := db.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer database.Close()
+
+	h := handlers.NewHandler(database)
+
+	task, err := database.CreateTask(models.CreateTaskRequest{
+		Title:    "Task to Pin",
+		Status:   models.StatusToClarify,
+		Priority: models.PriorityMedium,
+		Source:   "local",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask failed: %v", err)
+	}
+
+	// 1. Pin via POST /api/tasks/{id}/pin
+	req, _ := http.NewRequest(http.MethodPost, "/api/tasks/"+task.ID+"/pin", nil)
+	rr := httptest.NewRecorder()
+	h.HandleTaskDetail(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var pinResp map[string]interface{}
+	_ = json.Unmarshal(rr.Body.Bytes(), &pinResp)
+	if pinResp["pinned"] != true {
+		t.Errorf("Expected pinned=true, got %v", pinResp["pinned"])
+	}
+
+	// 2. Fetch pins via GET /api/tasks/pins
+	reqList, _ := http.NewRequest(http.MethodGet, "/api/tasks/pins", nil)
+	rrList := httptest.NewRecorder()
+	h.HandleTaskPins(rrList, reqList)
+
+	if rrList.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d: %s", rrList.Code, rrList.Body.String())
+	}
+
+	var pinnedTasks []models.Task
+	if err := json.Unmarshal(rrList.Body.Bytes(), &pinnedTasks); err != nil {
+		t.Fatalf("Failed to unmarshal pinned tasks: %v", err)
+	}
+
+	if len(pinnedTasks) != 1 || pinnedTasks[0].ID != task.ID {
+		t.Errorf("Expected 1 pinned task with id %s, got %v", task.ID, pinnedTasks)
+	}
+	if !pinnedTasks[0].Pinned {
+		t.Errorf("Expected pinnedTask.Pinned=true")
+	}
+
+	// 3. Unpin via DELETE /api/tasks/{id}/pin
+	reqDel, _ := http.NewRequest(http.MethodDelete, "/api/tasks/"+task.ID+"/pin", nil)
+	rrDel := httptest.NewRecorder()
+	h.HandleTaskDetail(rrDel, reqDel)
+
+	if rrDel.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d: %s", rrDel.Code, rrDel.Body.String())
+	}
+
+	// Verify pins list is now empty
+	rrList2 := httptest.NewRecorder()
+	h.HandleTaskPins(rrList2, reqList)
+	var pinnedTasks2 []models.Task
+	_ = json.Unmarshal(rrList2.Body.Bytes(), &pinnedTasks2)
+	if len(pinnedTasks2) != 0 {
+		t.Errorf("Expected 0 pinned tasks after unpinning, got %d", len(pinnedTasks2))
+	}
+}
+
+

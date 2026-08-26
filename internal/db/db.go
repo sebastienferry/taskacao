@@ -154,6 +154,7 @@ func (d *DB) initSchema() error {
 			status TEXT NOT NULL DEFAULT 'backlog',
 			priority TEXT NOT NULL DEFAULT 'medium',
 			labels TEXT NOT NULL DEFAULT '[]',
+			pinned INTEGER NOT NULL DEFAULT 0,
 			assignee TEXT NOT NULL DEFAULT '',
 			assignee_avatar TEXT NOT NULL DEFAULT '',
 			position INTEGER NOT NULL DEFAULT 0,
@@ -230,6 +231,9 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN parent_title TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN parent_type TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_key);")
+	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;")
+	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_pinned ON tasks(pinned);")
+	d.migratePinnedTasks()
 	_, _ = d.conn.Exec(`CREATE TABLE IF NOT EXISTS daily_digests (
 		id TEXT PRIMARY KEY,
 		project_id TEXT NOT NULL,
@@ -370,6 +374,12 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 	var importErrs []string
 	for _, t := range syncedTasks {
 		labelsJSON, _ := json.Marshal(t.Labels)
+		isPinned := HasPinnedLabel(t.Labels)
+		pinnedVal := 0
+		if isPinned {
+			pinnedVal = 1
+		}
+
 		var existingID string
 		err := d.conn.QueryRow("SELECT id FROM tasks WHERE key = ? OR id = ?", t.Key, t.ID).Scan(&existingID)
 
@@ -400,20 +410,34 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 			if newID == "" {
 				newID = uuid.New().String()
 			}
+			if isPinned {
+				_, _ = d.conn.Exec(`
+					INSERT INTO pinned_tasks (task_id, pinned_at) VALUES (?, ?)
+					ON CONFLICT(task_id) DO NOTHING
+				`, newID, t.UpdatedAt.Format(time.RFC3339))
+			}
 			if _, insErr := d.conn.Exec(`
-				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, team, tracker_status, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.Sprint, t.Team, t.TrackerStatus, t.CreatedAt, now); insErr != nil {
+				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, team, tracker_status, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), pinnedVal, t.Assignee, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.Sprint, t.Team, t.TrackerStatus, t.CreatedAt, now); insErr != nil {
 				// Never swallow this: a silent failure here makes a sync report
 				// "N tickets imported" while the board stays empty.
 				log.Printf("[DB.ImportOrUpdateTasks] insert of %s failed: %v", t.Key, insErr)
 				importErrs = append(importErrs, fmt.Sprintf("%s: %v", t.Key, insErr))
 			}
 		} else if err == nil {
+			if isPinned {
+				_, _ = d.conn.Exec(`
+					INSERT INTO pinned_tasks (task_id, pinned_at) VALUES (?, ?)
+					ON CONFLICT(task_id) DO NOTHING
+				`, existingID, t.UpdatedAt.Format(time.RFC3339))
+			} else {
+				_, _ = d.conn.Exec(`DELETE FROM pinned_tasks WHERE task_id = ? OR task_id = ?`, existingID, t.Key)
+			}
 			// Update existing task title/desc/status/labels/source
 			if _, updErr := d.conn.Exec(`
 				UPDATE tasks
-				SET title = ?, description = ?, status = ?, priority = ?, labels = ?, assignee = ?, source = ?, external_url = ?,
+				SET title = ?, description = ?, status = ?, priority = ?, labels = ?, pinned = ?, assignee = ?, source = ?, external_url = ?,
 				    issue_type = CASE WHEN ? != '' THEN ? ELSE issue_type END,
 				    parent_key = CASE WHEN ? != '' THEN ? ELSE parent_key END,
 				    parent_title = CASE WHEN ? != '' THEN ? ELSE parent_title END,
@@ -423,7 +447,7 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 				    tracker_status = CASE WHEN ? != '' THEN ? ELSE tracker_status END,
 				    updated_at = ?
 				WHERE id = ?
-			`, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), t.Assignee, src, t.ExternalURL,
+			`, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), pinnedVal, t.Assignee, src, t.ExternalURL,
 				t.IssueType, t.IssueType, t.ParentKey, t.ParentKey, t.ParentTitle, t.ParentTitle, t.ParentType, t.ParentType,
 				t.Sprint, t.Sprint, t.Team, t.Team, t.TrackerStatus, t.TrackerStatus, now, existingID); updErr != nil {
 				log.Printf("[DB.ImportOrUpdateTasks] update of %s failed: %v", t.Key, updErr)
@@ -692,6 +716,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 		if t.Labels == nil {
 			t.Labels = []string{}
 		}
+		t.Pinned = HasPinnedLabel(t.Labels)
 
 		tasks = append(tasks, t)
 	}
@@ -798,6 +823,7 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 	if t.Labels == nil {
 		t.Labels = []string{}
 	}
+	t.Pinned = HasPinnedLabel(t.Labels)
 
 	activities, _ := d.getTaskActivitiesUnsafe(t.ID)
 	t.Activities = activities
@@ -1794,10 +1820,20 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 		labelsJSON = []byte("[]")
 	}
 
+	isPinned := HasPinnedLabel(req.Labels)
+	pinnedVal := 0
+	if isPinned {
+		pinnedVal = 1
+		_, _ = d.conn.Exec(`
+			INSERT INTO pinned_tasks (task_id, pinned_at) VALUES (?, ?)
+			ON CONFLICT(task_id) DO UPDATE SET pinned_at = excluded.pinned_at
+		`, id, now.Format(time.RFC3339))
+	}
+
 	_, err := d.conn.Exec(`
-		INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, source, external_url, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, projID, key, req.Title, req.Description, string(req.Status), string(req.Priority), string(labelsJSON), req.Assignee, req.AssigneeAvatar, newPos, req.DueDate, req.Source, extURL, now, now)
+		INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, source, external_url, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, projID, key, req.Title, req.Description, string(req.Status), string(req.Priority), string(labelsJSON), pinnedVal, req.Assignee, req.AssigneeAvatar, newPos, req.DueDate, req.Source, extURL, now, now)
 
 	if err != nil {
 		return nil, err
@@ -1812,6 +1848,7 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 		Status:         req.Status,
 		Priority:       req.Priority,
 		Labels:         req.Labels,
+		Pinned:         isPinned,
 		Assignee:       req.Assignee,
 		AssigneeAvatar: req.AssigneeAvatar,
 		Position:       newPos,
@@ -1952,13 +1989,26 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 	}
 	existing.UpdatedAt = time.Now()
 
+	isPinned := HasPinnedLabel(existing.Labels)
+	pinnedVal := 0
+	if isPinned {
+		pinnedVal = 1
+		_, _ = d.conn.Exec(`
+			INSERT INTO pinned_tasks (task_id, pinned_at) VALUES (?, ?)
+			ON CONFLICT(task_id) DO NOTHING
+		`, existing.ID, existing.UpdatedAt.Format(time.RFC3339))
+	} else {
+		_, _ = d.conn.Exec(`DELETE FROM pinned_tasks WHERE task_id = ? OR task_id = ?`, existing.ID, existing.Key)
+	}
+	existing.Pinned = isPinned
+
 	labelsJSON, _ := json.Marshal(existing.Labels)
 
 	_, err = d.conn.Exec(`
 		UPDATE tasks
-		SET project_id = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?, assignee = ?, assignee_avatar = ?, position = ?, due_date = ?, branch_name = ?, pr_url = ?, repo_path = ?, tracker_status = ?, source = ?, external_url = ?, updated_at = ?
+		SET project_id = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?, pinned = ?, assignee = ?, assignee_avatar = ?, position = ?, due_date = ?, branch_name = ?, pr_url = ?, repo_path = ?, tracker_status = ?, source = ?, external_url = ?, updated_at = ?
 		WHERE id = ? OR key = ?
-	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, repoPathValue(existing.RepoPath), existing.TrackerStatus, existing.Source, existing.ExternalURL, existing.UpdatedAt, existing.ID, existing.Key)
+	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), pinnedVal, existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, repoPathValue(existing.RepoPath), existing.TrackerStatus, existing.Source, existing.ExternalURL, existing.UpdatedAt, existing.ID, existing.Key)
 
 	if err != nil {
 		return nil, err
@@ -2137,11 +2187,13 @@ func (d *DB) DeleteTask(id string) error {
 
 	existing, _ := d.getTaskByIDUnsafe(id)
 	if existing != nil {
+		_, _ = d.conn.Exec("DELETE FROM pinned_tasks WHERE task_id = ? OR task_id = ?", existing.ID, existing.Key)
 		_, _ = d.conn.Exec("DELETE FROM task_activities WHERE task_id = ? OR task_id = ?", existing.ID, existing.Key)
 		_, err := d.conn.Exec("DELETE FROM tasks WHERE id = ? OR key = ?", existing.ID, existing.Key)
 		return err
 	}
 
+	_, _ = d.conn.Exec("DELETE FROM pinned_tasks WHERE task_id = ?", id)
 	_, _ = d.conn.Exec("DELETE FROM task_activities WHERE task_id = ?", id)
 	_, err := d.conn.Exec("DELETE FROM tasks WHERE id = ? OR key = ?", id, id)
 	return err
@@ -2239,6 +2291,7 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	if t.Labels == nil {
 		t.Labels = []string{}
 	}
+	t.Pinned = HasPinnedLabel(t.Labels)
 
 	return &t, nil
 }

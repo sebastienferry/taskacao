@@ -376,6 +376,8 @@ var validLinearLabels = map[string]string{
 	"improvement":  "Improvement",
 	"feature":      "Feature",
 	"bug":          "Bug",
+	"pinned":       "pinned",
+	"Pinned":       "pinned",
 }
 
 func filterLinearLabels(labels []string) []string {

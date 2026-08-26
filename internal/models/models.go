@@ -428,6 +428,7 @@ type Task struct {
 	ParentTitle string         `json:"parentTitle,omitempty"`
 	ParentType  string         `json:"parentType,omitempty"` // "Epic", "Story", …
 	Activities  []TaskActivity `json:"activities,omitempty"`
+	Pinned      bool           `json:"pinned,omitempty"`
 	CreatedAt   time.Time      `json:"createdAt"`
 	UpdatedAt   time.Time      `json:"updatedAt"`
 }

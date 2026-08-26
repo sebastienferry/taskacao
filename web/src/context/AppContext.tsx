@@ -1650,6 +1650,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Épinglage refusé')
       await fetchPins()
+      await fetchTasks()
     } catch (err: any) {
       addToast({ type: 'error', title: 'Épinglage impossible', description: err.message })
     }
