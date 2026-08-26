@@ -114,7 +114,7 @@ const WORKFLOW_SKILLS: { id: string; defaultName: string; code: string; desc: st
   { id: 'specify', defaultName: 'Specify', code: 'specify-issue', desc: 'Spécification technique (Spec Kit / OpenSpec)', icon: FileCode, color: 'blue' },
   { id: 'implement', defaultName: 'Implement', code: 'code-issue', desc: 'Développement & codage de la story', icon: Flame, color: 'indigo' },
   { id: 'create_pr', defaultName: 'Review & PR', code: 'create-pr', desc: 'Revue de code, tests & Pull Request', icon: ShieldCheck, color: 'purple' },
-  { id: 'pick', defaultName: 'Auto-Pilot', code: 'pick-issue', desc: 'Prise en charge et analyse autonome', icon: Sparkles, color: 'emerald' },
+  { id: 'handoff', defaultName: 'Handoff', code: 'handoff-issue', desc: 'Compte-rendu de passation & nettoyage local', icon: Sparkles, color: 'emerald' },
 ]
 
 const extractGithubRepoFromGitUrl = (url: string): string => {

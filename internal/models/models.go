@@ -147,6 +147,10 @@ type TrackerColumn struct {
 type TrackerSprint struct {
 	Name  string `json:"name"`
 	State string `json:"state"` // "active", "future", "closed"
+	// StartDate et EndDate viennent du board. Sans elles, l'ordre chronologique
+	// se devine par le nom, ce qui casse dès qu'une équipe nomme autrement.
+	StartDate string `json:"startDate,omitempty"`
+	EndDate   string `json:"endDate,omitempty"`
 }
 
 // EpicMeta is the epic-level data Taskacao owns. Epics are not imported as cards
@@ -155,10 +159,16 @@ type TrackerSprint struct {
 type EpicMeta struct {
 	ProjectID   string     `json:"projectId"`
 	Key         string     `json:"key"`
-	Horizon     string     `json:"horizon"` // "now", "next", "later", "" = non classé
+	Horizon     string     `json:"horizon"` // "now", "next", "later", "hidden", "" = non classé
 	Description string     `json:"description"`
 	Todos       []EpicTodo `json:"todos"`
-	UpdatedAt   time.Time  `json:"updatedAt"`
+	// Title et Status viennent du ticket épic lui-même, que la synchro n'importe
+	// pas comme carte. Closed permet de sortir de la roadmap ce qui est terminé
+	// sans avoir à deviner depuis l'état des enfants.
+	Title     string    `json:"title,omitempty"`
+	Status    string    `json:"status,omitempty"`
+	Closed    bool      `json:"closed"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // EpicTodo is one shaping item on an epic, before it becomes a story.
@@ -235,6 +245,47 @@ type InstalledSkillInfo struct {
 	Installed   bool   `json:"installed"`
 	Path        string `json:"path"`
 	Description string `json:"description"`
+}
+
+// SkillDirNames maps a workflow skill id to the directory its SKILL.md lives
+// in, which is also its slash command. It sits in models because both the
+// database (which renders the files) and the runner (which invokes the agent)
+// need it, and a second list would drift.
+var SkillDirNames = map[string]string{
+	"clarify":   "clarify-issue",
+	"specify":   "specify-issue",
+	"implement": "code-issue",
+	"create_pr": "create-pr",
+	"review":    "create-pr",
+	"handoff":   "handoff-issue",
+}
+
+// SkillAgentDirs are the per-repository directories the agent CLIs read their
+// skills from. ".skills" at the root is the CLI-agnostic convention.
+var SkillAgentDirs = []string{".claude", ".agents", ".gemini", ".agy", ""}
+
+// SkillEditorEntry is one workflow skill as the in-app editor sees it: the
+// content Taskacao holds, the built-in default it may override, and whether the
+// file on disk still matches. Divergence is surfaced rather than overwritten:
+// the repository file may carry hand edits worth keeping.
+type SkillEditorEntry struct {
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	DirName        string   `json:"dirName"`
+	Command        string   `json:"command"`
+	Description    string   `json:"description"`
+	FromStage      string   `json:"fromStage"`
+	ToStage        string   `json:"toStage"`
+	Interactive    bool     `json:"interactive"`
+	Content        string   `json:"content"`
+	DefaultContent string   `json:"defaultContent"`
+	IsCustom       bool     `json:"isCustom"`
+	UpdatedAt      string   `json:"updatedAt,omitempty"`
+	Installed      bool     `json:"installed"`
+	Paths          []string `json:"paths"`
+	Diverged       bool     `json:"diverged"`
+	RepoContent    string   `json:"repoContent,omitempty"`
+	RepoPath       string   `json:"repoPath,omitempty"`
 }
 
 type ProjectSkillsStatus struct {

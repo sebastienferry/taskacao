@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,10 @@ type SkillJob struct {
 	SyncTitle       bool
 	SyncDescription bool
 	SyncPriority    bool
+	// AutoChain enchaîne le pas suivant du workflow à la fin de celui-ci, jusqu'à
+	// l'étape de revue. Porté par le job et non par l'interface : la chaîne doit
+	// survivre à la fermeture de l'onglet.
+	AutoChain bool
 }
 
 type DB struct {
@@ -48,6 +53,9 @@ type DB struct {
 	jobQueue  chan SkillJob
 	cancelMap map[string]context.CancelFunc
 	cancelMu  sync.Mutex
+	// termRunner, quand il est branché, fait tourner les pas du workflow dans
+	// la session PTY de la tâche au lieu de tubes anonymes.
+	termRunner TerminalSessionRunner
 }
 
 func NewDB(dbPath string) (*DB, error) {
@@ -976,14 +984,10 @@ func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string,
 		}
 	}
 
-	// Ensure default skills are present in the worktree (.agents/skills, .gemini/skills, .agy/skills)
-	for _, s := range DefaultProjectSkills {
-		dirs := []string{
-			filepath.Join(worktreePath, ".agents", "skills", s.DirName),
-			filepath.Join(worktreePath, ".gemini", "skills", s.DirName),
-			filepath.Join(worktreePath, ".agy", "skills", s.DirName),
-		}
-		for _, dir := range dirs {
+	// Ensure the workflow skills are present in the worktree, in every agent
+	// directory. Absent files only: a worktree may carry local edits.
+	for _, s := range d.EffectiveProjectSkills(task.ProjectID, "") {
+		for _, dir := range SkillDirsFor(worktreePath, s.DirName) {
 			_ = os.MkdirAll(dir, 0755)
 			filePath := filepath.Join(dir, "SKILL.md")
 			if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -1584,6 +1588,29 @@ func GetStageLabelForStatus(status models.Status) string {
 	default:
 		return "new"
 	}
+}
+
+// workflowLabelVariants est la liste des libellés d'étape, dans les casses que
+// Taskacao et les trackers utilisent. Jira distingue la casse, donc retirer un
+// label exige de viser la bonne graphie — on les vise toutes.
+var workflowLabelVariants = []string{
+	"untouched", "new", "clarified", "specified", "implemented", "reviewed", "finished", "closed",
+	"Untouched", "New", "Clarified", "Specified", "Implemented", "Reviewed", "Finished",
+}
+
+// StaleWorkflowLabels liste les labels d'étape à retirer côté tracker quand on
+// pose targetLabel. Sans ça, un ticket accumule clarified, specified,
+// implemented… dans Jira alors que Taskacao n'en montre qu'un.
+func StaleWorkflowLabels(targetLabel string) []string {
+	target := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(targetLabel), "#"))
+	out := []string{}
+	for _, variant := range workflowLabelVariants {
+		if strings.EqualFold(variant, target) {
+			continue
+		}
+		out = append(out, variant)
+	}
+	return out
 }
 
 func SetWorkflowLabel(existingLabels []string, targetLabel string) []string {
@@ -2618,95 +2645,72 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 	return &s, nil
 }
 
+// GetAvailableSkills exposes the workflow catalogue. It derives from the single
+// StageSkills table: the skill the UI offers, the file installed in the
+// repository and the step the worker runs are by construction the same thing.
+// The old pick-issue auto-pilot is gone, the autonomous run button replaced it.
 func (d *DB) GetAvailableSkills() []models.Skill {
-	return []models.Skill{
-		{
-			ID:           "clarify",
-			Name:         "Clarify Issue",
-			Command:      "/clarify-issue",
-			Description:  "Analyse les ambiguïtés via l'IA, pose les questions de cadrage, avance vers 'À spécifier' et applique le label 'Clarified'.",
-			InputStatus:  models.StatusToClarify,
-			OutputStatus: models.StatusToSpecify,
-			Icon:         "HelpCircle",
-			Color:        "amber",
-			Steps: []string{
-				"Vérification de l'issue et du repo",
-				"Exécution du prompt de clarification avec l'IA",
-				"Génération des questions d'alignement",
-				"Mise à jour du label vers 'Clarified'",
-				"Transition vers 'À spécifier'",
-			},
-		},
-		{
-			ID:           "specify",
-			Name:         "Specify Issue (Speckit)",
-			Command:      "/specify-issue",
-			Description:  "Rédige la spec technique Speckit via l'IA, initialise la branche Git, avance vers 'À implémenter' et applique le label 'Specified'.",
-			InputStatus:  models.StatusToSpecify,
-			OutputStatus: models.StatusToImplement,
-			Icon:         "FileCode",
-			Color:        "blue",
-			Steps: []string{
-				"Génération de la spec Speckit par l'IA",
-				"Création de la branche Git",
-				"Mise à jour du label vers 'Specified'",
-				"Transition vers 'À implémenter'",
-			},
-		},
-		{
-			ID:           "implement",
-			Name:         "Implement Code",
-			Command:      "/code-issue",
-			Description:  "Exécute le plan de code par l'IA, valide les tests, avance vers 'À tester' et applique le label 'Implemented'.",
-			InputStatus:  models.StatusToImplement,
-			OutputStatus: models.StatusToTest,
-			Icon:         "Flame",
-			Color:        "indigo",
-			Steps: []string{
-				"Analyse des modifications requises par l'IA",
-				"Checkout de la branche de développement",
-				"Mise à jour du label vers 'Implemented'",
-				"Transition vers 'À tester'",
-			},
-		},
-		{
-			ID:           "create_pr",
-			Name:         "Review & Pull Request",
-			Command:      "/create-pr",
-			Description:  "Génère la revue de code et la PR GitHub via gh CLI, avance vers 'À fermer' et applique le label 'Reviewed'.",
-			InputStatus:  models.StatusToTest,
-			OutputStatus: models.StatusToClose,
-			Icon:         "ShieldCheck",
-			Color:        "purple",
-			Steps: []string{
-				"Revue de code & génération du commit conventionnel",
-				"Création de la Pull Request",
-				"Mise à jour du label vers 'Reviewed'",
-				"Transition vers 'À fermer'",
-			},
-		},
-		{
-			ID:           "pick",
-			Name:         "Auto-Pilot Orchestrator",
-			Command:      "/pick-issue",
-			Description:  "Routeur intelligent : détecte automatiquement l'étape et enchaîne les 5 étapes (À clarifier ➔ À spécifier ➔ À implémenter ➔ À tester ➔ À fermer).",
-			InputStatus:  models.StatusToClarify,
-			OutputStatus: models.StatusToClose,
-			Icon:         "Sparkles",
-			Color:        "emerald",
-			Steps: []string{
-				"Analyse automatique de l'étape courante",
-				"Sélection de la skill optimale",
-				"Transition du statut et mise à jour du label",
-			},
-		},
+	specFramework := "speckit"
+	if st, _ := d.GetSettings(); st != nil && strings.TrimSpace(st.SpecFramework) != "" {
+		specFramework = st.SpecFramework
 	}
+
+	out := make([]models.Skill, 0, len(StageSkills))
+	for _, s := range StageSkills {
+		name := s.Name
+		if s.ID == "specify" {
+			name = specifyFrameworkName(specFramework)
+		}
+		in, _ := InternalStatusForStage(s.FromStage)
+		outStatus, _ := InternalStatusForStage(s.ToStage)
+		out = append(out, models.Skill{
+			ID:           s.ID,
+			Name:         name,
+			Command:      s.Command,
+			Description:  s.Description,
+			InputStatus:  in,
+			OutputStatus: outStatus,
+			Icon:         s.Icon,
+			Color:        s.Color,
+			Steps:        s.Steps,
+		})
+	}
+	return out
 }
 
 func (d *DB) startQueueWorker() {
 	for job := range d.jobQueue {
-		d.processSkillJob(job)
+		d.runJobGuarded(job)
 	}
+}
+
+// runJobGuarded isolates one job from the worker goroutine. A panic used to take
+// the whole server down with it: the queue runs in its own goroutine, so nothing
+// above could recover it.
+func (d *DB) runJobGuarded(job SkillJob) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[skill] panique sur l'activité %s (%s): %v\n%s", job.ActivityID, job.SkillID, rec, debug.Stack())
+			d.mu.Lock()
+			_, _ = d.conn.Exec(`
+				UPDATE task_activities
+				SET status = 'failed', summary = ?, error = ?, completed_at = ?
+				WHERE id = ?
+			`, "Échec interne pendant l'exécution de la skill", fmt.Sprintf("panique: %v", rec), time.Now(), job.ActivityID)
+			d.mu.Unlock()
+		}
+	}()
+	d.processSkillJob(job)
+}
+
+// branchLabel names a task's branch for a report, and says so when the project
+// works without a dedicated branch. Dereferencing it blindly panicked on every
+// project with worktrees turned off.
+func branchLabel(task *models.Task) string {
+	if task != nil && task.BranchName != nil && strings.TrimSpace(*task.BranchName) != "" {
+		return *task.BranchName
+	}
+	return "(sans branche dédiée)"
 }
 
 func (d *DB) processSkillJob(job SkillJob) {
@@ -2722,7 +2726,10 @@ func (d *DB) processSkillJob(job SkillJob) {
 
 	// 2. Mark activity as running
 	now := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Pas de plafond de durée ici : il coupait un run long à cinq minutes et
+	// l'enregistrait comme une annulation humaine. Le plafond est désormais un
+	// plafond de silence, tenu par la session de terminal.
+	ctx, cancel := context.WithCancel(context.Background())
 	d.cancelMu.Lock()
 	d.cancelMap[job.ActivityID] = cancel
 	d.cancelMu.Unlock()
@@ -2791,43 +2798,7 @@ func (d *DB) processSkillJob(job SkillJob) {
 	// Dynamic per-project configuration override. This must cover the AI engine
 	// too: a project configured for Claude was previously executed with the
 	// global provider (agy), silently ignoring its own setting.
-	if task.ProjectID != "" {
-		if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
-			if proj.RepoPath != "" {
-				settings.RepoPath = proj.RepoPath
-			}
-			if proj.LinearTeam != "" {
-				settings.LinearTeam = proj.LinearTeam
-			}
-			if proj.GithubRepo != "" {
-				settings.GithubRepo = proj.GithubRepo
-			}
-			if proj.JiraProject != "" {
-				settings.JiraProject = proj.JiraProject
-			}
-			if proj.TrackerUrl != "" {
-				settings.JiraUrl = proj.TrackerUrl
-			}
-			if proj.IssueTracker != "" {
-				settings.IssueTracker = proj.IssueTracker
-			}
-			if proj.AIProvider != "" {
-				settings.AIProvider = proj.AIProvider
-			}
-			if proj.AICommandTemplate != "" {
-				settings.AICommandTemplate = proj.AICommandTemplate
-			}
-			if proj.SpecFramework != "" {
-				settings.SpecFramework = proj.SpecFramework
-			}
-
-			// A project may point a workflow stage at a different skill than the
-			// scaffolded default (for instance /clarify-workitem instead of
-			// /clarify-issue). The executed slash command has to follow the
-			// override, otherwise the board shows one command and runs another.
-			applySkillCommandOverride(settings, proj, job.SkillID)
-		}
-	}
+	d.applyProjectSettings(settings, task, job.SkillID)
 
 	// A single ticket may pin its own repository, which wins over the project's
 	// path: on a tracker where one epic spans several codebases, the project
@@ -2865,8 +2836,9 @@ func (d *DB) processSkillJob(job SkillJob) {
 	runnerSettings := *settings
 	runnerSettings.RepoPath = executionDir
 
-	// Run AI execution via runner in the isolated worktree
-	realAIOutput, runnerSteps, execErr := d.runner.RunAI(&runnerSettings, job.SkillID, task, job.Prompt)
+	// Run the step in the task's PTY session when one can be used, so it can be
+	// watched and answered while it works; headless otherwise.
+	realAIOutput, runnerSteps, execErr := d.runSkill(ctx, &runnerSettings, job.SkillID, task, job.Prompt, executionDir)
 	completedTime := time.Now()
 
 	if worktreeStep != "" {
@@ -2932,13 +2904,13 @@ func (d *DB) processSkillJob(job SkillJob) {
 		task.Status = resolveMappedStatus("specified", models.StatusToImplement)
 		task.Labels = SetWorkflowLabel(task.Labels, "specified")
 		action = fmt.Sprintf("Spécification Speckit rédigée avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
-		summary = fmt.Sprintf("Spec technique créée sur la branche %s ➔ Étape: %s [Label: #specified]", *task.BranchName, task.Status)
+		summary = fmt.Sprintf("Spec technique créée sur la branche %s ➔ Étape: %s [Label: #specified]", branchLabel(task), task.Status)
 
 	case "implement":
 		task.Status = resolveMappedStatus("implemented", models.StatusToTest)
 		task.Labels = SetWorkflowLabel(task.Labels, "implemented")
 		action = fmt.Sprintf("Implémentation exécutée avec %s (%s)", strings.ToUpper(settings.AIProvider), skill.Command)
-		summary = fmt.Sprintf("Développement terminé sur la branche %s ➔ Étape: %s [Label: #implemented]", *task.BranchName, task.Status)
+		summary = fmt.Sprintf("Développement terminé sur la branche %s ➔ Étape: %s [Label: #implemented]", branchLabel(task), task.Status)
 
 		// Check if changes exist in worktree to stage and commit
 		if executionDir != "" && task.BranchName != nil {
@@ -2949,6 +2921,12 @@ func (d *DB) processSkillJob(job SkillJob) {
 				_ = exec.Command("git", "-C", executionDir, "commit", "-m", commitMsg).Run()
 			}
 		}
+
+	case "handoff":
+		task.Status = resolveMappedStatus("finished", models.StatusFinished)
+		task.Labels = SetWorkflowLabel(task.Labels, "finished")
+		action = fmt.Sprintf("Handoff et nettoyage exécutés avec %s", strings.ToUpper(settings.AIProvider))
+		summary = fmt.Sprintf("Tâche clôturée : handoff documenté et espace local nettoyé ➔ Étape: %s [Label: #finished]", task.Status)
 
 	case "create_pr", "review":
 		task.Status = resolveMappedStatus("reviewed", models.StatusToClose)
@@ -3035,6 +3013,25 @@ func (d *DB) processSkillJob(job SkillJob) {
 	`, action, summary, realAIOutput, string(stepsJSON), completedTime, job.ActivityID)
 	d.mu.Unlock()
 
+	// Chaîne autonome : le pas suivant est mis en file, sauf si l'étape atteinte
+	// demande une revue humaine. C'est le seul point d'arrêt volontaire : plus
+	// loin, l'agent créerait la MR et clôturerait sans qu'un humain ait vu le diff.
+	if job.AutoChain {
+		reached := d.StageOfTask(task)
+		if reached == AutonomousStopStage {
+			d.appendActivityStep(job.ActivityID, "⏸ Chaîne autonome arrêtée : le code attend ta revue")
+		} else if next, ok := NextStep(reached); ok && !next.Interactive {
+			d.appendActivityStep(job.ActivityID, "⏭ Chaîne autonome : "+next.Label)
+			go func(taskID, skillID string) {
+				if _, _, err := d.enqueueSkillOnTask(taskID, skillID, "", true); err != nil {
+					log.Printf("[autochain] %s: %v", taskID, err)
+				}
+			}(task.ID, next.SkillID)
+		} else if ok && next.Interactive {
+			d.appendActivityStep(job.ActivityID, "⏸ Chaîne autonome arrêtée : l'étape suivante demande une session interactive")
+		}
+	}
+
 	// Background state, label, and report comment sync with Linear / GitHub / Jira CLI
 	if task.Source == "linear" || task.Source == "github" || task.Source == "jira" || strings.HasPrefix(task.Key, "FRE-") || strings.HasPrefix(task.Key, "#") || strings.HasPrefix(task.Key, "gh-") || strings.HasPrefix(task.Key, "GH-#") {
 		var commentHeader string
@@ -3053,7 +3050,25 @@ func (d *DB) processSkillJob(job SkillJob) {
 
 		commentBody := commentHeader + realAIOutput
 
-		go func(src, repo, rPath, key, body string, st models.Status, lbls []string) {
+		// Labels d'étape : le nouveau est posé ET les précédents sont retirés.
+		// Le tracker ne fait pas le remplacement tout seul, contrairement à
+		// SetWorkflowLabel en local.
+		stageLabel := skillStageLabel[skill.ID]
+		staleLabels := StaleWorkflowLabels(stageLabel)
+
+		// Statut visé : celui de la colonne que le projet associe à l'étape,
+		// faute de quoi on laisse UpdateJiraIssue deviner. Deviner échouait en
+		// silence, acli attendant le nom de la transition et sortant en zéro.
+		trackerStatusTarget := ""
+		trackerURL := ""
+		if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
+			trackerURL = proj.TrackerUrl
+			if stageLabel != "" {
+				trackerStatusTarget = TrackerStatusForStage(proj, stageLabel)
+			}
+		}
+
+		go func(src, repo, rPath, key, body string, st models.Status, lbls []string, stale []string, statusTarget string, trackerURL string) {
 			if src == "linear" || strings.HasPrefix(key, "FRE-") {
 				_ = d.runner.UpdateLinearIssueState(key, st)
 				_ = d.runner.UpdateLinearIssue(key, nil, nil, nil, &st, lbls)
@@ -3061,18 +3076,28 @@ func (d *DB) processSkillJob(job SkillJob) {
 					_ = d.runner.AddIssueComment(src, repo, rPath, key, body)
 				}
 			} else if src == "jira" {
-				_ = d.runner.UpdateJiraIssue(key, rPath, nil, nil, nil, &st, lbls, nil)
+				if statusTarget != "" {
+					// Labels d'abord, sans statut, puis transition nommée.
+					if err := d.runner.UpdateJiraIssue(key, rPath, nil, nil, nil, nil, lbls, stale); err != nil {
+						log.Printf("[skill] labels de %s non mis à jour: %v", key, err)
+					}
+					if err := d.runner.TransitionJiraIssueToStatus(settings, trackerURL, key, statusTarget, rPath); err != nil {
+						log.Printf("[skill] transition de %s vers %q impossible: %v", key, statusTarget, err)
+					}
+				} else if err := d.runner.UpdateJiraIssue(key, rPath, nil, nil, nil, &st, lbls, stale); err != nil {
+					log.Printf("[skill] mise à jour de %s impossible: %v", key, err)
+				}
 				if strings.TrimSpace(body) != "" {
 					_ = d.runner.AddIssueComment(src, repo, rPath, key, body)
 				}
 			} else if src == "github" || strings.HasPrefix(key, "#") || strings.HasPrefix(key, "gh-") || strings.HasPrefix(key, "GH-#") {
 				_ = d.runner.UpdateGithubIssueState(repo, rPath, key, st)
-				_ = d.runner.UpdateGithubIssue(repo, rPath, key, nil, nil, &st, lbls, nil)
+				_ = d.runner.UpdateGithubIssue(repo, rPath, key, nil, nil, &st, lbls, stale)
 				if strings.TrimSpace(body) != "" {
 					_ = d.runner.AddIssueComment(src, repo, rPath, key, body)
 				}
 			}
-		}(task.Source, settings.GithubRepo, settings.RepoPath, task.Key, commentBody, task.Status, task.Labels)
+		}(task.Source, settings.GithubRepo, settings.RepoPath, task.Key, commentBody, task.Status, task.Labels, staleLabels, trackerStatusTarget, trackerURL)
 	}
 }
 
@@ -3231,6 +3256,16 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 			totalImported = len(tasks)
 			summary = fmt.Sprintf("%d Jira issues synchronized successfully", len(tasks))
 
+			// Les horizons de roadmap sont portés par les labels des épics : la
+			// synchro ne les voit pas autrement, elle n'importe que Task et Story.
+			if job.ProjectID != "" {
+				if note, epicErr := d.ImportEpicHorizons(job.ProjectID); epicErr == nil {
+					steps = append(steps, "3b. "+note)
+				} else {
+					steps = append(steps, "ℹ️ Horizons de roadmap non importés : "+epicErr.Error())
+				}
+			}
+
 			// Les colonnes du board suivent le tracker sans import manuel.
 			if job.ProjectID != "" {
 				if note, colErr := d.SyncProjectBoardColumns(job.ProjectID); colErr != nil {
@@ -3370,6 +3405,17 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 		WHERE id = ?
 	`, status, summary, strings.Join(outputLines, "\n"), string(stepsJSON), errText, completedTime, job.ActivityID)
 	d.mu.Unlock()
+}
+
+// skillStageLabel donne l'étape atteinte quand une skill se termine, pour savoir
+// quel label poser et vers quel statut transitionner.
+var skillStageLabel = map[string]string{
+	"clarify":   "clarified",
+	"specify":   "specified",
+	"implement": "implemented",
+	"create_pr": "reviewed",
+	"review":    "reviewed",
+	"handoff":   "finished",
 }
 
 // enqueueTrackerUpdateUnsafe schedules the tracker sync. changed says which
@@ -3783,6 +3829,39 @@ func (d *DB) EnqueueSync(syncType string, param string, projectID string) (*mode
 }
 
 func (d *DB) EnqueueSkillOnTask(taskID string, skillID string, prompt string) (*models.Task, *models.TaskActivity, error) {
+	return d.enqueueSkillOnTask(taskID, skillID, prompt, false)
+}
+
+// EnqueueAutonomousRun starts the chain: each step enqueues the next until the
+// work reaches the review stage.
+func (d *DB) EnqueueAutonomousRun(taskID string) (*models.Task, *models.TaskActivity, error) {
+	d.mu.RLock()
+	task, err := d.getTaskByIDUnsafe(taskID)
+	d.mu.RUnlock()
+	if err != nil || task == nil {
+		return nil, nil, fmt.Errorf("tâche non trouvée")
+	}
+
+	stage := d.StageOfTask(task)
+	if stage == AutonomousStopStage || stage == "reviewed" || stage == "finished" {
+		return nil, nil, fmt.Errorf("la tâche est déjà à l'étape %s : la suite demande une revue humaine", stage)
+	}
+	step, ok := NextStep(stage)
+	if !ok {
+		return nil, nil, fmt.Errorf("aucun pas suivant depuis l'étape %s", stage)
+	}
+	// La clarification est interactive par nature ; en autonomie on démarre donc
+	// à la spécification et on le dit à l'appelant par l'activité créée.
+	if step.Interactive {
+		step, ok = NextStep("clarified")
+		if !ok {
+			return nil, nil, fmt.Errorf("aucun pas autonome disponible")
+		}
+	}
+	return d.enqueueSkillOnTask(taskID, step.SkillID, "", true)
+}
+
+func (d *DB) enqueueSkillOnTask(taskID string, skillID string, prompt string, autoChain bool) (*models.Task, *models.TaskActivity, error) {
 	d.mu.RLock()
 	task, err := d.getTaskByIDUnsafe(taskID)
 	d.mu.RUnlock()
@@ -3837,6 +3916,7 @@ func (d *DB) EnqueueSkillOnTask(taskID string, skillID string, prompt string) (*
 		ProjectID:  task.ProjectID,
 		SkillID:    targetSkill.ID,
 		Prompt:     prompt,
+		AutoChain:  autoChain,
 	}
 
 	return task, &act, nil
@@ -4903,128 +4983,6 @@ type ProjectSkillTemplate struct {
 	Content     string
 }
 
-var DefaultProjectSkills = []ProjectSkillTemplate{
-	{
-		ID:          "clarify",
-		Name:        "Clarify Issue",
-		DirName:     "clarify-issue",
-		Description: "Analyse les ambiguïtés techniques et produit 3 à 5 questions de cadrage.",
-		Content: `---
-name: clarify-issue
-description: Analyse une story ou un ticket, identifie les zones d'ombre et formule les questions précises de cadrage.
----
-# Skill : Clarify Issue
-
-## Objectif
-Analyser l'issue ou la story spécifiée, identifier les ambiguïtés techniques et fonctionnelles, et produire une synthèse claire avec des questions ciblées de clarification.
-
-## Instructions
-1. Lire la description du ticket et inspecter le code source existant dans le workspace.
-2. Détecter les zones d'ombre : architecture, stockage, sécurité, dépendances et cas limites.
-3. Formuler 3 à 5 questions concises et structurées pour aligner le produit et l'ingénierie.
-4. Structurer la sortie avec :
-   - Analyse des ambiguïtés
-   - Dépendances critiques
-   - Questions d'alignement numérotées
-`,
-	},
-	{
-		ID:          "specify",
-		Name:        "Specify Issue (Speckit)",
-		DirName:     "specify-issue",
-		Description: "Rédige la spec technique Speckit, définit les critères d'acceptation Gherkin et prépare la branche Git.",
-		Content: `---
-name: specify-issue
-description: Rédige la spécification technique Speckit, définit les critères d'acceptation Gherkin et prépare la branche Git.
----
-# Skill : Specify Issue (Speckit)
-
-## Objectif
-Générer une spécification technique exhaustive et actionnable (Speckit) prête pour l'implémentation.
-
-## Instructions
-1. Vérifier les réponses de clarification et le contexte du projet.
-2. Créer ou basculer sur la branche Git de travail au format <KEY>-<titre-slug>.
-3. Rédiger la spec technique complète incluant :
-   - Contexte et Objectifs
-   - User Stories et Scénarios d'Acceptation (Given / When / Then)
-   - Architecture & Diagrammes de flux (Mermaid)
-   - Contrats d'API et Schémas de Données
-   - Plan de tests et critères de validation
-`,
-	},
-	{
-		ID:          "implement",
-		Name:        "Implement Code",
-		DirName:     "code-issue",
-		Description: "Implémente le code conformément à la spécification technique, exécute les tests et valide le build.",
-		Content: `---
-name: code-issue
-description: Implémente le code conformément à la spécification technique, exécute les tests et valide le linting.
----
-# Skill : Code Issue (Implement)
-
-## Objectif
-Implémenter les changements de code de manière rigoureuse et testée selon la spécification technique.
-
-## Instructions
-1. Inspecter la spécification technique et la branche courante.
-2. Écrire ou mettre à jour les tests unitaires et d'intégration nécessaires.
-3. Implémenter les modifications de code nécessaires dans le respect des conventions du projet.
-4. Exécuter la suite de tests et les vérifications de linting / build.
-5. Résumer les fichiers modifiés et les résultats des validations.
-`,
-	},
-	{
-		ID:          "create_pr",
-		Name:        "Review & Pull Request / Merge",
-		DirName:     "create-pr",
-		Description: "Revue finale, commit conventionnel et création de la Pull Request (ou fusion locale si aucun remote n'est configuré).",
-		Content: `---
-name: create-pr
-description: Effectue la revue finale, génère des commits conventionnels et publie la Pull Request sur GitHub (ou fusionne localement si aucun remote n'est configuré).
----
-# Skill : Review, Pull Request & Local Merge
-
-## Objectif
-Revoir les changements, valider la qualité du code, commiter avec des messages conventionnels et publier la Pull Request (ou fusionner localement si aucun remote n'est configuré).
-
-## Instructions
-1. Effectuer un 'git status' et 'git diff' pour inspecter tous les changements sur la branche.
-2. S'assurer que les modifications sont commitées (ex: feat(scope): ... ou fix(scope): ...).
-3. Vérifier les remotes via 'git remote' :
-   - **Si remote présent** : Pousser la branche ('git push -u origin <branch>') et créer la Pull Request ('gh pr create' ou 'glab mr create').
-   - **Si aucun remote configuré** : Basculer sur la branche principale ('git checkout main') et fusionner la branche ('git merge --no-ff <branch>').
-4. Produire un compte-rendu clair des actions réalisées.
-`,
-	},
-	{
-		ID:          "pick",
-		Name:        "Auto-Pilot Orchestrator",
-		DirName:     "pick-issue",
-		Description: "Sélectionne la tâche prioritaire, exécute les compétences requises jusqu'à la PR ou la clôture.",
-		Content: `---
-name: pick-issue
-description: Sélectionne la tâche prioritaire, avance son statut à travers le cycle de développement complet et crée la PR.
----
-# Skill : Auto-Pilot Orchestrator (Pick Issue)
-
-## Objectif
-Prendre en charge une tâche depuis la file d'attente, exécuter de manière autonome le cycle de clarification, spécification, codage et ouverture de PR.
-
-## Instructions
-1. Identifier la tâche cible spécifiée ou prendre la plus prioritaire.
-2. Basculer ou créer la branche Git dédiée dans le worktree.
-3. Exécuter séquentiellement :
-   - /clarify-issue (si non cadrée)
-   - /specify-issue (si non spécifiée)
-   - /code-issue (implémentation et tests)
-   - /create-pr (validation finale et soumission)
-4. Mettre à jour le statut et consigner les artefacts d'exécution.
-`,
-	},
-}
-
 func getGitWorktreePaths(repoPath string) []string {
 	var paths []string
 	cleanRepo, err := filepath.Abs(filepath.Clean(repoPath))
@@ -5131,42 +5089,25 @@ func (d *DB) GetProjectSkillsStatus(projectIDOrPath string) (*models.ProjectSkil
 		res.InstalledAll = false
 	}
 
-	for _, s := range DefaultProjectSkills {
-		p0 := filepath.Join(repoPath, ".agents", "skills", s.DirName, "SKILL.md")
-		p1 := filepath.Join(repoPath, ".gemini", "skills", s.DirName, "SKILL.md")
-		p2 := filepath.Join(repoPath, ".agy", "skills", s.DirName, "SKILL.md")
-		p3 := filepath.Join(repoPath, ".skills", s.DirName, "SKILL.md")
-
+	for _, s := range ProjectSkillTemplates(specFramework) {
+		candidates := SkillDirsFor(repoPath, s.DirName)
 		installed := false
-		targetPath := p0
-		if _, err := os.Stat(p0); err == nil {
-			installed = true
-			targetPath = p0
-		} else if _, err := os.Stat(p1); err == nil {
-			installed = true
-			targetPath = p1
-		} else if _, err := os.Stat(p2); err == nil {
-			installed = true
-			targetPath = p2
-		} else if _, err := os.Stat(p3); err == nil {
-			installed = true
-			targetPath = p3
-		} else {
-			res.InstalledAll = false
-		}
-
-		skillName := s.Name
-		if s.ID == "specify" {
-			if specFramework == "openspec" {
-				skillName = "Specify Issue (OpenSpec SDD)"
-			} else {
-				skillName = "Specify Issue (Spec Kit SDD)"
+		targetPath := filepath.Join(candidates[0], "SKILL.md")
+		for _, dir := range candidates {
+			p := filepath.Join(dir, "SKILL.md")
+			if _, err := os.Stat(p); err == nil {
+				installed = true
+				targetPath = p
+				break
 			}
+		}
+		if !installed {
+			res.InstalledAll = false
 		}
 
 		res.Skills = append(res.Skills, models.InstalledSkillInfo{
 			ID:          s.ID,
-			Name:        skillName,
+			Name:        s.Name,
 			Installed:   installed,
 			Path:        targetPath,
 			Description: s.Description,
@@ -5239,93 +5180,23 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string, overrides ...string) (
 	// Get all worktree paths to scaffold skills into every worktree directory
 	targetPaths := getGitWorktreePaths(repoPath)
 
-	// Build skills with framework-specific content for specify-issue
-	skillsToInstall := make([]ProjectSkillTemplate, len(DefaultProjectSkills))
-	copy(skillsToInstall, DefaultProjectSkills)
-
-	for i, s := range skillsToInstall {
-		if s.ID == "specify" {
-			if specFramework == "openspec" {
-				skillsToInstall[i].Name = "Specify Issue (OpenSpec SDD)"
-				skillsToInstall[i].Content = `---
-name: specify-issue
-description: Rédige la spécification selon la convention OpenSpec (proposition de changement sous openspec/changes/, deltas de specs et checklist de tâches).
----
-# Skill : Specify Issue (OpenSpec SDD)
-
-## Objectif
-Produire une proposition de changement OpenSpec revue avant écriture de code, dans le
-répertoire ` + "`openspec/`" + ` du projet.
-
-## Pré-requis
-Le projet doit être initialisé avec OpenSpec (répertoire ` + "`openspec/`" + ` présent).
-Sinon, lancer l'installation OpenSpec depuis la configuration du projet Taskacao,
-ou exécuter ` + "`openspec init`" + ` à la racine du dépôt.
-
-## Instructions
-1. Lire ` + "`openspec/project.md`" + ` et les specs existantes sous ` + "`openspec/specs/`" + `
-   pour connaître les capacités déjà décrites.
-2. Créer ou basculer sur la branche Git de travail au format <KEY>-<titre-slug>.
-3. Créer le dossier de changement ` + "`openspec/changes/<KEY>-<titre-slug>/`" + ` et y écrire :
-   - ` + "`proposal.md`" + ` : le pourquoi (problème, valeur, périmètre inclus et exclu).
-   - ` + "`design.md`" + ` : les décisions techniques et les alternatives écartées.
-   - ` + "`tasks.md`" + ` : la checklist ordonnée et vérifiable de mise en œuvre.
-   - ` + "`specs/<capability>/spec.md`" + ` : les deltas de comportement, sous forme
-     d'exigences ` + "`## ADDED`" + ` / ` + "`## MODIFIED`" + ` / ` + "`## REMOVED`" + ` avec des
-     scénarios Given / When / Then.
-4. Valider la proposition avec ` + "`openspec validate <change-id> --strict`" + ` et corriger
-   les erreurs signalées.
-5. Publier le résumé de la proposition en commentaire du ticket, puis attendre la revue
-   avant d'implémenter.
-`
-			} else {
-				skillsToInstall[i].Name = "Specify Issue (Spec Kit SDD)"
-				skillsToInstall[i].Content = `---
-name: specify-issue
-description: Rédige la spécification technique selon GitHub Spec Kit (spec.md, plan.md, tasks.md sous specs/), avec user stories, architecture et critères d'acceptation Gherkin.
----
-# Skill : Specify Issue (GitHub Spec Kit SDD)
-
-## Objectif
-Produire la spécification exécutable d'un ticket selon GitHub Spec Kit, dans le
-répertoire ` + "`specs/`" + ` du projet.
-
-## Pré-requis
-Le projet doit être initialisé avec Spec Kit (répertoire ` + "`.specify/`" + ` présent).
-Sinon, lancer l'installation Spec Kit depuis la configuration du projet Taskacao,
-ou exécuter ` + "`specify init --here`" + ` à la racine du dépôt.
-
-## Instructions
-1. Lire ` + "`.specify/memory/constitution.md`" + ` pour respecter les principes du projet.
-2. Créer ou basculer sur la branche Git de travail au format <KEY>-<titre-slug>.
-3. Écrire ` + "`specs/<KEY>-<titre-slug>/spec.md`" + ` (le quoi et le pourquoi, sans
-   choix d'implémentation) :
-   - Contexte, User Stories priorisées et périmètre exclu
-   - Exigences fonctionnelles numérotées et critères d'acceptation Given / When / Then
-   - Points à clarifier marqués explicitement plutôt que devinés
-4. Écrire ` + "`plan.md`" + ` (le comment) : pile technique, architecture, contrats de données
-   et diagrammes de flux Mermaid.
-5. Écrire ` + "`tasks.md`" + ` : la checklist ordonnée et vérifiable de mise en œuvre.
-6. Si les commandes Spec Kit sont disponibles dans l'agent, utiliser
-   ` + "`/speckit.specify`" + `, ` + "`/speckit.plan`" + ` puis ` + "`/speckit.tasks`" + `
-   au lieu de rédiger les fichiers à la main.
-7. Publier le résumé de la spécification en commentaire du ticket.
-`
-			}
-		}
-	}
+	// Le contenu vient de la base quand le projet a édité ses skills, du modèle
+	// intégré sinon. Une seule source, régénérée dans chaque worktree.
+	skillsToInstall := d.EffectiveProjectSkills(projectID, specFramework)
 
 	// Install skills into each target path (root repo and all worktrees)
 	for _, targetDir := range targetPaths {
 		for _, s := range skillsToInstall {
-			dirs := []string{
-				filepath.Join(targetDir, ".agents", "skills", s.DirName),
-				filepath.Join(targetDir, ".gemini", "skills", s.DirName),
-				filepath.Join(targetDir, ".agy", "skills", s.DirName),
-				filepath.Join(targetDir, ".skills", s.DirName),
+			// La commande slash, en plus de la skill : c'est elle que Taskacao
+			// invoque, et sans elle « /clarify-issue » n'est que du texte.
+			if cmdContent, ok := CommandContentFor(s.ID, specFramework); ok {
+				cmdPath := SkillCommandPath(targetDir, s.DirName)
+				if err := os.MkdirAll(filepath.Dir(cmdPath), 0755); err == nil {
+					_ = os.WriteFile(cmdPath, []byte(cmdContent), 0644)
+				}
 			}
 
-			for _, dir := range dirs {
+			for _, dir := range SkillDirsFor(targetDir, s.DirName) {
 				if err := os.MkdirAll(dir, 0755); err != nil {
 					continue
 				}
@@ -5347,14 +5218,8 @@ ou exécuter ` + "`specify init --here`" + ` à la racine du dépôt.
 			"specFramework":     specFramework,
 			"aiProvider":        aiProvider,
 			"aiCommandTemplate": aiCommandTemplate,
-			"skills": []string{
-				"clarify-issue",
-				"specify-issue",
-				"code-issue",
-				"create-pr",
-				"pick-issue",
-			},
-			"updatedAt": time.Now().Format(time.RFC3339),
+			"skills":            skillDirNames(skillsToInstall),
+			"updatedAt":         time.Now().Format(time.RFC3339),
 		}
 		if bytes, err := json.MarshalIndent(cfgData, "", "  "); err == nil {
 			_ = os.WriteFile(configFile, bytes, 0644)
@@ -5633,4 +5498,81 @@ func (d *DB) DetectTrackerStatuses(projectID, tracker, linearTeam, githubRepo st
 	}
 
 	return results, nil
+}
+
+// skillDirNames lists the installed skill directories, for .taskacao/config.json.
+func skillDirNames(skills []ProjectSkillTemplate) []string {
+	out := make([]string, 0, len(skills))
+	for _, s := range skills {
+		out = append(out, s.DirName)
+	}
+	return out
+}
+
+// applyProjectSettings layers a project's own configuration over the global
+// settings for one task, the AI engine included.
+//
+// Elle est partagée par le worker et par le lancement en session TTY : ce
+// dernier lisait les réglages globaux et tentait donc de démarrer « agy » sur un
+// projet configuré pour Claude, avec un « binaire agy introuvable » à la clé.
+func (d *DB) applyProjectSettings(settings *models.Settings, task *models.Task, skillID string) {
+	if settings == nil || task == nil || task.ProjectID == "" {
+		return
+	}
+	proj, _ := d.GetProjectByID(task.ProjectID)
+	if proj == nil {
+		return
+	}
+
+	if proj.RepoPath != "" {
+		settings.RepoPath = proj.RepoPath
+	}
+	if proj.LinearTeam != "" {
+		settings.LinearTeam = proj.LinearTeam
+	}
+	if proj.GithubRepo != "" {
+		settings.GithubRepo = proj.GithubRepo
+	}
+	if proj.JiraProject != "" {
+		settings.JiraProject = proj.JiraProject
+	}
+	if proj.TrackerUrl != "" {
+		settings.JiraUrl = proj.TrackerUrl
+	}
+	if proj.IssueTracker != "" {
+		settings.IssueTracker = proj.IssueTracker
+	}
+	if proj.AIProvider != "" {
+		settings.AIProvider = proj.AIProvider
+	}
+	if proj.AICommandTemplate != "" {
+		settings.AICommandTemplate = proj.AICommandTemplate
+	}
+	if proj.SpecFramework != "" {
+		settings.SpecFramework = proj.SpecFramework
+	}
+
+	// A project may point a workflow stage at a different skill than the
+	// scaffolded default (for instance /clarify-workitem instead of
+	// /clarify-issue). The executed slash command has to follow the override,
+	// otherwise the board shows one command and runs another.
+	applySkillCommandOverride(settings, proj, skillID)
+}
+
+// ProjectSkillCommand returns the slash command of a workflow skill for a
+// project: the project's override when it set one, the unified default
+// otherwise.
+func (d *DB) ProjectSkillCommand(task *models.Task, skillID string) string {
+	dirName := models.SkillDirNames[skillID]
+	if task != nil && task.ProjectID != "" {
+		if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil && proj.SkillOverrides != nil {
+			if override := strings.TrimSpace(proj.SkillOverrides[skillID]); override != "" {
+				dirName = strings.TrimPrefix(override, "/")
+			}
+		}
+	}
+	if dirName == "" {
+		dirName = skillID
+	}
+	return "/" + dirName
 }

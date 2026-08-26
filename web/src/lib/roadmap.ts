@@ -11,7 +11,7 @@ import { WORKFLOW_ORDER, resolveTaskStage } from './workflow'
  * à jour après une synchro.
  */
 
-export type Horizon = 'now' | 'next' | 'later'
+export type Horizon = 'now' | 'next' | 'later' | 'hidden'
 /** Onglet de la roadmap : les trois horizons, plus les épics pas encore arbitrés. */
 export type HorizonTab = Horizon | 'unclassified'
 export type Maturity = 'Draft' | 'Clarified' | 'Specified' | 'Ready'
@@ -40,6 +40,8 @@ export interface EpicRow {
   unscheduled: Task[]
   sprints: string[]
   meta?: EpicMeta
+  /** L'épic est terminé côté tracker : hors roadmap par défaut. */
+  closed: boolean
 }
 
 const PRIORITY_RANK: Record<Priority, number> = { urgent: 4, high: 3, medium: 2, low: 1 }
@@ -75,6 +77,13 @@ export const HORIZON_META: Record<Horizon, { label: string; hint: string; color:
     bg: 'rgb(var(--status-warn-rgb) / 0.12)',
     border: 'rgb(var(--status-warn-rgb) / 0.32)',
   },
+  hidden: {
+    label: 'HIDDEN',
+    hint: 'Tout-venant',
+    color: 'var(--text-muted)',
+    bg: 'var(--bg-tertiary)',
+    border: 'var(--border-color)',
+  },
 }
 
 export const MATURITY_META: Record<Maturity, { pct: number; color: string; bg: string; border: string }> = {
@@ -98,7 +107,10 @@ const isOpen = (task: Task): boolean => task.status !== 'finished' && task.statu
  * n'est « Ready » que si aucun de ses tickets n'attend encore un cadrage ou une
  * spécification.
  */
-const maturityOf = (open: Task[], project?: Project | null): Maturity => {
+const maturityOf = (open: Task[], total: number, project?: Project | null): Maturity => {
+  // Aucun enfant du tout : l'épic n'est pas prêt, il est vide. Le distinguer de
+  // « tous les enfants terminés » évite d'afficher Ready sur une coquille.
+  if (total === 0) return 'Draft'
   if (open.length === 0) return 'Ready'
   let lowest = WORKFLOW_ORDER.length - 1
   open.forEach(task => {
@@ -118,6 +130,8 @@ const maturityOf = (open: Task[], project?: Project | null): Maturity => {
  * L'utilisateur tranche, la suggestion ne sert qu'à proposer un arbitrage en un
  * clic sur les épics encore non classés.
  */
+// La suggestion ne propose jamais « hidden » : décider qu'un épic est du
+// tout-venant est un jugement, aucune donnée ne le dit.
 const suggestHorizon = (inActive: Task[], inFuture: Task[]): Horizon => {
   if (inActive.length > 0) return 'now'
   if (inFuture.length > 0) return 'next'
@@ -149,6 +163,13 @@ export const buildEpicRows = (
     const list = byKey.get(key)
     if (list) list.push(task)
     else byKey.set(key, [task])
+  })
+
+  // Les épics connus du tracker mais sans aucun ticket doivent apparaître :
+  // sinon un épic fraîchement créé est invisible, donc inutilisable comme cible
+  // pour découper un épic trop gros.
+  ;(epicMeta || []).forEach(m => {
+    if (!byKey.has(m.key)) byKey.set(m.key, [])
   })
 
   const rows: EpicRow[] = []
@@ -185,6 +206,8 @@ export const buildEpicRows = (
       if (team) teamCounts.set(team, (teamCounts.get(team) || 0) + 1)
     })
     const squad = Array.from(teamCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || '—'
+    // Un épic vide n'a ni équipe ni priorité déduite : on l'assume plutôt que de
+    // fabriquer une valeur.
 
     let priority: Priority = 'low'
     children.forEach(t => {
@@ -194,11 +217,13 @@ export const buildEpicRows = (
     const meta = metaByKey.get(key)
     rows.push({
       key,
-      title: children.find(t => (t.parentTitle || '').trim())?.parentTitle || key,
+      // Le titre du ticket épic quand la synchro l'a lu, sinon celui que
+      // portent ses enfants.
+      title: meta?.title || children.find(t => (t.parentTitle || '').trim())?.parentTitle || key,
       squad,
       horizon: (meta?.horizon as Horizon | '') || '',
       suggested: suggestHorizon(inActiveSprint, inFutureSprint),
-      maturity: maturityOf(open, project),
+      maturity: maturityOf(open, children.length, project),
       priority,
       tasks: children,
       open,
@@ -210,6 +235,7 @@ export const buildEpicRows = (
         new Set([...inActiveSprint, ...inFutureSprint, ...inStaleSprint].map(t => (t.sprint || '').trim()).filter(Boolean))
       ).sort(),
       meta,
+      closed: Boolean(meta?.closed),
     })
   })
 
@@ -272,3 +298,89 @@ export const PLACEMENT_META: Record<PlacementState, { label: string; color: stri
     border: 'rgb(var(--status-danger-rgb) / 0.32)',
   },
 }
+
+/**
+ * Un épic appartient au projet quand sa clé porte le préfixe du projet. Les
+ * autres viennent de tickets rattachés à un épic d'un autre projet Jira : utile
+ * à savoir, encombrant dans une roadmap d'équipe.
+ */
+export const belongsToProjectKey = (row: EpicRow, projectKey: string): boolean => {
+  const prefix = projectKey.trim().toUpperCase()
+  if (!prefix) return true
+  return row.key.toUpperCase().startsWith(prefix + '-')
+}
+
+/**
+ * Rang chronologique des sprints du projet.
+ *
+ * La date de début du board fait référence quand elle est là. À défaut, on lit
+ * le nom : la convention `2026-Q3-04` se trie toute seule, et ce qui n'y répond
+ * pas garde son rang d'apparition sur le board. Un ticket sans sprint passe en
+ * dernier, parce qu'il n'est pas encore placé dans le temps.
+ */
+export const sprintRank = (project?: Project | null): Map<string, number> => {
+  const sprints = project?.sprints || []
+  const keyed = sprints.map((sp, index) => {
+    const start = (sp.startDate || '').trim()
+    const parsed = start ? Date.parse(start) : NaN
+    return {
+      name: (sp.name || '').trim(),
+      index,
+      time: Number.isFinite(parsed) ? parsed : NaN,
+      nameKey: sprintNameKey(sp.name || ''),
+    }
+  })
+
+  const sorted = [...keyed].sort((a, b) => {
+    if (Number.isFinite(a.time) && Number.isFinite(b.time)) return a.time - b.time
+    if (Number.isFinite(a.time)) return -1
+    if (Number.isFinite(b.time)) return 1
+    if (a.nameKey && b.nameKey) return a.nameKey.localeCompare(b.nameKey)
+    return a.index - b.index
+  })
+
+  const ranks = new Map<string, number>()
+  sorted.forEach((sp, rank) => {
+    if (sp.name) ranks.set(sp.name, rank)
+  })
+  return ranks
+}
+
+/** Clé triable extraite d'un nom de sprint du type `2026-Q3-04 PE`. */
+const sprintNameKey = (name: string): string => {
+  const m = name.match(/(\d{4})[-\s]*Q?(\d)[-\s]*(\d+)?/)
+  if (!m) return ''
+  const [, year, quarter, num] = m
+  return `${year}-${quarter}-${(num || '0').padStart(3, '0')}`
+}
+
+/**
+ * Tickets d'un épic dans l'ordre chronologique de leur sprint, puis par clé.
+ * C'est cet ordre que le curseur de coupe utilise : couper à un rang veut dire
+ * « tout ce qui vient après ce sprint part ailleurs ».
+ */
+export const tasksBySprintOrder = (tasks: Task[], project?: Project | null): Task[] => {
+  const ranks = sprintRank(project)
+  const rankOf = (task: Task): number => {
+    const sprint = (task.sprint || '').trim()
+    if (!sprint) return Number.MAX_SAFE_INTEGER
+    const known = ranks.get(sprint)
+    if (known !== undefined) return known
+    // Sprint inconnu du board : placé après les sprints connus, mais avant les
+    // tickets sans sprint, et trié entre eux par nom.
+    return Number.MAX_SAFE_INTEGER - 1
+  }
+
+  return [...tasks].sort((a, b) => {
+    const ra = rankOf(a)
+    const rb = rankOf(b)
+    if (ra !== rb) return ra - rb
+    const sa = (a.sprint || '').trim()
+    const sb = (b.sprint || '').trim()
+    if (sa !== sb) return sa.localeCompare(sb)
+    return a.key.localeCompare(b.key, undefined, { numeric: true })
+  })
+}
+
+/** Libellé du sprint d'un ticket, pour l'affichage groupé. */
+export const sprintLabelOf = (task: Task): string => (task.sprint || '').trim() || 'Sans sprint'

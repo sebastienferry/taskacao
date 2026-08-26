@@ -61,6 +61,19 @@ export interface TerminalSession {
   createdAt: string
   lastActiveAt: string
   historyBytes: number
+  /** Un agent CLI a été démarré dans cette session. */
+  agentRunning?: boolean
+}
+
+/** Résultat d'un démarrage d'agent ou d'une injection de skill dans un TTY. */
+export interface TTYLaunchResult {
+  sessionId: string
+  agentLaunched?: boolean
+  agentRunning?: boolean
+  call?: string
+  cwd?: string
+  provider?: string
+  launchCommand?: string
 }
 
 export interface TaskComment {
@@ -76,9 +89,12 @@ export interface TrackerSprint {
   name: string
   /** « active », « future » ou « closed » : ce qui sépare NOW de NEXT. */
   state: string
+  /** Dates du board, qui donnent l'ordre chronologique réel des sprints. */
+  startDate?: string
+  endDate?: string
 }
 
-export type EpicHorizon = 'now' | 'next' | 'later'
+export type EpicHorizon = 'now' | 'next' | 'later' | 'hidden'
 
 export interface EpicTodo {
   id: string
@@ -91,6 +107,11 @@ export interface EpicTodo {
 export interface EpicMeta {
   projectId: string
   key: string
+  /** Titre et statut du ticket épic lui-même, lus par la synchro. */
+  title?: string
+  status?: string
+  /** L'épic est dans une catégorie « terminé » côté tracker. */
+  closed?: boolean
   /** Chaîne vide = épic non encore classé. */
   horizon: EpicHorizon | ''
   description: string
@@ -285,7 +306,7 @@ export type Language = 'fr' | 'en'
 
 export type Density = 'compact' | 'standard' | 'comfortable'
 
-export type ViewMode = 'board' | 'list' | 'roadmap' | 'activities' | 'sync' | 'digest'
+export type ViewMode = 'board' | 'list' | 'roadmap' | 'activities' | 'sync' | 'digest' | 'skills'
 
 export type BoardGroupingMode = 'workflow' | 'status'
 
@@ -504,4 +525,29 @@ export interface ProjectGitInitResult {
   branch: string
   message: string
   initialized: boolean
+}
+
+/**
+ * Une skill du workflow telle que l'éditeur la voit. Le contenu vient de la base
+ * Taskacao, le modèle intégré sert de valeur par défaut, et `diverged` signale
+ * qu'un SKILL.md a été retouché à la main dans le dépôt.
+ */
+export interface SkillEditorEntry {
+  id: string
+  name: string
+  dirName: string
+  command: string
+  description: string
+  fromStage: string
+  toStage: string
+  interactive: boolean
+  content: string
+  defaultContent: string
+  isCustom: boolean
+  updatedAt?: string
+  installed: boolean
+  paths: string[]
+  diverged: boolean
+  repoContent?: string
+  repoPath?: string
 }

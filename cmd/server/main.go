@@ -74,6 +74,10 @@ func main() {
 
 	h := handlers.NewHandler(database)
 
+	// Les pas du workflow tournent dans la session PTY de leur tâche : visibles
+	// pendant qu'ils travaillent, ouvrables d'un clic, et interrogeables.
+	database.SetTerminalRunner(h.TerminalRunner())
+
 	mux := http.NewServeMux()
 
 	// API Routes
@@ -98,6 +102,7 @@ func main() {
 	mux.HandleFunc("/api/projects/", h.HandleProjectDetail)
 	mux.HandleFunc("/api/tasks", h.HandleTasks)
 	mux.HandleFunc("/api/tasks/facets", h.HandleTaskFacets)
+	mux.HandleFunc("/api/tasks/pins", h.HandleTaskPins)
 	mux.HandleFunc("/api/tasks/", h.HandleTaskDetail)
 	mux.HandleFunc("/api/activities", h.HandleActivities)
 	mux.HandleFunc("/api/activities/", h.HandleActivityDetail)

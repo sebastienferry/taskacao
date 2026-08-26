@@ -30,6 +30,7 @@ import {
   Plus,
   Settings2,
   CalendarDays,
+  FileCode2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { accentBadgeStyle } from '../lib/accents'
@@ -417,6 +418,21 @@ export const Sidebar: React.FC = () => {
                   </span>
                 ) : null
               )}
+            </button>
+            {/* Skills du workflow : une par pas, éditables dans l'outil */}
+            <button
+              onClick={() => setActiveView('skills')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'skills'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Skills du workflow agentique : une par étape, éditables ici"
+            >
+              <div className="flex items-center gap-2.5 min-w-0 truncate">
+                <FileCode2 size={15} className="shrink-0 text-amber-400" />
+                {!sidebarCollapsed && <span className="truncate">Skills</span>}
+              </div>
             </button>
             <button
               onClick={() => setActiveView('sync')}

@@ -423,8 +423,10 @@ export const TaskDetailModal: React.FC = () => {
       case 'to_test':
       case 'to_validate':
         return skills.find(s => s.id === 'create_pr' || s.id === 'review') || skills[3]
+      case 'to_close':
+        return skills.find(s => s.id === 'handoff') || skills[4]
       default:
-        return skills.find(s => s.id === 'pick') || skills[4]
+        return skills[0]
     }
   }
 
@@ -1405,27 +1407,15 @@ export const TaskDetailModal: React.FC = () => {
           </div>
         </div>
 
-        {/* Auto-Pilot Trigger */}
-        <button
-          onClick={() => handleTriggerSkill('pick')}
-          disabled={isSkillRunning}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-linear-to-r from-amber-500 to-orange-500 shadow hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
-          title="Détecter automatiquement l'état et exécuter la compétence idéale"
-        >
-          <Sparkles size={13} className="text-amber-200" />
-          <span>{t.skills.autoPilot}</span>
-        </button>
       </div>
 
-      {/* Pipeline Stepper (Clarify -> Specify -> Implement -> PR) */}
+      {/* Les cinq pas du workflow, dans l'ordre : clarify, specify, implement, PR, handoff */}
       <div className="space-y-2">
         <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
           Pipeline d'Avancement des Skills
         </label>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {skills
-            .filter(s => s.id !== 'pick')
-            .map((s, index) => {
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+          {skills.map((s, index) => {
               const isRecommended = nextSkill?.id === s.id
               const isCurrentRunning = isSkillRunning && runningSkillId === s.id
 

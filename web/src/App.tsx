@@ -8,6 +8,8 @@ import { RoadmapView } from './components/RoadmapView'
 import { ActivitiesView } from './components/ActivitiesView'
 import { SyncView } from './components/SyncView'
 import { DigestView } from './components/DigestView'
+import { SkillsView } from './components/SkillsView'
+import { PinnedBar } from './components/PinnedBar'
 import { QuickAddModal } from './components/QuickAddModal'
 import { TaskDetailModal } from './components/TaskDetailModal'
 import { CommandPalette } from './components/CommandPalette'
@@ -33,6 +35,9 @@ const MainContent: React.FC = () => {
         <div className="flex-1 flex flex-col h-full overflow-hidden">
           <Header />
 
+          {/* Bascule à chaud entre les tickets épinglés */}
+          <PinnedBar />
+
           {/* Dynamic View Body */}
           <main className="flex-1 flex flex-col overflow-hidden relative">
             {isLoading && tasks.length === 0 ? (
@@ -55,6 +60,8 @@ const MainContent: React.FC = () => {
               <SyncView />
             ) : activeView === 'digest' ? (
               <DigestView />
+            ) : activeView === 'skills' ? (
+              <SkillsView />
             ) : (
               <ActivitiesView />
             )}

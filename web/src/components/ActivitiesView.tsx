@@ -40,6 +40,7 @@ export const ActivitiesView: React.FC = () => {
     deleteActivity,
     clearCompletedActivities,
     setSelectedTask,
+    openTerminalForTask,
     tasks,
     skills,
     t,
@@ -550,6 +551,19 @@ export const ActivitiesView: React.FC = () => {
                           title={t.activities.detail.retry}
                         >
                           <RotateCcw size={13} />
+                        </button>
+                      )}
+
+                      {/* La console du run : une étape autonome tourne dans la
+                          session PTY de sa tâche, on peut la regarder et y
+                          répondre pendant qu'elle travaille. */}
+                      {isRunning && act.taskId && (
+                        <button
+                          onClick={() => openTerminalForTask(act.taskId)}
+                          className="p-1 rounded-lg hover:bg-cyan-500/15 text-cyan-400 transition-colors"
+                          title="Ouvrir la console de ce run"
+                        >
+                          <Terminal size={13} />
                         </button>
                       )}
 

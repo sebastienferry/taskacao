@@ -1,9 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Target,
   Route,
   Compass,
   HelpCircle,
+  EyeOff,
+  Eye,
   CalendarDays,
   ExternalLink,
   Plus,
@@ -12,12 +14,15 @@ import {
   Terminal as TerminalIcon,
   AlertTriangle,
   Save,
+  X,
+  Scissors,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import {
   buildEpicRows,
   placementIssues,
   placementOf,
+  belongsToProjectKey,
   HORIZON_META,
   MATURITY_META,
   PLACEMENT_META,
@@ -25,6 +30,8 @@ import {
   type EpicRow,
   type Horizon,
   type HorizonTab,
+  tasksBySprintOrder,
+  sprintLabelOf,
 } from '../lib/roadmap'
 import type { EpicHorizon, EpicMeta, EpicTodo } from '../types'
 
@@ -46,6 +53,9 @@ const TABS: { id: HorizonTab; label: string; icon: React.ReactNode }[] = [
   { id: 'next', label: 'NEXT', icon: <Route size={14} /> },
   { id: 'later', label: 'LATER', icon: <Compass size={14} /> },
   { id: 'unclassified', label: 'Non classés', icon: <HelpCircle size={14} /> },
+  // Sans onglet dédié, un épic masqué serait injoignable : on ne pourrait plus
+  // le reclasser.
+  { id: 'hidden', label: 'Masqués', icon: <EyeOff size={14} /> },
 ]
 
 export const RoadmapView: React.FC = () => {
@@ -58,6 +68,12 @@ export const RoadmapView: React.FC = () => {
     fetchProjectEpics,
     saveEpicMeta,
     createStoryFromEpicTodo,
+    pendingHorizonPushes,
+    pushPendingHorizons,
+    setTaskEpic,
+    createStoryUnderEpic,
+    createEpic,
+    moveTasksToEpic,
     addToast,
   } = useApp()
 
@@ -65,6 +81,10 @@ export const RoadmapView: React.FC = () => {
   const [epicMeta, setEpicMeta] = useState<EpicMeta[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [onlyIssues, setOnlyIssues] = useState(false)
+  // Les épics terminés et ceux d'un autre projet Jira sont écartés par défaut :
+  // une roadmap sert à décider de ce qui reste à faire chez soi.
+  const [showClosed, setShowClosed] = useState(false)
+  const [onlyProjectKey, setOnlyProjectKey] = useState(true)
 
   // Le cadrage n'est enregistré qu'à la demande : écrire à chaque frappe
   // enverrait une requête par caractère.
@@ -72,6 +92,23 @@ export const RoadmapView: React.FC = () => {
   const [draftDirty, setDraftDirty] = useState(false)
   const [newTodo, setNewTodo] = useState('')
   const [creatingTodoId, setCreatingTodoId] = useState<string | null>(null)
+  const [pendingPushes, setPendingPushes] = useState(0)
+  const [isPushing, setIsPushing] = useState(false)
+  const pendingTimer = useRef<number | null>(null)
+  // Prototypage de l'épic : créer une story a la volée, ou y pousser un ticket
+  // existant retrouvé par sa clé ou son titre.
+  const [newStory, setNewStory] = useState('')
+  const [attachQuery, setAttachQuery] = useState('')
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+  // Découpe : les stories cochées partent vers un autre épic, existant ou créé
+  // pour l'occasion.
+  const [checked, setChecked] = useState<Record<string, boolean>>({})
+  // Curseur de coupe : rang dans la liste ordonnée par sprint à partir duquel
+  // les tickets quittent l'épic. 0 veut dire « tout couper », la longueur de la
+  // liste veut dire « ne rien couper ».
+  const [cutAt, setCutAt] = useState<number>(-1)
+  const [moveTarget, setMoveTarget] = useState('')
+  const [newEpicTitle, setNewEpicTitle] = useState('')
 
   useEffect(() => {
     if (!currentProject?.id) {
@@ -79,9 +116,22 @@ export const RoadmapView: React.FC = () => {
       return
     }
     fetchProjectEpics(currentProject.id).then(setEpicMeta)
-  }, [currentProject?.id, fetchProjectEpics])
+    pendingHorizonPushes(currentProject.id).then(list => setPendingPushes(list.length))
+  }, [currentProject?.id, fetchProjectEpics, pendingHorizonPushes])
 
-  const rows = useMemo(() => buildEpicRows(tasks, currentProject, epicMeta), [tasks, currentProject, epicMeta])
+  const allRows = useMemo(() => buildEpicRows(tasks, currentProject, epicMeta), [tasks, currentProject, epicMeta])
+
+  const projectKey = (currentProject?.jiraProject || '').trim().toUpperCase()
+
+  const rows = useMemo(() => {
+    let list = allRows
+    if (!showClosed) list = list.filter(r => !r.closed)
+    if (onlyProjectKey && projectKey) list = list.filter(r => belongsToProjectKey(r, projectKey))
+    return list
+  }, [allRows, showClosed, onlyProjectKey, projectKey])
+
+  const closedCount = allRows.filter(r => r.closed).length
+  const foreignCount = projectKey ? allRows.filter(r => !belongsToProjectKey(r, projectKey)).length : 0
 
   const counts = useMemo(
     () => ({
@@ -89,12 +139,16 @@ export const RoadmapView: React.FC = () => {
       next: rows.filter(r => r.horizon === 'next').length,
       later: rows.filter(r => r.horizon === 'later').length,
       unclassified: rows.filter(r => !r.horizon).length,
+      hidden: rows.filter(r => r.horizon === 'hidden').length,
     }),
     [rows]
   )
 
   const operational = tab === 'now' || tab === 'next'
-  const horizonOfTab: Horizon = tab === 'next' ? 'next' : tab === 'later' ? 'later' : 'now'
+  // Les onglets « non classés » et « masqués » n'ont pas d'horizon propre : le
+  // panneau y montre le cadrage, pas la vérification de sprint.
+  const horizonOfTab: Horizon =
+    tab === 'next' ? 'next' : tab === 'later' ? 'later' : tab === 'hidden' ? 'hidden' : 'now'
 
   const visibleRows = useMemo(() => {
     const list = tab === 'unclassified' ? rows.filter(r => !r.horizon) : rows.filter(r => r.horizon === tab)
@@ -106,17 +160,56 @@ export const RoadmapView: React.FC = () => {
 
   const selected: EpicRow | null = visibleRows.find(r => r.key === selectedKey) || visibleRows[0] || null
 
+  // Les tickets de l'épic dans l'ordre chronologique de leur sprint : c'est cet
+  // ordre que la liste affiche et que le curseur de coupe découpe.
+  const orderedOpen = useMemo(
+    () => (selected ? tasksBySprintOrder(selected.open, currentProject) : []),
+    [selected?.key, selected?.open, currentProject?.id, currentProject?.sprints]
+  )
+
+  // Les tickets à couper : ceux cochés à la main, ou ceux situés au delà du
+  // curseur. Les deux gestes alimentent la même action.
+  const cutIds = useMemo(() => {
+    const manual = Object.entries(checked).filter(([, on]) => on).map(([id]) => id)
+    if (manual.length > 0) return manual
+    if (cutAt >= 0) return orderedOpen.slice(cutAt).map(t => t.id)
+    return []
+  }, [checked, cutAt, orderedOpen])
+
   useEffect(() => {
     setDraftDescription(selected?.meta?.description || '')
     setDraftDirty(false)
     setNewTodo('')
+    setChecked({})
+    setCutAt(-1)
+    setMoveTarget('')
+    setNewEpicTitle('')
   }, [selected?.key, selected?.meta?.description])
+
+  const attachCandidates = useMemo(() => {
+    const q = attachQuery.trim().toLowerCase()
+    if (!q || !selected) return []
+    return tasks
+      .filter(t => t.parentKey !== selected.key)
+      .filter(t => t.key.toLowerCase().includes(q) || t.title.toLowerCase().includes(q))
+      .slice(0, 6)
+  }, [attachQuery, tasks, selected])
 
   const jiraBase = (currentProject?.trackerUrl || settings.jiraUrl || '').replace(/\/+$/, '')
   const epicUrl = (key: string) => (jiraBase ? `${jiraBase}/browse/${key}` : undefined)
 
   const activeSprints = (currentProject?.sprints || []).filter(s => s.state === 'active')
   const futureSprints = (currentProject?.sprints || []).filter(s => s.state === 'future')
+
+  // Le compteur « à pousser » interroge Jira : on ne le rafraîchit pas à chaque
+  // clic, mais une fois le triage retombé.
+  const schedulePendingRefresh = () => {
+    if (pendingTimer.current) window.clearTimeout(pendingTimer.current)
+    pendingTimer.current = window.setTimeout(() => {
+      if (!currentProject?.id) return
+      pendingHorizonPushes(currentProject.id).then(list => setPendingPushes(list.length))
+    }, 4000)
+  }
 
   const persist = async (
     key: string,
@@ -133,6 +226,7 @@ export const RoadmapView: React.FC = () => {
     const saved = await saveEpicMeta(currentProject.id, key, patch)
     if (saved) {
       setEpicMeta(prev => [...prev.filter(m => m.key !== saved.key), saved])
+      if (patch.horizon !== undefined) schedulePendingRefresh()
     }
   }
 
@@ -183,6 +277,83 @@ export const RoadmapView: React.FC = () => {
             })}
           </div>
 
+          {pendingPushes > 0 && (
+            <button
+              type="button"
+              disabled={isPushing}
+              onClick={async () => {
+                if (!currentProject?.id) return
+                setIsPushing(true)
+                await pushPendingHorizons(currentProject.id)
+                const rest = await pendingHorizonPushes(currentProject.id)
+                setPendingPushes(rest.length)
+                setIsPushing(false)
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer border disabled:opacity-50"
+              style={{
+                background: 'rgb(var(--status-warn-rgb) / 0.14)',
+                borderColor: 'rgb(var(--status-warn-rgb) / 0.34)',
+                color: 'var(--status-warn)',
+              }}
+              title="Ces épics sont classés dans Taskacao mais leur épic Jira ne porte pas encore le label roadmap"
+            >
+              {isPushing ? 'Poussée…' : `${pendingPushes} à pousser vers Jira`}
+            </button>
+          )}
+
+          {closedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowClosed(v => !v)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer border"
+              style={{
+                background: showClosed ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                borderColor: showClosed ? 'rgb(var(--accent-rgb) / 0.4)' : 'var(--border-color)',
+                color: showClosed ? 'var(--accent-color)' : 'var(--text-secondary)',
+              }}
+              title={`${closedCount} épics terminés côté tracker`}
+            >
+              {showClosed ? <Eye size={12} /> : <EyeOff size={12} />}
+              {showClosed ? `${closedCount} terminés affichés` : `${closedCount} terminés masqués`}
+            </button>
+          )}
+
+          {projectKey && foreignCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setOnlyProjectKey(v => !v)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer border font-mono"
+              style={{
+                background: onlyProjectKey ? 'rgb(var(--status-info-rgb) / 0.12)' : 'var(--bg-tertiary)',
+                borderColor: onlyProjectKey ? 'rgb(var(--status-info-rgb) / 0.32)' : 'var(--border-color)',
+                color: onlyProjectKey ? 'var(--status-info)' : 'var(--text-secondary)',
+              }}
+              title={`${foreignCount} épics venant d'un autre projet Jira, portés par des tickets ${projectKey}`}
+            >
+              {onlyProjectKey ? `${projectKey}- uniquement` : `tous projets (+${foreignCount})`}
+            </button>
+          )}
+
+          <button
+            type="button"
+            disabled={busyKey === 'epic' || !currentProject?.id}
+            onClick={async () => {
+              const title = window.prompt('Titre du nouvel épic ?')
+              if (!title?.trim() || !currentProject?.id) return
+              setBusyKey('epic')
+              const created = await createEpic(currentProject.id, title.trim(), tab === 'unclassified' || tab === 'hidden' ? '' : (tab as EpicHorizon))
+              if (created) {
+                setEpicMeta(prev => [...prev.filter(m => m.key !== created.key), created])
+                setSelectedKey(created.key)
+              }
+              setBusyKey(null)
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold text-white accent-bg cursor-pointer disabled:opacity-40"
+            title="Créer un épic vide, utilisable comme cible pour découper un épic trop gros"
+          >
+            <Plus size={12} /> Épic
+          </button>
+
           {operational && (
             <button
               type="button"
@@ -224,7 +395,9 @@ export const RoadmapView: React.FC = () => {
               <Compass size={26} className="text-[var(--text-muted)]" />
               <p className="text-sm font-semibold">Aucun épic ici</p>
               <p className="text-[11px] text-[var(--text-muted)] max-w-sm">
-                {tab === 'unclassified'
+                {tab === 'hidden'
+                  ? 'Aucun épic masqué. Classe en HIDDEN le tout-venant qui n’a pas vocation à apparaître dans la roadmap.'
+                  : tab === 'unclassified'
                   ? 'Tous les épics sont classés. Les nouveaux apparaîtront ici après une synchro.'
                   : onlyIssues
                     ? 'Aucune anomalie de placement sur cet horizon.'
@@ -303,7 +476,7 @@ export const RoadmapView: React.FC = () => {
 
                   {/* Classification : un clic, et la suggestion est mise en avant */}
                   <div className="flex items-center gap-1.5 mt-2">
-                    {(['now', 'next', 'later'] as EpicHorizon[]).map(h => {
+                    {(['now', 'next', 'later', 'hidden'] as EpicHorizon[]).map(h => {
                       const active = row.horizon === h
                       const isSuggestion = !row.horizon && row.suggested === h
                       return (
@@ -360,6 +533,11 @@ export const RoadmapView: React.FC = () => {
                 )}
               </div>
               <h2 className="text-[16px] font-bold leading-[1.25]">{selected.title}</h2>
+              {selected.meta?.status && (
+                <div className="mt-1.5 text-[10px] font-mono" style={{ color: selected.closed ? 'var(--status-ok)' : 'var(--text-muted)' }}>
+                  Épic {selected.closed ? 'terminé' : 'ouvert'} · {selected.meta.status}
+                </div>
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 pt-3.5 pb-7 flex flex-col gap-4">
@@ -394,13 +572,44 @@ export const RoadmapView: React.FC = () => {
                           Aucune story ouverte : cet épic ressemble plutôt à du LATER.
                         </p>
                       )}
-                      {selected.open.map(task => {
+                      {orderedOpen.map((task, index) => {
                         const state = placementOf(task, selected, horizonOfTab)
                         const meta = PLACEMENT_META[state]
+                        const beyondCut = cutAt >= 0 && index >= cutAt
+                        const sprintLabel = sprintLabelOf(task)
+                        const startsSprint = index === 0 || sprintLabelOf(orderedOpen[index - 1]) !== sprintLabel
                         return (
-                          <div key={task.id} className="px-2.5 py-2 rounded-lg bg-[var(--bg-primary)] border"
-                            style={{ borderColor: state === 'ok' ? 'var(--border-color)' : meta.border }}>
+                          <React.Fragment key={task.id}>
+                            {startsSprint && (
+                              <div className="flex items-center gap-1.5 mt-1 first:mt-0">
+                                <span className="text-[9px] font-bold uppercase tracking-[.08em] text-[var(--text-muted)]">
+                                  {sprintLabel}
+                                </span>
+                                <span className="flex-1 h-px bg-[var(--border-color)]" />
+                              </div>
+                            )}
+                          <div className="px-2.5 py-2 rounded-lg bg-[var(--bg-primary)] border"
+                            style={{
+                              borderColor: beyondCut
+                                ? 'var(--accent-color)'
+                                : state === 'ok'
+                                  ? 'var(--border-color)'
+                                  : meta.border,
+                              opacity: cutAt >= 0 && !beyondCut ? 0.55 : 1,
+                            }}>
                             <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setChecked(prev => ({ ...prev, [task.id]: !prev[task.id] }))}
+                                className="w-3.5 h-3.5 rounded shrink-0 flex items-center justify-center cursor-pointer"
+                                style={{
+                                  background: checked[task.id] ? 'var(--accent-color)' : 'transparent',
+                                  border: `1px solid ${checked[task.id] ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                                }}
+                                title="Sélectionner pour déplacer vers un autre épic"
+                              >
+                                {checked[task.id] && <Check size={10} className="text-white" />}
+                              </button>
                               <button type="button" onClick={() => setSelectedTask(task)}
                                 className="text-[10.5px] font-mono font-bold hover:underline cursor-pointer"
                                 style={{ color: 'var(--status-info)' }}>
@@ -415,6 +624,18 @@ export const RoadmapView: React.FC = () => {
                                 title={`Terminal de ${task.key}`}>
                                 <TerminalIcon size={12} />
                               </button>
+                              <button
+                                type="button"
+                                disabled={busyKey === task.id}
+                                onClick={async () => {
+                                  setBusyKey(task.id)
+                                  await setTaskEpic(task.id, '')
+                                  setBusyKey(null)
+                                }}
+                                className="p-0.5 rounded text-[var(--text-muted)] hover:text-rose-400 cursor-pointer shrink-0 disabled:opacity-50"
+                                title={`Retirer ${task.key} de l'épic`}>
+                                <X size={12} />
+                              </button>
                             </div>
                             <div className="text-[11px] mt-1 leading-snug text-[var(--text-secondary)]">{task.title}</div>
                             {state !== 'ok' && (
@@ -426,8 +647,189 @@ export const RoadmapView: React.FC = () => {
                               </div>
                             )}
                           </div>
+                          </React.Fragment>
                         )
                       })}
+                    </div>
+                  </div>
+
+                  {/* Curseur de coupe : tout ce qui vient après le rang choisi
+                      quitte l'épic. L'ordre est celui des sprints, donc couper
+                      revient à dire « à partir de ce sprint, c'est un autre
+                      épic ». */}
+                  {orderedOpen.length > 1 && (
+                    <div className="p-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)]">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <Scissors size={11} style={{ color: 'var(--accent-color)' }} />
+                        <span className="text-[10px] font-bold uppercase tracking-[.08em]" style={{ color: 'var(--accent-color)' }}>
+                          Couper l'épic
+                        </span>
+                        <span className="ml-auto text-[10px] text-[var(--text-muted)]">
+                          {cutAt < 0
+                            ? 'aucune coupe'
+                            : `${orderedOpen.length - cutAt} ticket(s) à partir de ${sprintLabelOf(orderedOpen[cutAt])}`}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={orderedOpen.length}
+                        value={cutAt < 0 ? orderedOpen.length : cutAt}
+                        onChange={e => {
+                          const next = Number(e.target.value)
+                          setCutAt(next >= orderedOpen.length ? -1 : next)
+                        }}
+                        className="w-full accent-[var(--accent-color)] cursor-pointer"
+                      />
+                      <div className="flex items-center justify-between text-[9px] font-mono text-[var(--text-muted)]">
+                        <span>tout couper</span>
+                        <span>rien couper</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Découpe : les stories cochées, ou celles au delà du
+                      curseur, quittent l'épic pour un autre. */}
+                  {cutIds.length > 0 && (
+                    <div className="p-2.5 rounded-xl border" style={{ background: 'var(--accent-light)', borderColor: 'rgb(var(--accent-rgb) / 0.4)' }}>
+                      <div className="text-[10px] font-bold uppercase tracking-[.08em] mb-1.5" style={{ color: 'var(--accent-color)' }}>
+                        Couper {cutIds.length} ticket(s) vers…
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={moveTarget}
+                          onChange={e => setMoveTarget(e.target.value)}
+                          className="flex-1 px-2 py-1.5 text-[11px] rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                        >
+                          <option value="">— épic existant —</option>
+                          {allRows
+                            .filter(r => r.key !== selected.key && !r.closed)
+                            .map(r => (
+                              <option key={r.key} value={r.key}>{r.key} · {r.title.slice(0, 40)}</option>
+                            ))}
+                        </select>
+                        <button
+                          type="button"
+                          disabled={!moveTarget || busyKey === 'move'}
+                          onClick={async () => {
+                            setBusyKey('move')
+                            await moveTasksToEpic(currentProject!.id, cutIds, moveTarget)
+                            setChecked({})
+                            setCutAt(-1)
+                            setBusyKey(null)
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-white accent-bg disabled:opacity-40 cursor-pointer shrink-0"
+                        >
+                          Déplacer
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2 mt-2">
+                        <input
+                          type="text"
+                          value={newEpicTitle}
+                          onChange={e => setNewEpicTitle(e.target.value)}
+                          placeholder="…ou vers un nouvel épic : son titre"
+                          className="flex-1 px-2 py-1.5 text-[11px] rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+                        />
+                        <button
+                          type="button"
+                          disabled={!newEpicTitle.trim() || busyKey === 'move'}
+                          onClick={async () => {
+                            setBusyKey('move')
+                            const key = await moveTasksToEpic(currentProject!.id, cutIds, '', newEpicTitle.trim())
+                            if (key && currentProject?.id) {
+                              fetchProjectEpics(currentProject.id).then(setEpicMeta)
+                            }
+                            setChecked({})
+                            setCutAt(-1)
+                            setNewEpicTitle('')
+                            setBusyKey(null)
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer shrink-0 disabled:opacity-40"
+                          style={{ color: 'var(--status-info)', background: 'rgb(var(--status-info-rgb) / 0.12)', border: '1px solid rgb(var(--status-info-rgb) / 0.32)' }}
+                        >
+                          {busyKey === 'move' ? '…' : 'Créer et couper'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Prototypage : ajouter une story a la volée, ou pousser un
+                      ticket existant dans l'épic. */}
+                  <div className="pt-1 border-t border-[var(--border-color)]">
+                    <div className="text-[10px] font-bold uppercase tracking-[.08em] text-[var(--text-muted)] mb-1.5 mt-2">
+                      Composer l'épic
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={newStory}
+                        onChange={e => setNewStory(e.target.value)}
+                        onKeyDown={async e => {
+                          if (e.key === 'Enter' && newStory.trim() && currentProject?.id) {
+                            e.preventDefault()
+                            setBusyKey('new')
+                            await createStoryUnderEpic(currentProject.id, selected.key, newStory.trim())
+                            setNewStory('')
+                            setBusyKey(null)
+                          }
+                        }}
+                        placeholder={`Nouvelle story sous ${selected.key}…`}
+                        className="flex-1 px-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+                      />
+                      <button
+                        type="button"
+                        disabled={!newStory.trim() || busyKey === 'new' || !currentProject?.id}
+                        onClick={async () => {
+                          setBusyKey('new')
+                          await createStoryUnderEpic(currentProject!.id, selected.key, newStory.trim())
+                          setNewStory('')
+                          setBusyKey(null)
+                        }}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold text-white accent-bg disabled:opacity-40 cursor-pointer shrink-0"
+                      >
+                        <Plus size={12} /> {busyKey === 'new' ? '…' : 'Créer'}
+                      </button>
+                    </div>
+
+                    <div className="mt-2">
+                      <input
+                        type="text"
+                        value={attachQuery}
+                        onChange={e => setAttachQuery(e.target.value)}
+                        placeholder="Pousser un ticket existant : clé ou titre…"
+                        className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+                      />
+                      {attachCandidates.length > 0 && (
+                        <div className="mt-1.5 flex flex-col gap-1">
+                          {attachCandidates.map(candidate => (
+                            <button
+                              key={candidate.id}
+                              type="button"
+                              disabled={busyKey === candidate.id}
+                              onClick={async () => {
+                                setBusyKey(candidate.id)
+                                await setTaskEpic(candidate.id, selected.key)
+                                setBusyKey(null)
+                                setAttachQuery('')
+                              }}
+                              className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-left bg-[var(--bg-primary)] border border-[var(--border-color)] hover:border-[var(--accent-color)]/50 cursor-pointer disabled:opacity-50"
+                            >
+                              <span className="text-[10px] font-mono font-bold shrink-0" style={{ color: 'var(--status-info)' }}>
+                                {candidate.key}
+                              </span>
+                              <span className="text-[11px] truncate flex-1 text-[var(--text-secondary)]">{candidate.title}</span>
+                              {candidate.parentKey && (
+                                <span className="text-[9px] font-mono shrink-0 text-[var(--text-muted)]" title="Épic actuel, qui sera remplacé">
+                                  {candidate.parentKey} →
+                                </span>
+                              )}
+                              <Plus size={11} className="shrink-0 text-[var(--text-muted)]" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </>

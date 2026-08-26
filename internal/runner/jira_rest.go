@@ -113,6 +113,112 @@ func (c *JiraRESTClient) ListBoards(ctx context.Context, projectKey string) ([]m
 	return boards, nil
 }
 
+// UpdateIssueLabels adds and removes labels on a work item over REST. Spawning
+// acli costs about 1.3 s per call, most of it process start-up and its own
+// authentication; the REST round-trip is roughly six times faster, which matters
+// when triaging a roadmap epic by epic.
+func (c *JiraRESTClient) UpdateIssueLabels(ctx context.Context, issueKey string, add []string, remove []string) error {
+	issueKey = strings.TrimSpace(issueKey)
+	if issueKey == "" {
+		return fmt.Errorf("clé de ticket manquante")
+	}
+
+	ops := make([]map[string]string, 0, len(add)+len(remove))
+	for _, label := range add {
+		if label = strings.TrimSpace(label); label != "" {
+			ops = append(ops, map[string]string{"add": label})
+		}
+	}
+	for _, label := range remove {
+		if label = strings.TrimSpace(label); label != "" {
+			ops = append(ops, map[string]string{"remove": label})
+		}
+	}
+	if len(ops) == 0 {
+		return nil
+	}
+
+	// Un PUT partiel : seuls les labels bougent, la description riche n'est
+	// jamais renvoyée.
+	payload := map[string]interface{}{"update": map[string]interface{}{"labels": ops}}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		c.baseURL+"/rest/api/3/issue/"+url.PathEscape(issueKey), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.token)))
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		snippet := strings.TrimSpace(string(respBody))
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return fmt.Errorf("Jira a refusé la mise à jour des labels de %s (%d): %s", issueKey, resp.StatusCode, snippet)
+	}
+	return nil
+}
+
+// SetIssueParent attaches a work item to an epic, or detaches it when parentKey
+// is empty. acli's edit command exposes no --parent, so this only works over
+// REST — the operation is what lets a roadmap epic be prototyped by pulling
+// existing tickets into it.
+func (c *JiraRESTClient) SetIssueParent(ctx context.Context, issueKey string, parentKey string) error {
+	issueKey = strings.TrimSpace(issueKey)
+	if issueKey == "" {
+		return fmt.Errorf("clé de ticket manquante")
+	}
+
+	var parent interface{}
+	if key := strings.TrimSpace(parentKey); key != "" {
+		parent = map[string]string{"key": strings.ToUpper(key)}
+	} else {
+		// null détache : le ticket n'a plus d'épic.
+		parent = nil
+	}
+
+	body, err := json.Marshal(map[string]interface{}{"fields": map[string]interface{}{"parent": parent}})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		c.baseURL+"/rest/api/3/issue/"+url.PathEscape(issueKey), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.token)))
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		snippet := strings.TrimSpace(string(respBody))
+		if len(snippet) > 250 {
+			snippet = snippet[:250]
+		}
+		return fmt.Errorf("Jira a refusé le rattachement de %s (%d): %s", issueKey, resp.StatusCode, snippet)
+	}
+	return nil
+}
+
 // ListBoardSprints returns the board's sprints with their state. The state is
 // what separates the operational horizons: active means the work is in flight,
 // future means it is planned but not started.
@@ -136,8 +242,10 @@ func (c *JiraRESTClient) ListBoardSprints(ctx context.Context, boardID string) (
 		}
 		var payload struct {
 			Values []struct {
-				Name  string `json:"name"`
-				State string `json:"state"`
+				Name      string `json:"name"`
+				State     string `json:"state"`
+				StartDate string `json:"startDate"`
+				EndDate   string `json:"endDate"`
 			} `json:"values"`
 			IsLast bool `json:"isLast"`
 		}
@@ -148,7 +256,12 @@ func (c *JiraRESTClient) ListBoardSprints(ctx context.Context, boardID string) (
 			if strings.TrimSpace(sp.Name) == "" {
 				continue
 			}
-			out = append(out, models.TrackerSprint{Name: sp.Name, State: strings.ToLower(sp.State)})
+			out = append(out, models.TrackerSprint{
+				Name:      sp.Name,
+				State:     strings.ToLower(sp.State),
+				StartDate: sp.StartDate,
+				EndDate:   sp.EndDate,
+			})
 		}
 		if payload.IsLast || len(payload.Values) == 0 {
 			break
@@ -623,4 +736,44 @@ func (c *JiraRESTClient) SearchProjectIssues(ctx context.Context, projectKey str
 	}
 
 	return result, nil
+}
+
+// CreateIssue creates an issue and returns its key.
+//
+// La création passait par acli, qui sort en code zéro même quand Jira refuse :
+// le motif du refus était perdu. Le REST renvoie le corps d'erreur de Jira, ce
+// qui rend un champ obligatoire manquant immédiatement lisible.
+func (c *JiraRESTClient) CreateIssue(ctx context.Context, projectKey, issueType, summary, parentKey string) (string, error) {
+	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
+	summary = strings.TrimSpace(summary)
+	if projectKey == "" {
+		return "", fmt.Errorf("clé de projet Jira manquante")
+	}
+	if summary == "" {
+		return "", fmt.Errorf("intitulé manquant")
+	}
+	if strings.TrimSpace(issueType) == "" {
+		issueType = "Epic"
+	}
+
+	fields := map[string]interface{}{
+		"project":   map[string]string{"key": projectKey},
+		"issuetype": map[string]string{"name": issueType},
+		"summary":   summary,
+	}
+	if strings.TrimSpace(parentKey) != "" {
+		fields["parent"] = map[string]string{"key": strings.ToUpper(strings.TrimSpace(parentKey))}
+	}
+
+	body, err := c.post(ctx, "/rest/api/3/issue", map[string]interface{}{"fields": fields})
+	if err != nil {
+		return "", err
+	}
+	var created struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || strings.TrimSpace(created.Key) == "" {
+		return "", fmt.Errorf("clé du ticket créé introuvable dans la réponse de Jira")
+	}
+	return created.Key, nil
 }

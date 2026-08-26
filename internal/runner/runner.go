@@ -357,6 +357,8 @@ var validLinearLabels = map[string]string{
 	"implement":    "Implemented",
 	"to-implement": "Implemented",
 	"to_implement": "Implemented",
+	"handoff":      "finished",
+	"finished":     "finished",
 	"reviewed":     "Reviewed",
 	"review":       "Reviewed",
 	"to-review":    "Reviewed",
@@ -1594,6 +1596,68 @@ func (r *Runner) enrichJiraParents(projectKey string, tasks []models.Task, repoP
 // jiraKeyPattern matches a work item key such as PE-1234 in acli's plain output.
 var jiraKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9]+-[0-9]+`)
 
+// CreateJiraEpic creates an epic, the container a roadmap needs before stories
+// can be moved into it. Distinct from CreateJiraChildIssue: an epic has no
+// parent, and its type must be Epic.
+func (r *Runner) CreateJiraEpic(projectKey string, repoPath string, title string) (string, error) {
+	return r.CreateJiraEpicWith(nil, "", projectKey, repoPath, title)
+}
+
+// CreateJiraEpicWith creates an epic through the REST API when a token is
+// available, and falls back to acli otherwise.
+func (r *Runner) CreateJiraEpicWith(settings *models.Settings, trackerURL, projectKey, repoPath, title string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if client := NewJiraRESTClient(settings, trackerURL); client != nil {
+		key, err := client.CreateIssue(ctx, projectKey, "Epic", title, "")
+		if err == nil {
+			return key, nil
+		}
+		log.Printf("[jira] création REST de l'épic refusée (%v), repli sur acli", err)
+	}
+
+	acliPath, _ := FindCliTool("acli")
+	if acliPath == "" {
+		acliPath = "acli"
+	}
+
+	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
+	title = strings.TrimSpace(title)
+	if projectKey == "" {
+		return "", fmt.Errorf("clé de projet Jira manquante")
+	}
+	if title == "" {
+		return "", fmt.Errorf("intitulé de l'épic manquant")
+	}
+
+	out, err := r.runCommand(ctx, repoPath, acliPath,
+		"jira", "workitem", "create", "--project", projectKey, "--type", "Epic", "--summary", title, "--json")
+	if err != nil {
+		return "", fmt.Errorf("création de l'épic impossible: %w", err)
+	}
+	if failure := jiraCLIFailure(out); failure != "" {
+		return "", fmt.Errorf("création refusée: %s", failure)
+	}
+
+	var created struct {
+		Key string `json:"key"`
+	}
+	_ = decodeJSONDocuments(out, func(dec *json.Decoder) error {
+		if created.Key != "" {
+			return io.EOF
+		}
+		return dec.Decode(&created)
+	})
+	if created.Key == "" {
+		if m := jiraKeyPattern.FindString(out); m != "" {
+			return m, nil
+		}
+		return "", fmt.Errorf("clé de l'épic créé introuvable dans la réponse d'acli")
+	}
+	return created.Key, nil
+}
+
 // CreateJiraChildIssue creates a work item of a given type under a parent, which
 // is how a line of epic shaping becomes a real story. Distinct from
 // CreateJiraIssue: that one creates a standalone Task, with no parent and no
@@ -1864,15 +1928,21 @@ func (r *Runner) UpdateJiraIssueState(issueKey string, status models.Status, rep
 	// acli addresses work items with --key (not positionally) and names the
 	// target status --status. --yes skips the interactive confirmation.
 	args := []string{"jira", "workitem", "transition", "--key", issueKey, "--status", stateName, "--yes"}
-	if _, err := r.runCommand(ctx, repoPath, acliPath, args...); err == nil {
-		return nil
+	if out, err := r.runCommand(ctx, repoPath, acliPath, args...); err == nil {
+		// acli sort en zéro même quand il refuse : c'est sa sortie qui tranche.
+		if failure := jiraCLIFailure(out); failure == "" {
+			return nil
+		}
 	}
 
 	// Older acli builds took the key positionally and called the flag --state.
 	fallback := []string{"jira", "workitem", "transition", issueKey, "--state", stateName}
-	_, err := r.runCommand(ctx, repoPath, acliPath, fallback...)
+	out, err := r.runCommand(ctx, repoPath, acliPath, fallback...)
 	if err != nil {
 		return fmt.Errorf("transition de %s vers '%s' impossible: %w", issueKey, stateName, err)
+	}
+	if failure := jiraCLIFailure(out); failure != "" {
+		return fmt.Errorf("transition de %s vers '%s' refusée: %s", issueKey, stateName, failure)
 	}
 	return nil
 }
@@ -2052,7 +2122,91 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 	return nil
 }
 
+// installedSkillPath returns the SKILL.md of a workflow skill inside a checkout,
+// whichever agent directory holds it. Empty when the skill is not installed.
+func installedSkillPath(repoDir, skillID string) string {
+	dirName := models.SkillDirNames[skillID]
+	if dirName == "" || repoDir == "" {
+		return ""
+	}
+
+	// La commande slash d'abord : c'est elle qui rend « /clarify-issue »
+	// invocable. Une skill seule est choisie par le modèle, jamais appelée par
+	// son nom, et le prompt se contentait alors d'être recopié.
+	cmdPath := filepath.Join(repoDir, ".claude", "commands", dirName+".md")
+	if fi, err := os.Stat(cmdPath); err == nil && !fi.IsDir() {
+		return cmdPath
+	}
+
+	for _, agent := range models.SkillAgentDirs {
+		var p string
+		if agent == "" {
+			p = filepath.Join(repoDir, ".skills", dirName, "SKILL.md")
+		} else {
+			p = filepath.Join(repoDir, agent, "skills", dirName, "SKILL.md")
+		}
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// skillSlashPrompt is the unified invocation: the agent runs the skill installed
+// in the repository, and the ticket context follows. The instructions then live
+// in one place, the SKILL.md rendered from the in-app editor, instead of being
+// written twice: once in a file, once in a prompt here.
+func skillSlashPrompt(skillID string) string {
+	dirName := models.SkillDirNames[skillID]
+	return "/" + dirName + ` {issueKey}
+
+Contexte du ticket
+Clé : {issueKey}
+Titre : {issueTitle}
+Description : {issueDesc}
+Branche Git : {branchName}
+Dossier du projet : {repoPath}
+Tracker : {tracker}`
+}
+
+// AIInvocation is everything needed to run one workflow step: where, with which
+// engine, and with which prompt. Splitting it out of RunAI is what lets the same
+// invocation run either headless or inside a PTY session the user can open.
+type AIInvocation struct {
+	RepoDir  string
+	Provider string
+	Template string // modèle de commande du projet, placeholders déjà résolus
+	Prompt   string
+	Steps    []string
+}
+
+// RunAI keeps the headless path: pipes, no terminal to attach to. It stays the
+// fallback for when no session is available.
 func (r *Runner) RunAI(settings *models.Settings, skillID string, task *models.Task, customPrompt string) (string, []string, error) {
+	inv, err := r.PrepareAI(settings, skillID, task, customPrompt)
+	if err != nil {
+		return "", nil, err
+	}
+	steps := inv.Steps
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	output, execSteps, execErr := r.execAgentCommand(ctx, inv.RepoDir, inv.Provider, inv.Template, inv.Prompt)
+	steps = append(steps, execSteps...)
+
+	if execErr != nil {
+		steps = append(steps, fmt.Sprintf("⚠️ Erreur d'exécution : %v", execErr))
+		return fmt.Sprintf("### ⚠️ Erreur lors de l'exécution de la commande IA (%s)\n\n```text\n%s\n```\n\n*Vérifiez que le binaire '%s' est bien accessible et authentifié.*", inv.Provider, output, inv.Provider), steps, nil
+	}
+
+	steps = append(steps, "✅ Réponse générée par le modèle IA avec succès")
+	return output, steps, nil
+}
+
+// PrepareAI resolves the working directory, the engine and the prompt of one
+// workflow step, without running anything.
+func (r *Runner) PrepareAI(settings *models.Settings, skillID string, task *models.Task, customPrompt string) (*AIInvocation, error) {
 	repoDir := ""
 	if task != nil && task.WorktreePath != nil && *task.WorktreePath != "" {
 		repoDir = *task.WorktreePath
@@ -2086,6 +2240,14 @@ func (r *Runner) RunAI(settings *models.Settings, skillID string, task *models.T
 	repoName := filepath.Base(repoDir)
 	if settings != nil && settings.GithubRepo != "" {
 		repoName = settings.GithubRepo
+	}
+
+	// La skill installée dans le dépôt fait référence quand elle est là : c'est
+	// le fichier que l'éditeur de Taskacao produit. Les prompts ci-dessous ne
+	// servent plus que de filet quand rien n'est installé.
+	installedSkill := installedSkillPath(repoDir, skillID)
+	if installedSkill != "" {
+		steps = append(steps, fmt.Sprintf("📄 Skill du dépôt utilisée : %s", installedSkill))
 	}
 
 	var promptTemplate string
@@ -2172,11 +2334,32 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
    - Fusionne la branche de la tâche : 'git merge --no-ff {branchName} -m "Merge branch \'{branchName}\' for {issueKey}: {issueTitle}"'
 5. Fournis un compte-rendu clair de l'action réalisée (Pull Request créée ou Merge local effectué sur la branche principale).`
 		}
+	case "handoff":
+		promptTemplate = `Tu es responsable de la clôture propre de la tâche pour Taskacao. Le code a été revu et fusionné : il reste à documenter le handoff et à nettoyer.
+
+Clé : {issueKey}
+Titre : {issueTitle}
+Description : {issueDesc}
+Branche Git : {branchName}
+Dossier du projet : {repoPath}
+
+INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
+1. Vérifie que la branche '{branchName}' est bien fusionnée dans la branche principale ('git log --oneline main..{branchName}' doit être vide). Si ce n'est pas le cas, ARRÊTE-TOI et dis-le, sans rien nettoyer.
+2. Rédige le compte-rendu de handoff : ce qui a été livré, ce qui a été laissé de côté, ce qu'un lecteur doit savoir pour reprendre. Mets à jour la documentation du dépôt si le changement l'exige (README, CHANGELOG, docs).
+3. Nettoie l'espace de travail local : retire le worktree de la tâche s'il existe et supprime la branche locale fusionnée.
+4. Termine par un compte-rendu court : ce qui a été documenté, ce qui a été nettoyé, ce qui reste à faire côté humain.`
+
 	case "pick":
 		promptTemplate = settings.PromptPick
 		if promptTemplate == "" {
 			promptTemplate = "Tu es le routeur d'orchestration pour Taskacao. Analyse l'état de la tâche {issueKey} ({issueTitle}) et détermine la prochaine action requise dans le cycle SDLC."
 		}
+	}
+
+	// Ordre de priorité : le prompt surchargé dans les réglages, puis la skill
+	// installée, puis le filet codé au-dessus.
+	if installedSkill != "" && !settingsPromptOverridden(settings, skillID) {
+		promptTemplate = skillSlashPrompt(skillID)
 	}
 
 	if customPrompt != "" {
@@ -2213,12 +2396,6 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 
 	steps = append(steps, fmt.Sprintf("🤖 Moteur IA : %s", strings.ToUpper(provider)))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	var output string
-	var execErr error
-
 	// The custom-template branch substitutes the task placeholders first, then
 	// hands the resolved template to the shared dispatcher.
 	resolvedTemplate := settings.AICommandTemplate
@@ -2232,17 +2409,13 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 		resolvedTemplate = strings.ReplaceAll(resolvedTemplate, "{repo}", repoName)
 	}
 
-	var execSteps []string
-	output, execSteps, execErr = r.execAgentCommand(ctx, repoDir, provider, resolvedTemplate, finalPrompt)
-	steps = append(steps, execSteps...)
-
-	if execErr != nil {
-		steps = append(steps, fmt.Sprintf("⚠️ Erreur d'exécution : %v", execErr))
-		return fmt.Sprintf("### ⚠️ Erreur lors de l'exécution de la commande IA (%s)\n\n```text\n%s\n```\n\n*Vérifiez que le binaire '%s' est bien accessible et authentifié.*", provider, output, provider), steps, nil
-	}
-
-	steps = append(steps, "✅ Réponse générée par le modèle IA avec succès")
-	return output, steps, nil
+	return &AIInvocation{
+		RepoDir:  repoDir,
+		Provider: provider,
+		Template: resolvedTemplate,
+		Prompt:   finalPrompt,
+		Steps:    steps,
+	}, nil
 }
 
 // escapeForDoubleQuotes makes a string safe to interpolate inside a
@@ -2802,4 +2975,194 @@ func (r *Runner) runCommandForTest(script string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return r.runCommand(ctx, "", "sh", "-c", script)
+}
+
+// settingsPromptOverridden says whether the user deliberately wrote their own
+// prompt for a step in the settings. That choice keeps priority over the skill
+// installed in the repository.
+func settingsPromptOverridden(settings *models.Settings, skillID string) bool {
+	if settings == nil {
+		return false
+	}
+	switch skillID {
+	case "clarify":
+		return strings.TrimSpace(settings.PromptClarify) != ""
+	case "specify":
+		return strings.TrimSpace(settings.PromptSpecify) != ""
+	case "implement":
+		return strings.TrimSpace(settings.PromptImplement) != ""
+	case "create_pr", "review":
+		return strings.TrimSpace(settings.PromptCreatePR) != ""
+	}
+	return false
+}
+
+// SessionCommandLine turns an invocation into a shell command line that can be
+// injected into a PTY session, plus the cleanup of the temporary file it uses.
+//
+// The prompt goes through a file rather than the command line on purpose: it is
+// several thousand characters of markdown carrying ticket text, and pushing that
+// through a terminal line editor would truncate it and mangle the quoting. The
+// file is read with a command substitution, so the agent still receives it as a
+// single argument.
+func (r *Runner) SessionCommandLine(inv *AIInvocation) (string, func(), error) {
+	if inv == nil {
+		return "", func() {}, fmt.Errorf("invocation vide")
+	}
+
+	f, err := os.CreateTemp("", "taskacao-prompt-*.md")
+	if err != nil {
+		return "", func() {}, err
+	}
+	if _, err := f.WriteString(inv.Prompt); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", func() {}, err
+	}
+	_ = f.Close()
+	promptFile := f.Name()
+	cleanup := func() { _ = os.Remove(promptFile) }
+
+	// $(cat 'fichier') : le chemin est un temporaire que nous fabriquons, donc
+	// sans apostrophe, et le prompt n'est jamais relu par le shell.
+	promptRef := fmt.Sprintf(`"$(cat '%s')"`, promptFile)
+
+	if inv.Template != "" && (inv.Provider == "custom" || strings.Contains(inv.Template, "{prompt}")) {
+		return strings.ReplaceAll(inv.Template, "{prompt}", "$(cat '"+promptFile+"')"), cleanup, nil
+	}
+
+	switch inv.Provider {
+	case "agy":
+		bin, _ := FindCliTool("agy")
+		return fmt.Sprintf("%s -p %s --dangerously-skip-permissions", shellQuote(bin), promptRef), cleanup, nil
+	case "vibe":
+		bin, _ := FindCliTool("vibe")
+		return fmt.Sprintf("%s -p %s --auto-approve", shellQuote(bin), promptRef), cleanup, nil
+	case "claude":
+		bin, _ := FindCliTool("claude")
+		return fmt.Sprintf("%s -p %s", shellQuote(bin), promptRef), cleanup, nil
+	case "gemini":
+		bin, _ := FindCliTool("gemini")
+		return fmt.Sprintf("%s -p %s", shellQuote(bin), promptRef), cleanup, nil
+	case "cursor":
+		bin, _ := FindCliTool("cursor")
+		return fmt.Sprintf("%s agent -p %s", shellQuote(bin), promptRef), cleanup, nil
+	}
+
+	template := inv.Template
+	if template == "" {
+		template = `agy -p "{prompt}"`
+	}
+	return strings.ReplaceAll(template, "{prompt}", "$(cat '"+promptFile+"')"), cleanup, nil
+}
+
+// shellQuote wraps a path in single quotes so a space in it cannot split the
+// command. The binary paths come from FindCliTool, not from user input.
+func shellQuote(s string) string {
+	if s == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// InteractiveAgentLaunch is the command that opens the agent CLI as a live
+// session, as opposed to the one-shot print mode used for headless steps.
+//
+// Aucun drapeau de contournement des permissions ici, contrairement au mode
+// non interactif : un humain regarde la session, il peut répondre aux demandes
+// de permission, et c'est précisément l'intérêt de ce mode.
+func InteractiveAgentLaunch(settings *models.Settings) (string, error) {
+	provider := "agy"
+	if settings != nil && strings.TrimSpace(settings.AIProvider) != "" {
+		provider = strings.ToLower(strings.TrimSpace(settings.AIProvider))
+	}
+
+	switch provider {
+	case "agy", "vibe", "claude", "gemini":
+		return resolveAgentBinary(provider, "")
+	case "cursor":
+		line, err := resolveAgentBinary("cursor", "")
+		if err != nil {
+			return "", err
+		}
+		return line + " agent", nil
+	case "custom":
+		// Un moteur personnalisé n'a que son modèle de commande : son premier mot
+		// est le binaire, et c'est lui qu'on ouvre en interactif.
+		return resolveAgentBinary(firstWord(settings.AICommandTemplate), provider)
+	}
+	return "", fmt.Errorf("le moteur %q n'a pas de mode interactif connu : configure un moteur agy, claude, gemini, cursor ou vibe sur le projet", provider)
+}
+
+// resolveAgentBinary finds an engine binary and says where it looked when it
+// fails, because "binaire introuvable" alone leaves nothing to act on.
+func resolveAgentBinary(tool, provider string) (string, error) {
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		return "", fmt.Errorf("aucun binaire à lancer pour le moteur %q : renseigne son modèle de commande", provider)
+	}
+	bin, err := FindCliTool(tool)
+	if err != nil || bin == "" || bin == tool {
+		if _, statErr := os.Stat(bin); statErr != nil {
+			home, _ := os.UserHomeDir()
+			return "", fmt.Errorf(
+				"moteur %q introuvable : %s absent du PATH, de %s/.local/bin, /opt/homebrew/bin, /usr/local/bin et /usr/bin",
+				strings.TrimSpace(provider+" "+tool), tool, home,
+			)
+		}
+	}
+	return shellQuote(bin), nil
+}
+
+// firstWord extracts the binary from a command template such as
+// `claude --dangerously-skip-permissions -p "{prompt}"`.
+func firstWord(template string) string {
+	fields := strings.Fields(strings.TrimSpace(template))
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Trim(fields[0], "'\"")
+}
+
+// SkillCallLine is what gets typed into the running agent: the skill's slash
+// command, the ticket key, and just enough context to place the work.
+//
+// C'est la skill qui porte les instructions, pas ce message : le SKILL.md est
+// rendu depuis l'éditeur de Taskacao, l'agent le lit en exécutant la commande.
+func SkillCallLine(skillID string, task *models.Task, trackerName string) string {
+	dirName := models.SkillDirNames[skillID]
+	if dirName == "" {
+		dirName = skillID
+	}
+	return SkillCallLineWithCommand("/"+dirName, task, trackerName)
+}
+
+// SkillCallLineWithCommand builds the same line for an explicit slash command,
+// so a project that renamed its skills keeps its own command.
+func SkillCallLineWithCommand(command string, task *models.Task, trackerName string) string {
+	command = "/" + strings.TrimPrefix(strings.TrimSpace(command), "/")
+	if task == nil {
+		return command
+	}
+
+	line := fmt.Sprintf("%s %s", command, task.Key)
+	title := strings.TrimSpace(task.Title)
+	if title != "" {
+		line += fmt.Sprintf(" (%s)", collapseSpaces(title))
+	}
+	if trackerName != "" && trackerName != "local" {
+		line += fmt.Sprintf(" suivi dans %s", trackerName)
+	}
+	return line
+}
+
+// collapseSpaces flattens a title to a single line: a newline in the injected
+// text would be read as a validation by the agent's prompt.
+func collapseSpaces(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	return strings.TrimSpace(s)
 }

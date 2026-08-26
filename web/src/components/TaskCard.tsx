@@ -11,12 +11,15 @@ import {
   MessageSquare,
   Code2,
   MoreHorizontal,
+  ChevronsRight,
+  ChevronRight,
   Terminal as TerminalIcon,
   FileCode,
   CheckCircle2,
   Eye,
   Trash2,
   Copy,
+  Pin,
 } from 'lucide-react'
 import type { Task, Priority } from '../types'
 import { useApp } from '../context/AppContext'
@@ -32,6 +35,10 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
   const {
     setSelectedTask,
     setChatTask,
+    advanceTask,
+    launchInteractiveStep,
+    isPinned,
+    togglePin,
     setDiffTask,
     runSkill,
     isSkillRunning,
@@ -54,6 +61,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
   // absolue et le faisait passer sous l'en-tête de colonne pour les cartes du
   // haut. Le portail sort de ce conteneur, et l'ouverture bascule vers le bas
   // quand il n'y a pas la place au-dessus.
+  const [advancing, setAdvancing] = useState<'step' | 'auto' | null>(null)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [menuPos, setMenuPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -199,6 +207,19 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
       default:
         return null
     }
+  }
+
+  // Un pas du workflow. Le serveur décide de la skill depuis l'étape de la
+  // tâche ; un pas interactif — la clarification — ouvre le terminal de la tâche
+  // et y injecte la commande, pour qu'on voie et réponde à l'agent.
+  const handleAdvance = async (auto: boolean) => {
+    if (advancing) return
+    setAdvancing(auto ? 'auto' : 'step')
+    const result = await advanceTask(task.id, auto)
+    if (result?.mode === 'interactive' && result.skillId) {
+      await launchInteractiveStep(task, result.skillId, result.label || 'Étape interactive')
+    }
+    setAdvancing(null)
   }
 
   // Determine current workflow stage action (Clarifier ➔ Spécifier ➔ Coder ➔ Créer PR ➔ Merge ➔ #finished)
@@ -463,15 +484,58 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
           </span>
         )}
 
+        {/* Épingle : le ticket rejoint la barre de bascule à chaud, en haut. */}
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation()
+            togglePin(task.id)
+          }}
+          className={`p-1 rounded-md border transition-colors cursor-pointer ${
+            isPinned(task.id)
+              ? 'accent-text bg-[var(--accent-light)] border-[var(--accent-color)]/40'
+              : 'text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border-transparent hover:border-[var(--accent-color)]/30'
+          }`}
+          title={isPinned(task.id) ? 'Retirer de la barre des épinglés' : 'Épingler pour basculer vite dessus'}
+        >
+          <Pin size={14} />
+        </button>
+
         {/* Le terminal de la tâche est l'action la plus fréquente : elle mérite
             son icône, le reste vit dans le menu (...) */}
+        <button
+          type="button"
+          disabled={advancing !== null}
+          onClick={e => {
+            e.stopPropagation()
+            handleAdvance(false)
+          }}
+          className="ml-auto p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border border-transparent hover:border-[var(--accent-color)]/30 transition-colors cursor-pointer disabled:opacity-40"
+          title="Avancer d'un pas dans le workflow agentique"
+        >
+          {advancing === 'step' ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
+        </button>
+
+        <button
+          type="button"
+          disabled={advancing !== null}
+          onClick={e => {
+            e.stopPropagation()
+            handleAdvance(true)
+          }}
+          className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border border-transparent hover:border-[var(--accent-color)]/30 transition-colors cursor-pointer disabled:opacity-40"
+          title="Avancer en autonomie jusqu'à l'étape de revue"
+        >
+          {advancing === 'auto' ? <Loader2 size={14} className="animate-spin" /> : <ChevronsRight size={14} />}
+        </button>
+
         <button
           type="button"
           onClick={e => {
             e.stopPropagation()
             setChatTask(task)
           }}
-          className="ml-auto p-1 rounded-md text-[var(--text-muted)] hover:text-cyan-300 hover:bg-cyan-500/10 border border-transparent hover:border-cyan-500/30 transition-colors cursor-pointer"
+          className="p-1 rounded-md text-[var(--text-muted)] hover:text-cyan-300 hover:bg-cyan-500/10 border border-transparent hover:border-cyan-500/30 transition-colors cursor-pointer"
           title={`Ouvrir le terminal de ${task.key} dans le panneau latéral`}
         >
           <TerminalIcon size={14} />

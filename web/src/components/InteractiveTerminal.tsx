@@ -14,6 +14,7 @@ import {
   Maximize2,
   Minimize2,
   X,
+  Check,
 } from 'lucide-react'
 import type { Task } from '../types'
 import { useApp } from '../context/AppContext'
@@ -30,10 +31,17 @@ interface InteractiveTerminalProps {
   /** Label shown in the session bar; defaults to "ZSH Session". */
   label?: string
   isExpanded?: boolean
+  /** Un agent tourne déjà dans cette session : le bouton propose de le relancer. */
+  agentRunning?: boolean
   initialCommand?: string
   onToggleExpand?: () => void
   onClose?: () => void
 }
+
+// Un seul style pour tous les boutons de la barre d'actions : la couleur ne
+// portait aucune information, chaque bouton avait la sienne et l'oeil s'y perdait.
+const BAR_BUTTON =
+  'flex items-center gap-1 px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded-md font-mono text-[10.5px] transition-colors shrink-0 cursor-pointer'
 
 export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   task,
@@ -42,11 +50,12 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   projectId,
   label,
   isExpanded,
+  agentRunning,
   initialCommand,
   onToggleExpand,
   onClose,
 }) => {
-  const { settings, openInEditor, projects } = useApp()
+  const { settings, openInEditor, projects, skills, startTaskAgent, injectTaskSkill } = useApp()
   const terminalContainerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -235,59 +244,29 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   // Quick Action commands
   const proj = projects.find(p => p.id === (task?.projectId || projectId))
   const provider = proj?.aiProvider || settings.aiProvider || 'agy'
-  const cmdTemplate = proj?.aiCommandTemplate || settings.aiCommandTemplate
 
-  const buildCliCommand = (prompt: string): string => {
-    if (cmdTemplate && cmdTemplate.includes('{prompt}')) {
-      return cmdTemplate
-        .replace('{prompt}', prompt)
-        .replace('{issueKey}', task?.key || '')
-        .replace('{issueTitle}', task?.title || '')
-        .replace('{branchName}', task?.branchName || '')
-        .replace('{repoPath}', task?.repoPath || proj?.repoPath || settings.repoPath || '')
-        .replace('{tracker}', proj?.issueTracker || task?.source || 'github')
-        .replace('{repo}', proj?.githubRepo || proj?.name || 'repo')
+  // Le lancement passe par le serveur : il résout le binaire du moteur du projet,
+  // ouvre la session dans le bon répertoire et retient qu'un agent y tourne.
+  const handleLaunchAgent = async () => {
+    if (task) {
+      // Un agent déjà présent est relancé explicitement : c'est le cas où on l'a
+      // quitté à la main et où Taskacao le croit encore vivant.
+      await startTaskAgent(task.id, Boolean(agentRunning))
+      return
     }
-    if (provider === 'agy') {
-      return `agy --dangerously-skip-permissions -p "${prompt}"`
-    }
-    if (provider === 'claude') {
-      return `claude --dangerously-skip-permissions -p "${prompt}"`
-    }
-    if (provider === 'vibe') {
-      return `vibe -p "${prompt}" --auto-approve`
-    }
-    return `${provider} -p "${prompt}"`
-  }
-
-  const handleLaunchAgent = () => {
     sendCommand(`${provider}\n`)
   }
 
-  const handleRunSkill = (skill: string) => {
-    const trackerStr = proj?.issueTracker || task?.source || 'github'
-    const repoStr = proj?.githubRepo || proj?.name || settings.repoPath?.split('/').pop() || 'repo'
+  // Une skill s'appelle par sa commande slash, tapée dans l'agent qui tourne.
+  // Avant, ce bouton composait « claude -p "/clarify-issue ..." » et l'envoyait
+  // au shell : si l'agent était ouvert, cette ligne devenait un simple message.
+  const handleRunSkill = async (skillId: string) => {
+    if (!task) return
+    await injectTaskSkill(task.id, skillId)
+  }
 
-    switch (skill) {
-      case 'clarify':
-        sendCommand(`${buildCliCommand(`/clarify-issue ${task?.key || ''} tracked on ${trackerStr} in ${repoStr}`)}\n`)
-        break
-      case 'specify':
-        sendCommand(`${buildCliCommand(`/specify-issue`)}\n`)
-        break
-      case 'implement':
-        sendCommand(`${buildCliCommand(`/code-issue`)}\n`)
-        break
-      case 'pr':
-        sendCommand(`${buildCliCommand(`/create-pr`)}\n`)
-        break
-      case 'test':
-        sendCommand(`npm test || go test ./...\n`)
-        break
-      case 'git_status':
-        sendCommand(`git status -s\n`)
-        break
-    }
+  const handleShellCommand = (cmd: string) => {
+    sendCommand(`${cmd}\n`)
   }
 
   const handleInterrupt = () => {
@@ -426,53 +405,38 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
         <button
           type="button"
           onClick={handleLaunchAgent}
-          className="flex items-center gap-1 px-2.5 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 rounded-md font-mono text-[11px] transition-all shrink-0 cursor-pointer shadow-sm hover:scale-[1.02]"
+          className={BAR_BUTTON}
+          title={
+            task
+              ? agentRunning
+                ? `Redémarrer ${provider} dans cette session`
+                : `Démarrer ${provider} dans cette session`
+              : `Lancer ${provider}`
+          }
         >
-          <Sparkles size={11} className="text-indigo-400" />
-          <span className="font-semibold">Lancer {provider}</span>
+          {task && agentRunning ? <Check size={11} /> : <Sparkles size={11} />}
+          <span className="font-semibold">
+            {task && agentRunning ? `${provider} en cours` : `Lancer ${provider}`}
+          </span>
         </button>
 
-        {task && (
-          <>
-        <button
-          type="button"
-          onClick={() => handleRunSkill('clarify')}
-          className="flex items-center gap-1 px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded-md font-mono text-[10.5px] transition-all shrink-0 cursor-pointer"
-        >
-          <span>/clarify</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => handleRunSkill('specify')}
-          className="flex items-center gap-1 px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded-md font-mono text-[10.5px] transition-all shrink-0 cursor-pointer"
-        >
-          <span>/specify</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => handleRunSkill('implement')}
-          className="flex items-center gap-1 px-2 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 rounded-md font-mono text-[10.5px] transition-all shrink-0 cursor-pointer"
-        >
-          <span>/code</span>
-        </button>
+        {task &&
+          skills.map(sk => (
+            <button
+              key={sk.id}
+              type="button"
+              onClick={() => handleRunSkill(sk.id)}
+              className={BAR_BUTTON}
+              title={`Taper ${sk.command} dans l'agent de cette session`}
+            >
+              <span>{sk.command}</span>
+            </button>
+          ))}
 
         <button
           type="button"
-          onClick={() => handleRunSkill('pr')}
-          className="flex items-center gap-1 px-2 py-1 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-300 rounded-md font-mono text-[10.5px] transition-all shrink-0 cursor-pointer"
-        >
-          <span>/create-pr</span>
-        </button>
-
-          </>
-        )}
-
-        <button
-          type="button"
-          onClick={() => handleRunSkill('git_status')}
-          className="flex items-center gap-1 px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 rounded-md font-mono text-[10.5px] transition-all shrink-0 cursor-pointer"
+          onClick={() => handleShellCommand('git status -s')}
+          className={BAR_BUTTON}
         >
           <span>git status</span>
         </button>
@@ -480,10 +444,10 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
         <button
           type="button"
           onClick={() => openInEditor(task ? { taskId: task.id } : { projectId, path: cwd })}
-          className="flex items-center gap-1 px-2 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 rounded-md font-mono text-[10.5px] transition-all shrink-0 cursor-pointer"
+          className={BAR_BUTTON}
           title={`Ouvrir le dossier dans ${settings.editorCommand || 'VS Code'}`}
         >
-          <Code2 size={11} className="text-cyan-400" />
+          <Code2 size={11} />
           <span>{settings.editorCommand || 'code'}</span>
         </button>
       </div>

@@ -48,8 +48,16 @@ type Session struct {
 	maxHistBytes int
 	closed       bool
 	closeChan    chan struct{}
-	CreatedAt    time.Time
-	LastActiveAt time.Time
+	// Observateurs d'exécution : un pas du workflow lancé dans cette session
+	// écoute le flux pour savoir quand la commande finit et avec quel code.
+	watchers   map[*runWatcher]struct{}
+	watchersMu sync.Mutex
+	// agentLaunched dit qu'un agent tourne déjà dans cette session : les pas
+	// suivants du même ticket lui parlent au lieu d'en relancer un.
+	agentLaunched bool
+	agentMu       sync.Mutex
+	CreatedAt     time.Time
+	LastActiveAt  time.Time
 }
 
 type Manager struct {
@@ -140,6 +148,7 @@ func (m *Manager) GetOrCreateSession(sessionID string, cwd string, envVars map[s
 		PtyFile:      ptyFile,
 		clients:      make(map[*websocket.Conn]bool),
 		history:      make([]byte, 0, 32768),
+		watchers:     make(map[*runWatcher]struct{}),
 		maxHistBytes: 65536,
 		closeChan:    make(chan struct{}),
 		CreatedAt:    time.Now(),
@@ -164,6 +173,9 @@ type SessionInfo struct {
 	CreatedAt    time.Time `json:"createdAt"`
 	LastActiveAt time.Time `json:"lastActiveAt"`
 	HistoryBytes int       `json:"historyBytes"`
+	// AgentRunning dit qu'un agent a été démarré dans cette session : l'interface
+	// s'en sert pour proposer « démarrer l'agent » ou « lancer la skill ».
+	AgentRunning bool `json:"agentRunning"`
 }
 
 // ListSessions returns the live sessions, most recently active first.
@@ -187,6 +199,10 @@ func (m *Manager) ListSessions() []SessionInfo {
 		historyBytes := len(sess.history)
 		sess.historyMu.RUnlock()
 
+		sess.agentMu.Lock()
+		agentRunning := sess.agentLaunched
+		sess.agentMu.Unlock()
+
 		out = append(out, SessionInfo{
 			ID:           sess.ID,
 			Cwd:          sess.Cwd,
@@ -194,6 +210,7 @@ func (m *Manager) ListSessions() []SessionInfo {
 			CreatedAt:    sess.CreatedAt,
 			LastActiveAt: sess.LastActiveAt,
 			HistoryBytes: historyBytes,
+			AgentRunning: agentRunning,
 		})
 	}
 
@@ -268,6 +285,10 @@ func (m *Manager) readPtyLoop(sess *Session) {
 				sess.history = sess.history[len(sess.history)-sess.maxHistBytes:]
 			}
 			sess.historyMu.Unlock()
+
+			// Alimenter les observateurs d'exécution avant la diffusion : ils
+			// n'ont pas de client WebSocket et doivent voir tout le flux.
+			sess.feedWatchers(chunk)
 
 			// Broadcast to all active websockets
 			sess.clientsMu.Lock()

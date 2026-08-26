@@ -411,3 +411,74 @@ func InternalStatusForStage(stage string) (models.Status, bool) {
 	st, ok := stageToInternalStatus[stage]
 	return st, ok
 }
+
+// Le pas suivant du workflow agentique, côté serveur. Le front a la même
+// résolution, mais la chaîne autonome tourne dans le worker : elle ne peut pas
+// dépendre de l'interface, qui peut être fermée.
+
+// StageOfTask returns a task's workflow stage: the column it sits in when the
+// project maps stages to columns, its workflow label otherwise.
+func (d *DB) StageOfTask(task *models.Task) string {
+	if task == nil {
+		return ""
+	}
+	if task.ProjectID != "" {
+		if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
+			if stage := StageForTrackerStatus(proj, task.TrackerStatus); stage != "" {
+				return stage
+			}
+		}
+	}
+	for _, stage := range workflowStageOrder {
+		for _, label := range task.Labels {
+			if strings.EqualFold(strings.TrimPrefix(label, "#"), stage) {
+				return stage
+			}
+		}
+	}
+
+	// Repli sur le statut interne, comme le fait l'interface. Sans lui, un
+	// ticket clos sans label de workflow était rendu comme « new », et l'app
+	// proposait de clarifier un ticket déjà terminé.
+	switch task.Status {
+	case models.StatusFinished, models.StatusDone:
+		return "finished"
+	case models.StatusToClose:
+		return "reviewed"
+	case models.StatusToTest, models.StatusToValidate:
+		return "implemented"
+	case models.StatusToImplement, models.StatusInProgress:
+		return "specified"
+	case models.StatusToSpecify, models.StatusSpecified:
+		return "clarified"
+	}
+	return "new"
+}
+
+// StageStep describes what advancing one step from a stage means: which skill
+// runs, and whether it is interactive. Clarification is the one step that needs a
+// human in the loop, so it opens a TTY instead of running headless.
+type StageStep struct {
+	SkillID     string
+	Interactive bool
+	Label       string
+}
+
+var stageSteps = map[string]StageStep{
+	"new":         {SkillID: "clarify", Interactive: true, Label: "Clarifier en session TTY"},
+	"clarified":   {SkillID: "specify", Interactive: false, Label: "Spécifier en autonomie"},
+	"specified":   {SkillID: "implement", Interactive: false, Label: "Implémenter en autonomie"},
+	"implemented": {SkillID: "create_pr", Interactive: false, Label: "Créer la MR, la fusion reste manuelle"},
+	"reviewed":    {SkillID: "handoff", Interactive: false, Label: "Handoff et nettoyage local"},
+}
+
+// NextStep returns the step to run from a stage, and whether there is one.
+func NextStep(stage string) (StageStep, bool) {
+	step, ok := stageSteps[strings.ToLower(strings.TrimSpace(stage))]
+	return step, ok
+}
+
+// AutonomousStopStage is where an autonomous run stops on its own: the code is
+// written and waiting for the user's review. Going further would create the MR
+// and close the ticket without a human ever looking at the diff.
+const AutonomousStopStage = "implemented"

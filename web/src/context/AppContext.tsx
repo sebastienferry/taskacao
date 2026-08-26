@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest } from '../types'
+import type { SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 import { resolveAccentAttribute } from '../lib/accents'
 
@@ -88,6 +88,15 @@ interface AppContextType {
   setSelectedTask: (task: Task | null) => void
   chatTask: Task | null
   setChatTask: (task: Task | null) => void
+  /**
+   * Session de terminal ouverte par son identifiant, sans passer par une tâche
+   * chargée. Une exécution autonome crée sa session côté serveur, et elle doit
+   * pouvoir s'ouvrir même quand la tâche est filtrée ou appartient à un autre
+   * projet.
+   */
+  terminalSessionOverride: string | null
+  openTerminalSession: (sessionId: string) => void
+  openTerminalForTask: (taskId: string) => void
   hideDone: boolean
   setHideDone: (hide: boolean | ((prev: boolean) => boolean)) => void
   toggleHideDone: () => void
@@ -118,6 +127,32 @@ interface AppContextType {
   fetchProjectEpics: (projectId: string) => Promise<EpicMeta[]>
   saveEpicMeta: (projectId: string, key: string, patch: { horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[] }) => Promise<EpicMeta | null>
   createStoryFromEpicTodo: (projectId: string, epicKey: string, todoId: string) => Promise<{ epic: EpicMeta | null; storyKey: string } | null>
+  pendingHorizonPushes: (projectId: string) => Promise<EpicMeta[]>
+  pushPendingHorizons: (projectId: string) => Promise<number>
+  setTaskEpic: (taskId: string, epicKey: string) => Promise<Task | null>
+  createStoryUnderEpic: (projectId: string, epicKey: string, title: string) => Promise<string>
+  createEpic: (projectId: string, title: string, horizon?: EpicHorizon | '') => Promise<EpicMeta | null>
+  moveTasksToEpic: (projectId: string, taskIds: string[], targetEpicKey: string, newEpicTitle?: string) => Promise<string>
+  advanceTask: (taskId: string, auto?: boolean) => Promise<{ mode: string; skillId?: string; label?: string } | null>
+  // Pas interactif en cours : la tâche dont la session TTY attend d'être clôturée.
+  pendingInteractive: { taskId: string; taskKey: string; skillId: string; label: string } | null
+  /** Tickets épinglés : la barre de bascule rapide entre chantiers en cours. */
+  pinnedTasks: Task[]
+  isPinned: (taskId: string) => boolean
+  togglePin: (taskId: string) => Promise<void>
+  hotSwitch: (taskId: string) => void
+  /** Éditeur de skills : les cinq pas du workflow du projet courant. */
+  /** Démarre l'agent du projet dans la session d'une tâche. */
+  startTaskAgent: (taskId: string, force?: boolean) => Promise<TTYLaunchResult | null>
+  /** Tape l'appel d'une skill dans l'agent déjà démarré. */
+  injectTaskSkill: (taskId: string, skillId: string) => Promise<TTYLaunchResult | null>
+  fetchSkillEditor: () => Promise<SkillEditorEntry[]>
+  saveSkillContent: (skillId: string, content: string) => Promise<SkillEditorEntry | null>
+  resetSkillContent: (skillId: string) => Promise<SkillEditorEntry | null>
+  importSkillFromRepo: (skillId: string) => Promise<SkillEditorEntry | null>
+  launchInteractiveStep: (task: Task, skillId: string, label: string) => Promise<void>
+  confirmInteractiveStep: (note?: string) => Promise<void>
+  dismissInteractiveStep: () => void
   convertTask: (id: string, target: 'linear' | 'github') => Promise<Task | null>
   moveTask: (id: string, newStatus: Status, newPosition: number) => Promise<void>
   moveTaskWorkflowStage: (taskId: string, targetStage: WorkflowStage) => Promise<Task | null>
@@ -260,15 +295,38 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // latéral ancré, pas dans une modale : on garde le board visible à côté du
   // terminal, et une session par tâche reste accessible d'un clic.
   const [chatTask, setChatTaskState] = useState<Task | null>(null)
+  // Le pas interactif attend une confirmation humaine : la skill du dépôt ne
+  // produit que du texte dans le terminal, elle ne touche jamais au ticket.
+  const [pendingInteractive, setPendingInteractive] = useState<{
+    taskId: string
+    taskKey: string
+    skillId: string
+    label: string
+  } | null>(null)
+
+  const [terminalSessionOverride, setTerminalSessionOverride] = useState<string | null>(null)
+  const [pinnedTasks, setPinnedTasks] = useState<Task[]>([])
 
   const setChatTask = useCallback((task: Task | null) => {
     setChatTaskState(task)
     if (task) {
+      setTerminalSessionOverride(null)
       setIsTerminalPanelOpenState(true)
       try {
         localStorage.setItem('taskacao_terminal_panel_open', 'true')
       } catch {}
     }
+  }, [])
+
+  // Ouvre une session par son identifiant. C'est le chemin qui marche toujours :
+  // il ne dépend pas de la présence de la tâche dans la liste courante.
+  const openTerminalSession = useCallback((sessionId: string) => {
+    setChatTaskState(null)
+    setTerminalSessionOverride(sessionId)
+    setIsTerminalPanelOpenState(true)
+    try {
+      localStorage.setItem('taskacao_terminal_panel_open', 'true')
+    } catch {}
   }, [])
 
   const [diffTask, setDiffTask] = useState<Task | null>(null)
@@ -1302,11 +1360,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key, ...patch }),
       })
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}))
-        throw new Error(errData.error || 'Enregistrement refusé')
-      }
-      return await res.json()
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Enregistrement refusé')
+      // Pas de bandeau ici : la poussée du label part en arrière-plan et un
+      // message par clic rendrait le triage insupportable. Un échec se voit
+      // dans le compteur « à pousser vers Jira ».
+      return data.epic || null
     } catch (err: any) {
       addToast({ type: 'error', title: 'Épic non enregistré', description: err.message })
       return null
@@ -1342,6 +1401,364 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch (err: any) {
       addToast({ type: 'error', title: 'Story non créée', description: err.message })
       return null
+    }
+  }
+
+  // Rattrapage : les épics classés avant que le miroir en label existe, et ceux
+  // dont la poussée a échoué, restent invisibles dans Jira jusqu'à ce qu'on les
+  // pousse. C'est explicite, une édition de ticket par épic n'est pas anodine.
+  // Rattacher un ticket existant à un épic, ou l'en détacher avec une clé vide.
+  const setTaskEpic = async (taskId: string, epicKey: string): Promise<Task | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/epic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ epicKey }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Rattachement refusé')
+      const updated: Task = data
+      setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+      addToast({
+        type: 'success',
+        title: epicKey ? `${updated.key} rattaché à ${epicKey}` : `${updated.key} détaché de son épic`,
+      })
+      return updated
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Rattachement impossible', description: err.message })
+      return null
+    }
+  }
+
+  const createStoryUnderEpic = async (projectId: string, epicKey: string, title: string): Promise<string> => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/${encodeURIComponent(epicKey)}/story`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Création refusée')
+      addToast({ type: 'success', title: 'Story créée', description: `${data.storyKey} sous ${epicKey}` })
+      fetchTasks()
+      return data.storyKey || ''
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Story non créée', description: err.message })
+      return ''
+    }
+  }
+
+  const createEpic = async (projectId: string, title: string, horizon?: EpicHorizon | ''): Promise<EpicMeta | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, horizon: horizon || '' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Création refusée')
+      addToast({ type: 'success', title: `Épic ${data.key} créé` })
+      return data
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Épic non créé', description: err.message })
+      return null
+    }
+  }
+
+  // Le geste de coupe : un lot de tickets part vers un autre épic, créé à la
+  // volée si on ne donne qu'un intitulé.
+  const moveTasksToEpic = async (
+    projectId: string,
+    taskIds: string[],
+    targetEpicKey: string,
+    newEpicTitle?: string
+  ): Promise<string> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskIds, targetEpicKey, newEpicTitle: newEpicTitle || '' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Déplacement refusé')
+      const failures: string[] = data.failures || []
+      addToast({
+        type: failures.length ? 'error' : 'success',
+        title: `${data.moved} ticket(s) déplacé(s) vers ${data.targetEpicKey}`,
+        description: failures.length ? `${failures.length} échec(s)` : undefined,
+      })
+      fetchTasks()
+      return data.targetEpicKey || ''
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Déplacement impossible', description: err.message })
+      return ''
+    }
+  }
+
+  // Un pas du workflow, ou la chaîne autonome. Le serveur décide du pas depuis
+  // l'étape de la tâche : l'interface ne fait qu'ouvrir le terminal quand le pas
+  // est interactif.
+  const advanceTask = async (
+    taskId: string,
+    auto?: boolean
+  ): Promise<{ mode: string; skillId?: string; label?: string } | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/advance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto: Boolean(auto) }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Avance refusée')
+      if (data.mode === 'queued') {
+        addToast({
+          type: 'success',
+          title: 'Étape lancée',
+          description: `${data.label || ''}${data.label ? '. ' : ''}Console ouvrable depuis la tâche pendant le run.`,
+        })
+        fetchActivities()
+      } else if (data.mode === 'auto') {
+        addToast({
+          type: 'success',
+          title: 'Chaîne autonome lancée',
+          description: "L'agent s'arrêtera à l'étape de revue. Sa console est ouvrable pendant le run.",
+        })
+        fetchActivities()
+      }
+      return data
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Avance impossible', description: err.message })
+      return null
+    }
+  }
+
+  // Lance un pas interactif : ouvre le terminal de la tâche, attend que la
+  // session PTY existe vraiment, puis y écrit la commande. L'attente est une
+  // vraie boucle et non un délai fixe : la création du worktree peut prendre
+  // plusieurs secondes, et un envoi trop tôt échouait en silence.
+  const startTaskAgent = async (taskId: string, force?: boolean): Promise<TTYLaunchResult | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/tty-agent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: Boolean(force) }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Démarrage impossible')
+      addToast({
+        type: 'success',
+        title: data.agentLaunched ? `Agent ${data.provider || ''} démarré` : `Agent ${data.provider || ''} déjà en cours`,
+        description: data.launchCommand || data.cwd,
+      })
+      return data as TTYLaunchResult
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Agent non démarré', description: err.message, duration: 8000 })
+      return null
+    }
+  }
+
+  const injectTaskSkill = async (taskId: string, skillId: string): Promise<TTYLaunchResult | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/tty-skill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skillId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Injection impossible')
+      addToast({ type: 'success', title: 'Skill lancée', description: data.call })
+      return data as TTYLaunchResult
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Skill non lancée', description: err.message, duration: 8000 })
+      return null
+    }
+  }
+
+  // Un pas interactif ouvre la console de la tâche et arme la confirmation. Le
+  // démarrage de l'agent et le lancement de la skill sont deux boutons de cette
+  // console : enchaîner les trois tout seul supposait de deviner quand l'invite
+  // de l'agent était prête, ce qui ne marchait pas d'un moteur à l'autre.
+  const launchInteractiveStep = async (task: Task, skillId: string, label: string): Promise<void> => {
+    setChatTask(task)
+    setPendingInteractive({ taskId: task.id, taskKey: task.key, skillId, label })
+    addToast({
+      type: 'info',
+      title: `${label} : console ouverte`,
+      description: `Démarre l'agent puis lance ${skillId} depuis la barre de la console.`,
+      duration: 7000,
+    })
+  }
+
+  // Clôture le pas interactif : c'est ici que le ticket bouge enfin (label
+  // d'étape, statut, transition sur le tracker), le serveur faisant le même
+  // travail que pour une skill autonome.
+  const confirmInteractiveStep = async (note?: string): Promise<void> => {
+    if (!pendingInteractive) return
+    const { taskId, taskKey, skillId, label } = pendingInteractive
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/advance/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skillId, note: note || '' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Confirmation refusée')
+      setPendingInteractive(null)
+      addToast({ type: 'success', title: `${label} confirmée`, description: `${taskKey} avance dans le workflow` })
+      fetchTasks()
+      fetchActivities()
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Confirmation impossible', description: err.message })
+    }
+  }
+
+  // Ouvre la console d'une tâche : la tâche chargée quand elle est là, pour
+  // l'étiquette et le worktree, sa session sinon.
+  const openTerminalForTask = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId)
+    if (task) {
+      setChatTask(task)
+      return
+    }
+    openTerminalSession(`task-${taskId}`)
+  }
+
+  // Épingles. Elles vivent côté serveur : elles survivent au rechargement, et la
+  // barre affiche un ticket même quand les filtres courants le cachent.
+  const fetchPins = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/pins`)
+      if (!res.ok) return
+      setPinnedTasks((await res.json()) || [])
+    } catch {
+      // Serveur momentanément absent : la barre garde son dernier état.
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchPins()
+  }, [fetchPins])
+
+  const isPinned = (taskId: string) => pinnedTasks.some(t => t.id === taskId)
+
+  const togglePin = async (taskId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/pin`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Épinglage refusé')
+      await fetchPins()
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Épinglage impossible', description: err.message })
+    }
+  }
+
+  // Bascule à chaud : la console du ticket prend la main dans le panneau, et le
+  // ticket devient celui sur lequel on travaille. C'est le geste qu'on répète
+  // vingt fois par jour quand trois chantiers avancent en parallèle.
+  const hotSwitch = (taskId: string) => {
+    const task = pinnedTasks.find(t => t.id === taskId) || tasks.find(t => t.id === taskId)
+    if (task) {
+      setChatTask(task)
+      return
+    }
+    openTerminalSession(`task-${taskId}`)
+  }
+
+  const dismissInteractiveStep = () => setPendingInteractive(null)
+
+  // Éditeur de skills. Le contenu vit en base, par projet, et le serveur
+  // régénère les SKILL.md du dépôt à chaque enregistrement : l'éditeur est la
+  // source, les fichiers sont le produit.
+  const skillEditorBase = () => {
+    const pid = currentProject?.id
+    if (!pid) return ''
+    return `${API_BASE}/projects/${encodeURIComponent(pid)}/skill-editor`
+  }
+
+  const fetchSkillEditor = async (): Promise<SkillEditorEntry[]> => {
+    const base = skillEditorBase()
+    if (!base) return []
+    try {
+      const res = await fetch(base)
+      if (!res.ok) throw new Error('Lecture des skills impossible')
+      return (await res.json()) || []
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Skills indisponibles', description: err.message })
+      return []
+    }
+  }
+
+  const skillEditorAction = async (
+    path: string,
+    init: RequestInit,
+    successTitle: string
+  ): Promise<SkillEditorEntry | null> => {
+    const base = skillEditorBase()
+    if (!base) return null
+    try {
+      const res = await fetch(`${base}${path}`, init)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Action refusée')
+      const entry = data as SkillEditorEntry
+      addToast({
+        type: 'success',
+        title: successTitle,
+        description: entry.paths?.length
+          ? `${entry.paths.length} fichier(s) régénéré(s) dans le dépôt`
+          : 'Enregistré en base, dépôt non accessible',
+      })
+      return entry
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Skill non enregistrée', description: err.message })
+      return null
+    }
+  }
+
+  const saveSkillContent = (skillId: string, content: string) =>
+    skillEditorAction(
+      `/${encodeURIComponent(skillId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      },
+      'Skill enregistrée'
+    )
+
+  const resetSkillContent = (skillId: string) =>
+    skillEditorAction(`/${encodeURIComponent(skillId)}/reset`, { method: 'POST' }, 'Modèle intégré restauré')
+
+  const importSkillFromRepo = (skillId: string) =>
+    skillEditorAction(`/${encodeURIComponent(skillId)}/import`, { method: 'POST' }, 'Contenu du dépôt importé')
+
+  const pendingHorizonPushes = async (projectId: string): Promise<EpicMeta[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/push-horizons`)
+      if (!res.ok) return []
+      return (await res.json()) || []
+    } catch {
+      return []
+    }
+  }
+
+  const pushPendingHorizons = async (projectId: string): Promise<number> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/push-horizons`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Poussée refusée')
+      const failures: string[] = data.failures || []
+      addToast({
+        type: failures.length ? 'error' : 'success',
+        title: `${data.pushed || 0} horizons poussés dans Jira`,
+        description: failures.length ? `${failures.length} échec(s) : ${failures.slice(0, 2).join(' ; ')}` : undefined,
+      })
+      return data.pushed || 0
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Poussée impossible', description: err.message })
+      return 0
     }
   }
 
@@ -2153,6 +2570,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         selectedTask,
         setSelectedTask,
         chatTask,
+        terminalSessionOverride,
+        openTerminalSession,
+        openTerminalForTask,
         setChatTask,
         diffTask,
         setDiffTask,
@@ -2188,6 +2608,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         fetchProjectEpics,
         saveEpicMeta,
         createStoryFromEpicTodo,
+        pendingHorizonPushes,
+        pushPendingHorizons,
+        setTaskEpic,
+        createStoryUnderEpic,
+        createEpic,
+        moveTasksToEpic,
+        advanceTask,
+        pendingInteractive,
+        pinnedTasks,
+        isPinned,
+        togglePin,
+        hotSwitch,
+        startTaskAgent,
+        injectTaskSkill,
+        fetchSkillEditor,
+        saveSkillContent,
+        resetSkillContent,
+        importSkillFromRepo,
+        launchInteractiveStep,
+        confirmInteractiveStep,
+        dismissInteractiveStep,
         convertTask,
         moveTask,
         deleteTask,
