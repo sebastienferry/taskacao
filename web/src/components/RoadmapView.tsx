@@ -663,7 +663,7 @@ export const RoadmapView: React.FC = () => {
                 borderColor: onlyIssues ? 'rgb(var(--status-danger-rgb) / 0.4)' : 'var(--border-color)',
                 color: onlyIssues ? 'var(--status-danger)' : 'var(--text-secondary)',
               }}
-              title="Ne garder que les épics dont une story n'est pas dans le bon sprint"
+              title="Ne garder que les épics ayant un ticket non terminé sans sprint, ou resté dans un sprint passé"
             >
               <AlertTriangle size={12} />
               À corriger

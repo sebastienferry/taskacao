@@ -277,11 +277,20 @@ export const matchesEpicSearch = (row: EpicRow, query: string): boolean => {
   return terms.every(term => haystack.includes(term))
 }
 
+/**
+ * Anomalies de placement d'un épic : les tickets non terminés qui n'ont aucun
+ * sprint, ou qui restent dans un sprint passé.
+ *
+ * La règle est la même pour NOW et pour NEXT. Un ticket déjà rangé dans un
+ * sprint à venir alors que l'épic est en NOW n'est pas en faute, il est en
+ * avance : c'est de l'information, pas une correction à faire, et le compter ici
+ * remplissait la colonne d'alertes qui ne demandaient aucune action.
+ *
+ * LATER et les épics masqués n'ont pas d'anomalie : on y cadre un épic avant
+ * qu'il ait des tickets, donc l'absence de sprint y est l'état normal.
+ */
 export const placementIssues = (row: EpicRow, horizon: Horizon): Task[] => {
-  if (horizon === 'now') {
-    return [...row.unscheduled, ...row.inStaleSprint, ...row.inFutureSprint]
-  }
-  if (horizon === 'next') {
+  if (horizon === 'now' || horizon === 'next') {
     return [...row.unscheduled, ...row.inStaleSprint]
   }
   return []
