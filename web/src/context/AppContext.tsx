@@ -58,8 +58,12 @@ interface AppContextType {
     statuses: TaskFacetValue[]
     sources: TaskFacetValue[]
     labels: TaskFacetValue[]
+    issueTypes: TaskFacetValue[]
     total: number
   }
+  /** Types de tickets affichés. Vide veut dire « tous ». */
+  issueTypeFilters: string[]
+  setIssueTypeFilters: (types: string[]) => void
   /** État de la boucle de synchronisation de fond, rafraîchi avec les activités. */
   autoSync: AutoSyncState | null
   /** Écran de connexion au tracker, ouvert à la demande et jamais au démarrage. */
@@ -384,6 +388,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     statuses: TaskFacetValue[]
     sources: TaskFacetValue[]
     labels: TaskFacetValue[]
+    issueTypes: TaskFacetValue[]
     total: number
   }>({
     sprints: [],
@@ -394,8 +399,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     statuses: [],
     sources: [],
     labels: [],
+    issueTypes: [],
     total: 0,
   })
+  const [issueTypeFilters, setIssueTypeFiltersState] = useState<string[]>([])
   const [autoSync, setAutoSync] = useState<AutoSyncState | null>(null)
   const [isTrackerSetupOpen, setIsTrackerSetupOpen] = useState(false)
   const [trackerStatusFilters, setTrackerStatusFiltersState] = useState<string[]>([])
@@ -555,6 +562,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setTrackerStatusFiltersState(values)
     // Mémorisé comme les autres filtres, en JSON puisque c'est une liste.
     persistFilter({ trackerStatuses: values.length > 0 ? JSON.stringify(values) : null })
+  }, [persistFilter])
+
+  const setIssueTypeFilters = useCallback((values: string[]) => {
+    setIssueTypeFiltersState(values)
+    persistFilter({ issueTypes: values.length > 0 ? JSON.stringify(values) : null })
   }, [persistFilter])
 
   const setAssigneeFilter = useCallback((value: string | null) => {
@@ -863,9 +875,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // nulle part, ce qui laissait « Mes tâches » sans effet.
     if (assigneeFilter) params.append('assignee', assigneeFilter)
     trackerStatusFilters.forEach(status => params.append('trackerStatus', status))
+    issueTypeFilters.forEach(type => params.append('issueType', type))
     if (pinnedOnly) params.append('pinned', '1')
     return params.toString()
-  }, [selectedProjectId, searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, assigneeFilter, trackerStatusFilters, pinnedOnly])
+  }, [selectedProjectId, searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, assigneeFilter, trackerStatusFilters, issueTypeFilters, pinnedOnly])
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -898,6 +911,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch {
       setTrackerStatusFiltersState([])
     }
+    try {
+      const raw = stored.issueTypes
+      setIssueTypeFiltersState(raw ? JSON.parse(raw) : [])
+    } catch {
+      setIssueTypeFiltersState([])
+    }
     setPinnedOnlyState(stored.pinnedOnly === '1')
   }, [selectedProjectId])
 
@@ -919,6 +938,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         statuses: data?.statuses || [],
         sources: data?.sources || [],
         labels: data?.labels || [],
+        issueTypes: data?.issueTypes || [],
         total: data?.total || 0,
       })
     } catch {
@@ -3111,6 +3131,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setAssigneeFilter,
         trackerStatusFilters,
         setTrackerStatusFilters,
+        issueTypeFilters,
+        setIssueTypeFilters,
         autoSync,
         isTrackerSetupOpen,
         setIsTrackerSetupOpen,

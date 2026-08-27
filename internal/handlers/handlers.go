@@ -1037,11 +1037,13 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 		assignee := r.URL.Query().Get("assignee")
 		// Statuts du tracker à afficher, répétables : ?trackerStatus=Draft&trackerStatus=Selected
 		trackerStatuses := r.URL.Query()["trackerStatus"]
+		// Types de tickets à afficher, répétables : ?issueType=Bug&issueType=Story
+		issueTypes := r.URL.Query()["issueType"]
 		// pinned=1 : les seuls tickets épinglés, le raccourci vers les chantiers
 		// en cours quand le board en porte trois cents.
 		pinnedOnly := r.URL.Query().Get("pinned") == "1" || r.URL.Query().Get("pinned") == "true"
 
-		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team, assignee, trackerStatuses, pinnedOnly)
+		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team, assignee, trackerStatuses, issueTypes, pinnedOnly)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

@@ -592,7 +592,11 @@ type TaskFacets struct {
 	// filter but the project.
 	Statuses []TaskFacetValue `json:"statuses"`
 	Sources  []TaskFacetValue `json:"sources"`
-	Labels   []TaskFacetValue `json:"labels"`
+	// IssueTypes are the tracker's own work item types present on the board. A
+	// project may import a dozen of them (Bug, Technical debt, Corrective
+	// action…), and telling them apart on a card starts with knowing which exist.
+	IssueTypes []TaskFacetValue `json:"issueTypes"`
+	Labels     []TaskFacetValue `json:"labels"`
 	// Total is the project's work item count, all filters ignored.
 	Total int `json:"total"`
 }
@@ -618,6 +622,7 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 		TrackerStatuses: []TaskFacetValue{},
 		Statuses:        []TaskFacetValue{},
 		Sources:         []TaskFacetValue{},
+		IssueTypes:      []TaskFacetValue{},
 		Labels:          []TaskFacetValue{},
 	}
 
@@ -702,7 +707,7 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 
 	// Statut interne et tracker d'origine : deux regroupements simples, comptés
 	// sur le même périmètre que le reste.
-	for _, column := range []string{"status", "source"} {
+	for _, column := range []string{"status", "source", "issue_type"} {
 		countQuery := fmt.Sprintf("SELECT %s, COUNT(*) FROM tasks WHERE TRIM(%s) != ''", column, column)
 		if projectID != "" {
 			countQuery += " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
@@ -722,10 +727,13 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 			if value = strings.TrimSpace(value); value == "" {
 				continue
 			}
-			if column == "status" {
+			switch column {
+			case "status":
 				facets.Statuses = append(facets.Statuses, TaskFacetValue{Value: value, Count: count})
-			} else {
+			case "source":
 				facets.Sources = append(facets.Sources, TaskFacetValue{Value: value, Count: count})
+			default:
+				facets.IssueTypes = append(facets.IssueTypes, TaskFacetValue{Value: value, Count: count})
 			}
 		}
 		rows.Close()
@@ -779,7 +787,7 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 // GetTasks lists the tasks matching the filters. pinnedOnly restricts to the
 // pinned tickets, which is the fastest way back to the two or three chantiers in
 // flight when the board carries three hundred.
-func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, assignee string, trackerStatuses []string, pinnedOnly bool) ([]models.Task, error) {
+func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, assignee string, trackerStatuses, issueTypes []string, pinnedOnly bool) ([]models.Task, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -827,6 +835,24 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, a
 	if team != "" {
 		conditions = append(conditions, "team = ?")
 		args = append(args, team)
+	}
+
+	// Types de tickets retenus. Un board qui porte douze types n'est lisible qu'en
+	// pouvant n'en regarder qu'un : les correctives d'un côté, les stories de
+	// l'autre.
+	if len(issueTypes) > 0 {
+		placeholders := make([]string, 0, len(issueTypes))
+		for _, it := range issueTypes {
+			it = strings.TrimSpace(it)
+			if it == "" {
+				continue
+			}
+			placeholders = append(placeholders, "?")
+			args = append(args, it)
+		}
+		if len(placeholders) > 0 {
+			conditions = append(conditions, fmt.Sprintf("issue_type IN (%s)", strings.Join(placeholders, ", ")))
+		}
 	}
 
 	// Statuts du tracker retenus : c'est le choix explicite de ce qu'on veut voir,

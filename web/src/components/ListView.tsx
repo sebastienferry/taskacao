@@ -237,6 +237,17 @@ export const ListView: React.FC = () => {
         {/* Title & Activity */}
         <td className="py-2.5 px-3 max-w-[560px]">
           <div className="flex items-center gap-1.5">
+            {/* Le type, sauf Story et Task : ils sont le cas courant et
+                n'apprennent rien, alors qu'un Bug ou une Corrective action
+                changent la façon de lire la ligne. */}
+            {task.issueType && !['story', 'task'].includes(task.issueType.toLowerCase()) && (
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide text-[var(--text-secondary)] bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
+                title={`Type de ticket : ${task.issueType}`}
+              >
+                {task.issueType}
+              </span>
+            )}
             <span className="text-xs font-semibold text-[var(--text-primary)] truncate group-hover:text-[var(--accent-color)] transition-colors">
               {task.title}
             </span>

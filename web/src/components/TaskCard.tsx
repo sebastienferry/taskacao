@@ -396,6 +396,19 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
 
       {/* Ligne 1b : Titre, sous la référence */}
       <h4 className="text-xs font-semibold text-[var(--text-primary)] leading-snug line-clamp-2 mb-1.5">
+        {task.issueType && !['story', 'task'].includes(task.issueType.toLowerCase()) && (
+          <span
+            className="inline-flex items-center align-middle mr-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide"
+            style={{
+              color: 'var(--text-secondary)',
+              background: 'var(--bg-tertiary)',
+              border: '1px solid var(--border-color)',
+            }}
+            title={`Type de ticket : ${task.issueType}`}
+          >
+            {task.issueType}
+          </span>
+        )}
         {task.title}
       </h4>
 
