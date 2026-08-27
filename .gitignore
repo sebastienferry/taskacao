@@ -5,7 +5,8 @@ server
 
 # Node / Web Dependencies
 node_modules/
-dist/
+/dist/
+web/dist/
 build/
 .env
 .env.local
@@ -28,3 +29,7 @@ scratch/
 
 # Taskacao parallel agent worktrees
 .tasks/
+
+# Interface compilée, embarquée dans le binaire au moment du build
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep

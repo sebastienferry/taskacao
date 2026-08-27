@@ -9,8 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"io/fs"
+	"os/exec"
+	"runtime"
+	"time"
+
 	"tasks/internal/db"
 	"tasks/internal/handlers"
+	"tasks/internal/webui"
 )
 
 // loadDotEnv reads KEY=VALUE lines from a .env file next to the binary's working
@@ -51,6 +57,55 @@ func loadDotEnv(paths ...string) {
 	}
 }
 
+// resolveDBPath decides where the database lives.
+//
+// Three cases, in this order. An explicit DB_PATH wins, always. Then a database
+// already sitting in the working directory is kept: someone who has been running
+// the program from a checkout must not silently start from an empty board. Only
+// otherwise does the database go to the user's data directory, which is what a
+// distributed binary needs, since it may be launched from anywhere.
+func resolveDBPath(explicit string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return explicit
+	}
+	if _, err := os.Stat("tasks.db"); err == nil {
+		return "tasks.db"
+	}
+
+	dir, err := os.UserConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		// Pas de dossier utilisateur lisible : le répertoire courant reste un
+		// endroit valable, et vaut mieux qu'un démarrage refusé.
+		return "tasks.db"
+	}
+	appDir := filepath.Join(dir, "taskacao")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		return "tasks.db"
+	}
+	return filepath.Join(appDir, "tasks.db")
+}
+
+// openBrowser opens the interface once the server listens. It is best effort by
+// design: a machine without a browser, or a headless run, must not turn a
+// cosmetic step into a failure to start.
+func openBrowser(url string) {
+	var cmd string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = "open"
+	case "windows":
+		cmd = "cmd"
+		args = []string{"/c", "start", ""}
+	default:
+		cmd = "xdg-open"
+	}
+	args = append(args, url)
+	if err := exec.Command(cmd, args...).Start(); err != nil {
+		log.Printf("Navigateur non ouvert (%v). Ouvrez %s à la main.", err, url)
+	}
+}
+
 func main() {
 	// .env.local last: it overrides nothing already exported, but is the usual
 	// place for a machine-specific secret.
@@ -61,10 +116,7 @@ func main() {
 		port = "8090"
 	}
 
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "tasks.db"
-	}
+	dbPath := resolveDBPath(os.Getenv("DB_PATH"))
 
 	database, err := db.NewDB(dbPath)
 	if err != nil {
@@ -124,10 +176,23 @@ func main() {
 	mux.HandleFunc("/api/terminal/send", h.HandleTerminalSend)
 	mux.HandleFunc("/api/terminal/reset", h.HandleTerminalReset)
 
-	// Static Web Assets / SPA fallback
-	webDistDir := "./web/dist"
-	if _, err := os.Stat(webDistDir); err == nil {
-		fs := http.FileServer(http.Dir(webDistDir))
+	// Interface : la copie embarquée d'abord, le dossier de build ensuite.
+	//
+	// L'embarqué est ce qui fait tenir l'application dans un fichier. Le repli
+	// disque sert la boucle de développement, où l'on rebuild le front sans
+	// recompiler le serveur.
+	uiFS, uiEmbedded := webui.FS()
+	webDistDir := "./internal/webui/dist"
+	if !uiEmbedded {
+		if _, err := os.Stat(webDistDir); err == nil {
+			uiFS = os.DirFS(webDistDir)
+			uiEmbedded = true
+			log.Printf("Interface servie depuis %s", webDistDir)
+		}
+	}
+
+	if uiEmbedded {
+		fileServer := http.FileServer(http.FS(uiFS))
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -139,17 +204,27 @@ func main() {
 			// hashed bundle, so a stale copy keeps serving the previous build and
 			// the app looks unchanged after a rebuild. The assets themselves are
 			// content-hashed, so they can be cached hard.
-			path := filepath.Join(webDistDir, r.URL.Path)
 			if strings.HasPrefix(r.URL.Path, "/assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			} else {
 				w.Header().Set("Cache-Control", "no-store, must-revalidate")
 			}
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				http.ServeFile(w, r, filepath.Join(webDistDir, "index.html"))
+			name := strings.TrimPrefix(r.URL.Path, "/")
+			if name == "" {
+				name = "index.html"
+			}
+			if _, err := fs.Stat(uiFS, name); err != nil {
+				// Route de l'application : c'est index.html qui la résout.
+				index, err := fs.ReadFile(uiFS, "index.html")
+				if err != nil {
+					http.Error(w, "interface indisponible", http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = w.Write(index)
 				return
 			}
-			fs.ServeHTTP(w, r)
+			fileServer.ServeHTTP(w, r)
 		})
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +241,7 @@ func main() {
 <body style="font-family: system-ui; padding: 2rem; background: #0f172a; color: #f8fafc;">
   <h2>Taskacao Go API is running!</h2>
   <p>To run the frontend with hot-reloading, run <code>cd web && npm run dev</code></p>
-  <p>Or build static bundle via <code>cd web && npm run build</code> and restart this Go server.</p>
+  <p>Or build the bundle via <code>make build</code>, which compiles the interface into the binary.</p>
   <p>API endpoints available at <a href="/api/tasks" style="color: #818cf8;">/api/tasks</a>, <a href="/api/skills" style="color: #818cf8;">/api/skills</a> and <a href="/api/settings" style="color: #818cf8;">/api/settings</a>.</p>
 </body>
 </html>`)
@@ -176,7 +251,21 @@ func main() {
 	handlerWithCORS := h.EnableCORS(mux)
 
 	addr := ":" + port
-	log.Printf("🚀 Taskacao Server listening on http://localhost%s (DB: %s)", addr, dbPath)
+	url := fmt.Sprintf("http://localhost%s", addr)
+	log.Printf("🚀 Taskacao Server listening on %s (DB: %s)", url, dbPath)
+
+	// Ouverture du navigateur : ce que fait une application quand on la lance.
+	// TASKACAO_NO_BROWSER=1 l'en empêche, pour un serveur ou un lancement par un
+	// gestionnaire de services.
+	if os.Getenv("TASKACAO_NO_BROWSER") == "" && uiEmbedded {
+		go func() {
+			// Laisser le port s'ouvrir : un navigateur plus rapide que le
+			// serveur afficherait une erreur de connexion.
+			time.Sleep(400 * time.Millisecond)
+			openBrowser(url)
+		}()
+	}
+
 	if err := http.ListenAndServe(addr, handlerWithCORS); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
