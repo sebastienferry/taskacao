@@ -172,15 +172,7 @@ func (d *DB) pushStageToTracker(task *models.Task, stageLabel, statusTarget, tra
 		case src == "linear" || strings.HasPrefix(key, "FRE-"):
 			_ = d.runner.UpdateLinearIssueState(key, st)
 			_ = d.runner.UpdateLinearIssue(key, nil, nil, nil, &st, lbls)
-		case src == "jira":
-			if err := d.runner.UpdateJiraIssue(key, rPath, nil, nil, nil, nil, lbls, staleLbls); err != nil {
-				log.Printf("[interactive] labels de %s non mis à jour: %v", key, err)
-			}
-			if target != "" {
-				if err := d.runner.TransitionJiraIssueToStatus(settings, url, key, target, rPath); err != nil {
-					log.Printf("[interactive] transition de %s vers %q impossible: %v", key, target, err)
-				}
-			}
+
 		default:
 			_ = d.runner.UpdateGithubIssueState(repo, rPath, key, st)
 			_ = d.runner.UpdateGithubIssue(repo, rPath, key, nil, nil, &st, lbls, staleLbls)

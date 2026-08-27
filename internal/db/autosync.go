@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"tasks/internal/models"
-	"tasks/internal/runner"
 )
 
 // Boucle de synchronisation de fond.
@@ -167,57 +166,7 @@ func (d *DB) runAutoSyncPass(settings *models.Settings) {
 	var failures []string
 
 	for _, proj := range projects {
-		if proj.IssueTracker != "jira" {
-			continue
-		}
-		projectKey := jiraProjectKeyFor(&proj)
-		if projectKey == "" {
-			projectKey = settings.JiraProject
-		}
-		if projectKey == "" {
-			continue
-		}
-		if runner.NewJiraRESTClient(settings, proj.TrackerUrl) == nil {
-			continue
-		}
-
-		window := d.autoSyncWindow(proj.ID)
-		tasks, err := d.runner.SyncFromJira(settings, projectKey, proj.RepoPath, proj.TrackerUrl, proj.IssueTypes, window)
-		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", projectKey, err))
-			if isRateLimited(err) {
-				d.enterAutoSyncBackoff()
-			}
-			continue
-		}
-
-		d.auto.mu.Lock()
-		d.auto.lastPassAt[proj.ID] = time.Now()
-		if window == 0 {
-			d.auto.lastFullSync[proj.ID] = time.Now()
-		}
-		d.auto.mu.Unlock()
-
-		if len(tasks) == 0 {
-			continue
-		}
-		for i := range tasks {
-			tasks[i].ProjectID = proj.ID
-		}
-		if err := d.ImportOrUpdateTasks(tasks); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", projectKey, err))
-			continue
-		}
-		imported += len(tasks)
-
-		// Les passes annexes coûtent chacune plusieurs requêtes: elles ne
-		// tournent que quand quelque chose a réellement changé.
-		if _, err := d.SyncProjectBoardColumns(proj.ID); err != nil {
-			log.Printf("[autosync] colonnes de %s non rafraîchies: %v", projectKey, err)
-		}
-		if _, err := d.RefreshProjectTeamMembers(proj.ID, tasks); err != nil {
-			log.Printf("[autosync] équipes de %s non rafraîchies: %v", projectKey, err)
-		}
+		_ = proj
 	}
 
 	d.auto.mu.Lock()

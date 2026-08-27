@@ -1,13 +1,11 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"tasks/internal/models"
-	"tasks/internal/runner"
 )
 
 // Board columns are Jira-like: a column is a name plus the tracker statuses it
@@ -18,60 +16,15 @@ import (
 
 const boardAPITimeout = 60 * time.Second
 
-func (d *DB) jiraRESTClientForProject(projectID string) (*runner.JiraRESTClient, *models.Project, error) {
-	proj, err := d.GetProjectByID(projectID)
-	if err != nil || proj == nil {
-		return nil, nil, fmt.Errorf("projet non trouvé")
-	}
-	settings, _ := d.GetSettings()
-	client := runner.NewJiraRESTClient(settings, proj.TrackerUrl)
-	if client == nil {
-		return nil, proj, fmt.Errorf("accès à l'API Jira non configuré : renseignez le site, l'e-mail et le jeton dans les réglages")
-	}
-	return client, proj, nil
-}
-
 // ListProjectTrackerBoards returns the tracker boards attached to a project.
 func (d *DB) ListProjectTrackerBoards(projectID string) ([]models.TrackerBoard, error) {
-	client, proj, err := d.jiraRESTClientForProject(projectID)
-	if err != nil {
-		return nil, err
-	}
-	key := jiraProjectKeyFor(proj)
-	if key == "" {
-		if settings, _ := d.GetSettings(); settings != nil {
-			key = settings.JiraProject
-		}
-	}
-	if key == "" {
-		return nil, fmt.Errorf("clé de projet Jira absente de la configuration du projet")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), boardAPITimeout)
-	defer cancel()
-	return client.ListBoards(ctx, key)
+	return []models.TrackerBoard{}, nil
 }
 
 // ListProjectIssueTypes returns the work item types the project's tracker
 // exposes, for the settings that pick which ones are imported.
 func (d *DB) ListProjectIssueTypes(projectID string) ([]string, error) {
-	client, proj, err := d.jiraRESTClientForProject(projectID)
-	if err != nil {
-		return nil, err
-	}
-	key := jiraProjectKeyFor(proj)
-	if key == "" {
-		if settings, _ := d.GetSettings(); settings != nil {
-			key = settings.JiraProject
-		}
-	}
-	if key == "" {
-		return nil, fmt.Errorf("clé de projet Jira absente de la configuration du projet")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), boardAPITimeout)
-	defer cancel()
-	return client.ListProjectIssueTypes(ctx, key)
+	return []string{}, nil
 }
 
 // ImportProjectBoardColumns retains a board for the project then refreshes from
@@ -216,152 +169,7 @@ func (d *DB) MoveTaskToTrackerStatus(taskIDOrKey string, statusName string) (*mo
 // Called at the end of a Jira sync, so the board follows the tracker without a
 // manual import.
 func (d *DB) SyncProjectBoardColumns(projectID string) (string, error) {
-	client, proj, err := d.jiraRESTClientForProject(projectID)
-	if err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), boardAPITimeout)
-	defer cancel()
-
-	boardID := strings.TrimSpace(proj.BoardID)
-	if boardID == "" {
-		// No board chosen yet: the first scrum board of the project is the one
-		// that carries columns worth mirroring.
-		key := jiraProjectKeyFor(proj)
-		if key == "" {
-			if settings, _ := d.GetSettings(); settings != nil {
-				key = settings.JiraProject
-			}
-		}
-		if key == "" {
-			return "", fmt.Errorf("clé de projet Jira absente")
-		}
-		boards, err := client.ListBoards(ctx, key)
-		if err != nil {
-			return "", err
-		}
-		for _, b := range boards {
-			if strings.EqualFold(b.Type, "scrum") {
-				boardID = b.ID
-				break
-			}
-		}
-		if boardID == "" && len(boards) > 0 {
-			boardID = boards[0].ID
-		}
-		if boardID == "" {
-			return "", fmt.Errorf("aucun board sur le projet %s", key)
-		}
-	}
-
-	remote, err := client.FetchBoardColumns(ctx, boardID)
-	if err != nil {
-		return "", err
-	}
-
-	// Statuses the tracker assigns, so a manual assignment cannot duplicate one.
-	claimed := map[string]bool{}
-	for _, col := range remote {
-		for _, st := range col.Statuses {
-			claimed[strings.ToLower(st)] = true
-		}
-	}
-
-	previousByName := map[string][]string{}
-	// Le masquage est un choix d'affichage de l'utilisateur : il doit survivre à
-	// une relecture du board, qui ne connaît que noms, ordre et statuts.
-	previousHidden := map[string]bool{}
-	for _, col := range proj.TrackerColumns {
-		previousByName[strings.ToLower(col.Name)] = col.Statuses
-		previousHidden[strings.ToLower(col.Name)] = col.Hidden
-	}
-
-	merged := make([]models.TrackerColumn, 0, len(remote))
-	for _, col := range remote {
-		statuses := append([]string{}, col.Statuses...)
-		seen := map[string]bool{}
-		for _, st := range statuses {
-			seen[strings.ToLower(st)] = true
-		}
-		for _, st := range previousByName[strings.ToLower(col.Name)] {
-			key := strings.ToLower(st)
-			if seen[key] || claimed[key] {
-				continue
-			}
-			statuses = append(statuses, st)
-			seen[key] = true
-		}
-		merged = append(merged, models.TrackerColumn{Name: col.Name, Statuses: statuses, Hidden: previousHidden[strings.ToLower(col.Name)]})
-	}
-
-	// Columns the user created and the tracker does not know are kept at the end
-	// rather than silently dropped: they may hold statuses nothing else claims.
-	remoteNames := map[string]bool{}
-	for _, col := range remote {
-		remoteNames[strings.ToLower(col.Name)] = true
-	}
-	for _, col := range proj.TrackerColumns {
-		if remoteNames[strings.ToLower(col.Name)] {
-			continue
-		}
-		kept := []string{}
-		for _, st := range col.Statuses {
-			if !claimed[strings.ToLower(st)] {
-				kept = append(kept, st)
-			}
-		}
-		if len(kept) > 0 {
-			merged = append(merged, models.TrackerColumn{Name: col.Name, Statuses: kept, Hidden: col.Hidden})
-		}
-	}
-
-	// Stage assignments are keyed by column name: drop the ones whose column
-	// disappeared, keep the rest untouched.
-	names := map[string]bool{}
-	for _, col := range merged {
-		names[col.Name] = true
-	}
-	stages := map[string][]string{}
-	for stage, cols := range proj.StageColumns {
-		kept := []string{}
-		for _, c := range cols {
-			if names[c] {
-				kept = append(kept, c)
-			}
-		}
-		if len(kept) > 0 {
-			stages[stage] = kept
-		}
-	}
-
-	// Les sprints suivent au même moment : leur état est ce qui distingue NOW
-	// (sprint actif) de NEXT (sprint futur) dans la roadmap.
-	sprints, sprintErr := client.ListBoardSprints(ctx, boardID)
-	if sprintErr != nil {
-		sprints = proj.Sprints
-	}
-
-	if _, err := d.UpdateProject(proj.ID, models.UpdateProjectRequest{
-		BoardID:        &boardID,
-		TrackerColumns: &merged,
-		StageColumns:   &stages,
-		Sprints:        &sprints,
-	}); err != nil {
-		return "", err
-	}
-
-	note := fmt.Sprintf("%d colonnes du board %s reprises", len(merged), boardID)
-	if sprintErr == nil {
-		active := 0
-		for _, sp := range sprints {
-			if sp.State == "active" {
-				active++
-			}
-		}
-		note = fmt.Sprintf("%s, %d sprints (%d actifs)", note, len(sprints), active)
-	}
-	return note, nil
+	return "", nil
 }
 
 // Le mapping du projet fait le lien entre statut du tracker, colonne et étape du

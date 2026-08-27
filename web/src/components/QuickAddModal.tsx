@@ -167,8 +167,6 @@ export const QuickAddModal: React.FC = () => {
                         ? `Linear (${activeProject.linearTeam || 'FRE'})`
                         : activeProject.issueTracker === 'github'
                         ? `GitHub (${activeProject.githubRepo ? activeProject.githubRepo.split('/')[1] || activeProject.githubRepo : 'repo'})`
-                        : activeProject.issueTracker === 'jira'
-                        ? `Jira (${activeProject.jiraProject || '—'})`
                         : 'Local'}
                     </span>
                   </span>
@@ -193,11 +191,10 @@ export const QuickAddModal: React.FC = () => {
             <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
               Destination
             </label>
-            <div className="grid grid-cols-4 gap-1.5">
+            <div className="grid grid-cols-3 gap-1.5">
               {([
                 { id: 'linear', label: 'Linear', icon: '🟣', hint: activeProject?.linearTeam || 'équipe non configurée' },
                 { id: 'github', label: 'GitHub', icon: '🐙', hint: activeProject?.githubRepo || 'dépôt non configuré' },
-                { id: 'jira', label: 'Jira', icon: '🔷', hint: activeProject?.jiraProject || 'projet non configuré' },
                 { id: 'local', label: 'Local', icon: '📁', hint: 'SQLite' },
               ] as { id: TaskSource; label: string; icon: string; hint: string }[]).map(opt => (
                 <button
@@ -216,11 +213,6 @@ export const QuickAddModal: React.FC = () => {
                 </button>
               ))}
             </div>
-            {source === 'jira' && !activeProject?.jiraProject && (
-              <p className="mt-1 text-[10px] text-amber-400">
-                Aucune clé de projet Jira sur ce projet : le ticket sera créé en local. Renseignez « Projet Jira » dans la configuration du projet.
-              </p>
-            )}
           </div>
 
           {/* Status & Priority Selectors */}

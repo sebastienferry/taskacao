@@ -1273,11 +1273,10 @@ export const ProjectModal: React.FC = () => {
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
                   Type de Tracker d'Issues
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {[
                     { id: 'linear', label: 'Linear', icon: '⚡' },
                     { id: 'github', label: 'GitHub Issues', icon: '🐙' },
-                    { id: 'jira', label: 'Jira Software', icon: '🔷' },
                     { id: 'local', label: 'Local Uniquement', icon: '💾' },
                   ].map(tItem => {
                     const isSel = issueTracker === tItem.id

@@ -1,15 +1,12 @@
 package db
 
 import (
-	"context"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"time"
 
 	"tasks/internal/models"
-	"tasks/internal/runner"
 	"tasks/internal/tracker"
 )
 
@@ -130,84 +127,11 @@ func (d *DB) storeTeamMembers(teamID string, members []models.TeamMember) error 
 // A failure on one team is not fatal for the others, and no team at all is not
 // an error either: a project may simply not use the field.
 func (d *DB) RefreshProjectTeamMembers(projectID string, tasks []models.Task) (string, error) {
-	teams := d.registerTeamsFromTasks(projectID, tasks)
-	if len(teams) == 0 {
-		return "aucune équipe portée par les tickets, rien à rafraîchir", nil
-	}
-
-	client, _, err := d.jiraRESTClientForProject(projectID)
-	if err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), teamsAPITimeout)
-	defer cancel()
-
-	people := 0
-	refreshed := 0
-	var failures []string
-	for _, team := range teams {
-		members, err := client.FetchTeamMembers(ctx, team)
-		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", team.Name, err))
-			log.Printf("[teams] membres de %s (%s) non lus: %v", team.Name, team.ID, err)
-			continue
-		}
-		if err := d.storeTeamMembers(team.ID, members); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", team.Name, err))
-			continue
-		}
-		refreshed++
-		people += len(members)
-	}
-
-	note := fmt.Sprintf("%d équipe(s) rafraîchie(s), %d personne(s)", refreshed, people)
-	if len(failures) > 0 {
-		note += fmt.Sprintf(", %d échec(s) : %s", len(failures), strings.Join(failures, " | "))
-	}
-	return note, nil
+	return "aucune équipe à rafraîchir", nil
 }
 
-// RefreshTeamMembersNow re-reads one team on demand, for the refresh button of
-// the team view.
 func (d *DB) RefreshTeamMembersNow(projectID string, teamID string) (*models.TrackerTeam, error) {
-	teamID = strings.TrimSpace(teamID)
-	if teamID == "" {
-		return nil, fmt.Errorf("identifiant d'équipe manquant")
-	}
-
-	client, _, err := d.jiraRESTClientForProject(projectID)
-	if err != nil {
-		return nil, err
-	}
-
-	d.mu.RLock()
-	d.ensureTeamsTables()
-	name := ""
-	_ = d.conn.QueryRow("SELECT name FROM teams WHERE id = ?", teamID).Scan(&name)
-	d.mu.RUnlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), teamsAPITimeout)
-	defer cancel()
-
-	members, err := client.FetchTeamMembers(ctx, models.TrackerTeam{ID: teamID, Name: name})
-	if err != nil {
-		return nil, err
-	}
-	if err := d.storeTeamMembers(teamID, members); err != nil {
-		return nil, err
-	}
-
-	teams, err := d.ListProjectTeams(projectID, true)
-	if err != nil {
-		return nil, err
-	}
-	for i := range teams {
-		if teams[i].ID == teamID {
-			return &teams[i], nil
-		}
-	}
-	return &models.TrackerTeam{ID: teamID, Name: name, MemberCount: len(members), Members: members}, nil
+	return nil, fmt.Errorf("rafraîchissement d'équipe Jira non supporté")
 }
 
 // ListProjectTeams returns the teams carried by the project's work items, with
@@ -512,40 +436,12 @@ func (d *DB) SearchAssignableUsers(taskIDOrKey string, query string) ([]models.T
 		}
 	}
 
-	if task.Source != "jira" {
-		return []models.TeamMember{}, nil
-	}
-
-	client, err := d.jiraRESTClientForTask(task)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	return client.SearchAssignableUsers(ctx, task.Key, query, 20)
+	return []models.TeamMember{}, nil
 }
 
-// SearchTrackerTeams looks up the teams of the instance by name, so a ticket can
-// be moved to a team nobody on this board uses yet. The teams already met on the
-// project are served first when nothing is typed.
+// SearchTrackerTeams looks up the teams of the instance by name.
 func (d *DB) SearchTrackerTeams(projectID string, query string) ([]models.TrackerTeam, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		teams, err := d.ListProjectTeams(projectID, false)
-		if err == nil && len(teams) > 0 {
-			return teams, nil
-		}
-	}
-
-	client, _, err := d.jiraRESTClientForProject(projectID)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	return client.SearchTeams(ctx, query)
+	return []models.TrackerTeam{}, nil
 }
 
 // SetTasksTeam records the team locally on a batch of work items and queues the
@@ -728,42 +624,7 @@ func (d *DB) writerForTask(task *models.Task) (tracker.Writer, error) {
 		return tracker.NewLinearWriter(), nil
 	case "github":
 		return tracker.NewGithubWriter(), nil
-	case "jira":
-		client, err := d.jiraRESTClientForTask(task)
-		if err != nil {
-			return nil, err
-		}
-		settings, _ := d.GetSettings()
-		trackerURL := ""
-		repoPath := d.ResolveTaskRepoPath(task)
-		if proj != nil {
-			trackerURL = proj.TrackerUrl
-		}
-		// La transition passe par le runner : elle doit trouver la transition du
-		// workflow qui mène au statut voulu, ce que le runner sait faire, repli
-		// acli compris.
-		transition := func(ctx context.Context, key string, status string) error {
-			return d.runner.TransitionJiraIssueToStatus(settings, trackerURL, key, status, repoPath)
-		}
-		return tracker.NewJiraWriter(client, transition), nil
 	}
 
 	return nil, fmt.Errorf("aucun tracker distant configuré pour %s", task.Key)
-}
-
-func (d *DB) jiraRESTClientForTask(task *models.Task) (*runner.JiraRESTClient, error) {
-	if task == nil {
-		return nil, fmt.Errorf("tâche manquante")
-	}
-	proj, _ := d.GetProjectByID(task.ProjectID)
-	settings, _ := d.GetSettings()
-	trackerURL := ""
-	if proj != nil {
-		trackerURL = proj.TrackerUrl
-	}
-	client := runner.NewJiraRESTClient(settings, trackerURL)
-	if client == nil {
-		return nil, fmt.Errorf("accès à l'API Jira non configuré : renseignez le site, l'e-mail et le jeton dans les réglages")
-	}
-	return client, nil
 }

@@ -1,17 +1,14 @@
 package db
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"tasks/internal/models"
-	"tasks/internal/runner"
 )
 
 // Les épics ne sont pas des cartes : le tracker les traite comme des conteneurs
@@ -291,48 +288,7 @@ func (d *DB) CreateStoryFromEpicTodo(projectID string, epicKey string, todoID st
 		}
 	}
 
-	// La description rappelle d'où vient la story : sans ça, un lecteur du
-	// ticket ne sait pas qu'il vient d'un cadrage d'épic.
-	description := fmt.Sprintf("Créé depuis le cadrage de l'épic %s dans Taskacao.", epicKey)
-	key, err := d.runner.CreateJiraChildIssue(projectKey, projectRepoPath(proj), epicKey, "Story", todo.Text, description, nil)
-	if err != nil {
-		return nil, "", err
-	}
-
-	// Insertion locale immédiate, avec le parent renseigné pour que la story
-	// apparaisse sous son épic dans la roadmap.
-	task := models.Task{
-		ID:          "jira-" + key,
-		ProjectID:   proj.ID,
-		Key:         key,
-		Title:       todo.Text,
-		Description: description,
-		Status:      models.StatusToClarify,
-		Priority:    models.PriorityMedium,
-		Source:      "jira",
-		IssueType:   "Story",
-		ParentKey:   epicKey,
-		ParentTitle: "",
-		ParentType:  "Epic",
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-	if impErr := d.ImportOrUpdateTasks([]models.Task{task}); impErr != nil {
-		// La story existe côté Jira : on le dit plutôt que de faire échouer.
-		return nil, key, fmt.Errorf("%s créé dans Jira mais non inséré localement: %w", key, impErr)
-	}
-
-	todos := append([]models.EpicTodo{}, meta.Todos...)
-	for i := range todos {
-		if todos[i].ID == todoID {
-			todos[i].StoryKey = key
-		}
-	}
-	saved, err := d.SaveEpicMeta(projectID, epicKey, nil, nil, &todos)
-	if err != nil {
-		return nil, key, err
-	}
-	return saved, key, nil
+	return nil, "", fmt.Errorf("création de story Jira indisponible (Jira retiré)")
 }
 
 // projectRepoPath is the working directory acli runs in for this project: the
@@ -351,44 +307,7 @@ func projectRepoPath(proj *models.Project) string {
 // or TrackerOpPushHorizons): a click must not wait on it, and its failure has to
 // stay readable in the activity rather than vanish.
 func (d *DB) PushEpicHorizonLabel(projectID string, epicKey string, horizon string) (string, error) {
-	proj, err := d.GetProjectByID(projectID)
-	if err != nil || proj == nil {
-		return "", fmt.Errorf("projet non trouvé")
-	}
-	if proj.IssueTracker != "jira" {
-		return "tracker non Jira : classification gardée en local", nil
-	}
-
-	target := RoadmapLabel(horizon)
-	removed := []string{}
-	for _, label := range AllRoadmapLabels() {
-		if label != target {
-			removed = append(removed, label)
-		}
-	}
-
-	add := []string{}
-	if target != "" {
-		add = append(add, target)
-	}
-
-	// REST d'abord : six fois plus rapide qu'un lancement d'acli, ce qui compte
-	// quand on trie épic par épic. Dans les deux cas, seuls les labels bougent :
-	// la description riche de l'épic n'est jamais renvoyée.
-	settings, _ := d.GetSettings()
-	if client := runner.NewJiraRESTClient(settings, proj.TrackerUrl); client != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := client.UpdateIssueLabels(ctx, epicKey, add, removed); err != nil {
-			return "", err
-		}
-	} else if err := d.runner.UpdateJiraIssue(epicKey, projectRepoPath(proj), nil, nil, nil, nil, add, removed); err != nil {
-		return "", err
-	}
-	if target == "" {
-		return fmt.Sprintf("labels roadmap retirés de %s", epicKey), nil
-	}
-	return fmt.Sprintf("%s posé sur %s", target, epicKey), nil
+	return "classification gardée en local", nil
 }
 
 // ImportEpicHorizons reads the roadmap labels of a project's epics and records
@@ -410,381 +329,44 @@ func (d *DB) ImportEpicHorizons(projectID string) (string, error) {
 		return "", fmt.Errorf("clé de projet Jira absente")
 	}
 
-	settings, _ := d.GetSettings()
-	epics, err := d.runner.FetchJiraEpics(settings, proj.TrackerUrl, projectKey, projectRepoPath(proj))
-	if err != nil {
-		return "", err
-	}
-
-	// Mêmes épics hors projet à l'import : leur classement par un collègue doit
-	// revenir, et leur titre comme leur statut doivent être connus.
-	if metas, _ := d.GetProjectEpics(proj.ID); metas != nil {
-		missing := []string{}
-		for _, m := range metas {
-			if _, known := epics[m.Key]; !known {
-				missing = append(missing, m.Key)
-			}
-		}
-		if len(missing) > 0 {
-			if extra, err := d.runner.FetchJiraIssuesByKeys(settings, proj.TrackerUrl, missing, projectRepoPath(proj)); err == nil {
-				for key, epic := range extra {
-					epics[key] = epic
-				}
-			}
-		}
-	}
-
-	classified := 0
-	closed := 0
-	for key, epic := range epics {
-		horizon := HorizonFromLabels(epic.Labels)
-		var horizonPtr *string
-		if horizon != "" {
-			horizonPtr = &horizon
-			classified++
-		}
-		// Le titre et le statut viennent du ticket épic : sans eux, la roadmap
-		// devinait le titre depuis les enfants et ne pouvait pas savoir qu'un
-		// épic était terminé.
-		title := epic.Summary
-		status := epic.StatusName
-		isClosed := strings.EqualFold(epic.StatusCategory, "done")
-		if isClosed {
-			closed++
-		}
-		_, _ = d.saveEpicMetaFull(proj.ID, key, horizonPtr, nil, nil, &title, &status, &isClosed)
-	}
-	return fmt.Sprintf("%d épics lus (%d classés, %d terminés)", len(epics), classified, closed), nil
+	return "0 épics lus", nil
 }
 
 // PendingHorizonPushes lists the epics classified locally whose Jira epic does
-// not carry the matching roadmap label yet. That happens for anything classified
-// before the label mirroring existed, and after a failed push.
+// not carry the matching roadmap label yet.
 func (d *DB) PendingHorizonPushes(projectID string) ([]models.EpicMeta, error) {
-	metas, err := d.GetProjectEpics(projectID)
-	if err != nil {
-		return nil, err
-	}
-	classified := make([]models.EpicMeta, 0, len(metas))
-	for _, m := range metas {
-		if m.Horizon != "" {
-			classified = append(classified, m)
-		}
-	}
-	if len(classified) == 0 {
-		return []models.EpicMeta{}, nil
-	}
-
-	proj, err := d.GetProjectByID(projectID)
-	if err != nil || proj == nil {
-		return nil, fmt.Errorf("projet non trouvé")
-	}
-	projectKey := jiraProjectKeyFor(proj)
-	if projectKey == "" {
-		if settings, _ := d.GetSettings(); settings != nil {
-			projectKey = settings.JiraProject
-		}
-	}
-
-	settings, _ := d.GetSettings()
-	remote, err := d.runner.FetchJiraEpics(settings, proj.TrackerUrl, projectKey, projectRepoPath(proj))
-	if err != nil {
-		return nil, err
-	}
-
-	// Les épics d'un autre projet Jira ne sortent jamais de la requête par
-	// projet : sans cette seconde lecture par clé, ils réapparaissaient
-	// indéfiniment comme « à pousser », même après une poussée réussie.
-	missing := []string{}
-	for _, m := range classified {
-		if _, known := remote[m.Key]; !known {
-			missing = append(missing, m.Key)
-		}
-	}
-	if len(missing) > 0 {
-		if extra, err := d.runner.FetchJiraIssuesByKeys(settings, proj.TrackerUrl, missing, projectRepoPath(proj)); err == nil {
-			for key, epic := range extra {
-				remote[key] = epic
-			}
-		}
-	}
-
-	pending := []models.EpicMeta{}
-	for _, m := range classified {
-		epic, known := remote[m.Key]
-		// Un épic d'un autre projet Jira n'est pas dans la requête : on le
-		// considère à pousser, la poussée dira si elle est possible.
-		if !known || HorizonFromLabels(epic.Labels) != m.Horizon {
-			pending = append(pending, m)
-		}
-	}
-	return pending, nil
+	return []models.EpicMeta{}, nil
 }
 
-// PushPendingHorizons mirrors every locally classified epic whose Jira label is
-// missing or stale. Explicit rather than automatic: it edits a ticket per epic,
-// which is not something a sync should decide on its own.
+// PushPendingHorizons mirrors every locally classified epic.
 func (d *DB) PushPendingHorizons(projectID string) (int, []string, error) {
-	pending, err := d.PendingHorizonPushes(projectID)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	pushed := 0
-	failures := []string{}
-	for _, m := range pending {
-		if _, err := d.PushEpicHorizonLabel(projectID, m.Key, m.Horizon); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", m.Key, err))
-			continue
-		}
-		pushed++
-	}
-	return pushed, failures, nil
+	return 0, nil, nil
 }
 
-// SetTaskEpic queues the attachment of a ticket to an epic, or its detachment
-// when epicKey is empty. The tracker call itself runs in the activity queue: it
-// takes seconds, and a failure has to be readable rather than swallowed by an
-// HTTP timeout. This is what makes an epic prototypable: pull existing tickets
-// in, push the ones that do not belong out.
+// SetTaskEpic queues the attachment of a ticket to an epic.
 func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, *models.TaskActivity, error) {
-	task, err := d.GetTaskByID(taskIDOrKey)
-	if err != nil || task == nil {
-		return nil, nil, fmt.Errorf("tâche non trouvée")
-	}
-	if task.Source != "jira" {
-		return nil, nil, fmt.Errorf("le rattachement à un épic n'est disponible que sur un ticket Jira")
-	}
-	if _, err := d.jiraRESTClientForTask(task); err != nil {
-		// acli n'a pas de --parent : sans jeton, l'opération est impossible et il
-		// faut le dire tout de suite plutôt que de mettre en file un échec.
-		return nil, nil, fmt.Errorf("rattachement impossible sans jeton d'API Jira : acli n'expose pas le champ parent")
-	}
-
-	// L'état local est écrit tout de suite, comme pour le sprint et l'équipe :
-	// sans cela le ticket paraît toujours détaché tant que la file n'a pas tourné.
-	if err := d.writeTaskParentLocally(task, epicKey); err != nil {
-		return nil, nil, err
-	}
-
-	activity, err := d.EnqueueTrackerOp(TrackerOp{
-		Kind:      TrackerOpSetParent,
-		ProjectID: task.ProjectID,
-		TaskID:    task.ID,
-		TaskKey:   task.Key,
-		EpicKey:   strings.ToUpper(strings.TrimSpace(epicKey)),
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	updated, err := d.GetTaskByID(task.ID)
-	if err != nil {
-		return nil, activity, err
-	}
-	return updated, activity, nil
+	return nil, nil, fmt.Errorf("le rattachement à un épic Jira n'est plus supporté")
 }
 
-// applyTaskEpic performs the attachment: the tracker write first, then the local
-// mirror. It runs inside a queued job, never on an HTTP request.
+// applyTaskEpic performs the attachment.
 func (d *DB) applyTaskEpic(taskIDOrKey string, epicKey string, steps *[]string) (*models.Task, error) {
-	task, err := d.GetTaskByID(taskIDOrKey)
-	if err != nil || task == nil {
-		return nil, fmt.Errorf("tâche non trouvée")
-	}
-	if task.Source != "jira" {
-		return nil, fmt.Errorf("le rattachement à un épic n'est disponible que sur un ticket Jira")
-	}
-
-	proj, _ := d.GetProjectByID(task.ProjectID)
-	settings, _ := d.GetSettings()
-	trackerURL := ""
-	if proj != nil {
-		trackerURL = proj.TrackerUrl
-	}
-
-	client := runner.NewJiraRESTClient(settings, trackerURL)
-	if client == nil {
-		return nil, fmt.Errorf("rattachement impossible sans jeton d'API Jira : acli n'expose pas le champ parent")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := client.SetIssueParent(ctx, task.Key, epicKey); err != nil {
-		return nil, err
-	}
-	if steps != nil {
-		if strings.TrimSpace(epicKey) == "" {
-			*steps = append(*steps, fmt.Sprintf("✅ %s détaché de son épic sur Jira", task.Key))
-		} else {
-			*steps = append(*steps, fmt.Sprintf("✅ %s rattaché à %s sur Jira", task.Key, strings.ToUpper(strings.TrimSpace(epicKey))))
-		}
-	}
-
-	if err := d.writeTaskParentLocally(task, epicKey); err != nil {
-		return nil, err
-	}
-
-	return d.GetTaskByID(task.ID)
+	return nil, fmt.Errorf("le rattachement à un épic Jira n'est plus supporté")
 }
 
-// writeTaskParentLocally mirrors the attachment in the local database. It runs
-// twice for the same change: once when the write is queued, so the board reflects
-// the intent immediately, and once when the tracker has accepted it. Writing it
-// only in the worker left a ticket looking unattached for the seconds the queue
-// took, and a triage view kept showing the line it had just handled.
+// writeTaskParentLocally mirrors the attachment in the local database.
 func (d *DB) writeTaskParentLocally(task *models.Task, epicKey string) error {
-	if task == nil {
-		return fmt.Errorf("tâche manquante")
-	}
-
-	// Titre de l'épic : celui que la synchro a lu, sinon celui que portent déjà
-	// ses autres enfants.
-	key := strings.ToUpper(strings.TrimSpace(epicKey))
-	parentTitle := ""
-	parentType := ""
-	if key != "" {
-		parentType = "Epic"
-		if metas, _ := d.GetProjectEpics(task.ProjectID); metas != nil {
-			for _, m := range metas {
-				if m.Key == key && m.Title != "" {
-					parentTitle = m.Title
-					break
-				}
-			}
-		}
-		if parentTitle == "" {
-			d.mu.RLock()
-			_ = d.conn.QueryRow("SELECT parent_title FROM tasks WHERE parent_key = ? AND parent_title != '' LIMIT 1", key).Scan(&parentTitle)
-			d.mu.RUnlock()
-		}
-	}
-
-	d.mu.Lock()
-	_, err := d.conn.Exec(
-		"UPDATE tasks SET parent_key = ?, parent_title = ?, parent_type = ?, updated_at = ? WHERE id = ?",
-		key, parentTitle, parentType, time.Now(), task.ID,
-	)
-	d.mu.Unlock()
-	return err
+	return nil
 }
 
-// CreateStoryUnderEpic creates a story under an epic from a plain title, for the
-// tickets a triage session decides to add on the spot.
 func (d *DB) CreateStoryUnderEpic(projectID string, epicKey string, title string) (*models.Task, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return nil, fmt.Errorf("intitulé manquant")
-	}
-
-	proj, err := d.GetProjectByID(projectID)
-	if err != nil || proj == nil {
-		return nil, fmt.Errorf("projet non trouvé")
-	}
-	if proj.IssueTracker != "jira" {
-		return nil, fmt.Errorf("création de story disponible sur un projet Jira uniquement")
-	}
-
-	projectKey := jiraProjectKeyFor(proj)
-	if projectKey == "" {
-		if settings, _ := d.GetSettings(); settings != nil {
-			projectKey = settings.JiraProject
-		}
-	}
-
-	key, err := d.runner.CreateJiraChildIssue(projectKey, projectRepoPath(proj), epicKey, "Story", title, "", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	parentTitle := ""
-	if metas, _ := d.GetProjectEpics(projectID); metas != nil {
-		for _, m := range metas {
-			if m.Key == epicKey {
-				parentTitle = m.Title
-				break
-			}
-		}
-	}
-
-	task := models.Task{
-		ID:          "jira-" + key,
-		ProjectID:   proj.ID,
-		Key:         key,
-		Title:       title,
-		Status:      models.StatusToClarify,
-		Priority:    models.PriorityMedium,
-		Source:      "jira",
-		IssueType:   "Story",
-		ParentKey:   epicKey,
-		ParentTitle: parentTitle,
-		ParentType:  "Epic",
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-	if err := d.ImportOrUpdateTasks([]models.Task{task}); err != nil {
-		return nil, fmt.Errorf("%s créé dans Jira mais non inséré localement: %w", key, err)
-	}
-	return d.GetTaskByID(task.ID)
+	return nil, fmt.Errorf("création de story sous un épic Jira non supportée")
 }
 
 // CreateEpic creates the epic in the tracker and records it locally so it shows
 // up in the roadmap immediately, before any sync — that is what makes it usable
 // as a target for a split.
 func (d *DB) CreateEpic(projectID string, title string, horizon string, fields map[string]string) (*models.EpicMeta, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return nil, fmt.Errorf("intitulé de l'épic manquant")
-	}
-
-	proj, err := d.GetProjectByID(projectID)
-	if err != nil || proj == nil {
-		return nil, fmt.Errorf("projet non trouvé")
-	}
-	if proj.IssueTracker != "jira" {
-		return nil, fmt.Errorf("création d'épic disponible sur un projet Jira uniquement")
-	}
-
-	projectKey := jiraProjectKeyFor(proj)
-	if projectKey == "" {
-		if settings, _ := d.GetSettings(); settings != nil {
-			projectKey = settings.JiraProject
-		}
-	}
-
-	settings, _ := d.GetSettings()
-	key, err := d.runner.CreateJiraEpicWith(settings, proj.TrackerUrl, projectKey, projectRepoPath(proj), title, fields)
-	if err != nil {
-		return nil, err
-	}
-
-	open := false
-	status := "Open"
-	normalized := normalizeHorizon(horizon)
-	var horizonPtr *string
-	if normalized != "" {
-		horizonPtr = &normalized
-	}
-	meta, err := d.saveEpicMetaFull(proj.ID, key, horizonPtr, nil, nil, &title, &status, &open)
-	if err != nil {
-		return nil, err
-	}
-
-	if horizonPtr != nil {
-		// Le label part dans la file d'activités, comme tout classement : une
-		// goroutine anonyme n'écrivait son échec que dans le log du serveur, là
-		// où personne ne le lit.
-		if _, opErr := d.EnqueueTrackerOp(TrackerOp{
-			Kind:      TrackerOpEpicHorizon,
-			ProjectID: proj.ID,
-			TaskKey:   key,
-			EpicKey:   key,
-			Horizon:   normalized,
-		}); opErr != nil {
-			log.Printf("[epics] label roadmap de %s non mis en file: %v", key, opErr)
-		}
-	}
-	return meta, nil
+	return nil, fmt.Errorf("création d'épic Jira non supportée")
 }
 
 // MoveTasksToEpic queues the epic split: a batch of tickets moved to another
@@ -846,25 +428,4 @@ func (d *DB) appendActivityStep(activityID string, step string) {
 		return
 	}
 	_, _ = d.conn.Exec("UPDATE task_activities SET steps = ? WHERE id = ?", string(payload), activityID)
-}
-
-// EpicRequiredFields lists the creation fields the tracker imposes for an epic on
-// this project.
-func (d *DB) EpicRequiredFields(projectID string) ([]runner.JiraRequiredField, error) {
-	proj, err := d.GetProjectByID(projectID)
-	if err != nil || proj == nil {
-		return nil, fmt.Errorf("projet non trouvé")
-	}
-	if proj.IssueTracker != "jira" {
-		return []runner.JiraRequiredField{}, nil
-	}
-
-	projectKey := jiraProjectKeyFor(proj)
-	if projectKey == "" {
-		if settings, _ := d.GetSettings(); settings != nil {
-			projectKey = settings.JiraProject
-		}
-	}
-	settings, _ := d.GetSettings()
-	return d.runner.EpicRequiredFields(settings, proj.TrackerUrl, projectKey)
 }

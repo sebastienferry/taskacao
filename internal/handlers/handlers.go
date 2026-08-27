@@ -15,7 +15,6 @@ import (
 
 	"tasks/internal/db"
 	"tasks/internal/models"
-	"tasks/internal/runner"
 	"tasks/internal/terminal"
 )
 
@@ -315,27 +314,7 @@ func (h *Handler) HandleSyncGithub(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleSyncJira(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	var req struct {
-		ProjectKey string `json:"projectKey"`
-		ProjectID  string `json:"projectId"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-
-	activity, err := h.db.EnqueueSync("jira", req.ProjectKey, req.ProjectID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message":  "Synchronisation Jira ajoutée à la file d'attente",
-		"activity": activity,
-	})
+	writeError(w, http.StatusBadRequest, "Le support de Jira a été retiré. Utilisez GitHub.")
 }
 
 // HandleSpecFrameworkStatus reports whether GitHub Spec Kit / OpenSpec are
@@ -466,12 +445,7 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 	// créer un épic, au delà du titre. PE exige « Epic Type » et la création
 	// échouait en 400 sans que l'interface puisse le demander.
 	if len(parts) >= 3 && parts[1] == "epics" && parts[2] == "fields" && r.Method == http.MethodGet {
-		fields, err := h.db.EpicRequiredFields(id)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, fields)
+		writeJSON(w, http.StatusOK, []string{})
 		return
 	}
 
@@ -1100,13 +1074,13 @@ func (h *Handler) HandleTrackerSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/check") {
-		writeJSON(w, http.StatusOK, h.db.CheckJiraCredentials(req.SiteURL, req.Email, req.Token))
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
 		return
 	}
 
-	settings, err := h.db.SaveTrackerCredentials(req.SiteURL, req.Email, req.Token, req.StoreTokenInFile, h.dataDir)
+	settings, err := h.db.GetSettings()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, settings)
@@ -1781,18 +1755,6 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 // replaces it with two flags: whether a token is configured at all, and whether
 // it comes from the environment rather than the database. An empty incoming
 // token means "keep the stored one", so the UI can leave its field blank.
-func maskJiraToken(s *models.Settings) *models.Settings {
-	if s == nil {
-		return nil
-	}
-	copied := *s
-	fromEnv := runner.JiraTokenFromEnv() != ""
-	copied.JiraAPITokenSet = fromEnv || strings.TrimSpace(copied.JiraAPIToken) != ""
-	copied.JiraAPITokenFromEnv = fromEnv
-	copied.JiraAPIToken = ""
-	return &copied
-}
-
 func (h *Handler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -1801,7 +1763,7 @@ func (h *Handler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, maskJiraToken(settings))
+		writeJSON(w, http.StatusOK, settings)
 
 	case http.MethodPost, http.MethodPut:
 		var req models.Settings
@@ -1814,8 +1776,7 @@ func (h *Handler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, maskJiraToken(saved))
-
+		writeJSON(w, http.StatusOK, saved)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}

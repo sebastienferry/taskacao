@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -9,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"tasks/internal/models"
-	"tasks/internal/runner"
 )
 
 // Comments live where the ticket lives. On a tracker-backed task the tracker is
@@ -52,25 +50,6 @@ func (d *DB) GetTaskComments(taskIDOrKey string) ([]models.TaskComment, error) {
 	}
 
 	switch d.taskTrackerSource(task) {
-	case "jira":
-		repoPath := d.ResolveTaskRepoPath(task)
-		settings, _ := d.GetSettings()
-		trackerURL := ""
-		if task.ProjectID != "" {
-			if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
-				trackerURL = proj.TrackerUrl
-			}
-		}
-		// REST first: it carries the timestamps. acli otherwise, which needs no
-		// token but reports no date.
-		if client := runner.NewJiraRESTClient(settings, trackerURL); client != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), commentsTimeout)
-			defer cancel()
-			if comments, err := client.FetchJiraComments(ctx, task.Key); err == nil {
-				return comments, nil
-			}
-		}
-		return d.runner.FetchJiraCommentsViaCLI(task.Key, repoPath)
 	default:
 		return d.getLocalComments(task.ID)
 	}

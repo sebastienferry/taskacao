@@ -2111,21 +2111,6 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 				extURL = &url
 			}
 		}
-	} else if req.Source == "jira" {
-		created, err := d.runner.CreateJiraIssue(jiraProject, repoPath, jiraUrl, req.Title, req.Description, req.Priority, req.Labels)
-		if err == nil && created != nil {
-			id = created.ID
-			key = created.Key
-			extURL = created.ExternalURL
-			// Jira creates the work item in its own initial status; align it with
-			// the Taskacao stage so the board and Jira agree straight away.
-			go func(k string, st models.Status, rp string) {
-				_ = d.runner.UpdateJiraIssueState(k, st, rp)
-			}(key, req.Status, repoPath)
-		} else {
-			log.Printf("[DB.CreateTask] Warning: Jira issue creation failed: %v. Using fallback key.", err)
-			key, _ = d.getNextTaskKey(prefix)
-		}
 	} else {
 		// Local project tracker
 		key, _ = d.getNextTaskKey(prefix)
@@ -3607,21 +3592,7 @@ func (d *DB) processSkillJob(job SkillJob) {
 				if strings.TrimSpace(body) != "" {
 					_ = d.runner.AddIssueComment(src, repo, rPath, key, body)
 				}
-			} else if src == "jira" {
-				if statusTarget != "" {
-					// Labels d'abord, sans statut, puis transition nommée.
-					if err := d.runner.UpdateJiraIssue(key, rPath, nil, nil, nil, nil, lbls, stale); err != nil {
-						log.Printf("[skill] labels de %s non mis à jour: %v", key, err)
-					}
-					if err := d.runner.TransitionJiraIssueToStatus(settings, trackerURL, key, statusTarget, rPath); err != nil {
-						log.Printf("[skill] transition de %s vers %q impossible: %v", key, statusTarget, err)
-					}
-				} else if err := d.runner.UpdateJiraIssue(key, rPath, nil, nil, nil, &st, lbls, stale); err != nil {
-					log.Printf("[skill] mise à jour de %s impossible: %v", key, err)
-				}
-				if strings.TrimSpace(body) != "" {
-					_ = d.runner.AddIssueComment(src, repo, rPath, key, body)
-				}
+
 			} else if src == "github" || strings.HasPrefix(key, "#") || strings.HasPrefix(key, "gh-") || strings.HasPrefix(key, "GH-#") {
 				_ = d.runner.UpdateGithubIssueState(repo, rPath, key, st)
 				_ = d.runner.UpdateGithubIssue(repo, rPath, key, nil, nil, &st, lbls, stale)
@@ -3739,99 +3710,9 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 		}
 
 	case "sync_jira":
-		projectKey := ""
-		trackerUrl := ""
-		repoPath := ""
-		// Les types importés appartiennent au projet : un projet dont le tracker
-		// n'expose que son propre type n'importerait rien avec la liste par défaut.
-		var issueTypes []string
-		if job.ProjectID != "" {
-			if p, _ := d.getProjectByIDUnsafe(job.ProjectID); p != nil {
-				projectKey = jiraProjectKeyFor(p)
-				trackerUrl = p.TrackerUrl
-				repoPath = p.RepoPath
-				issueTypes = p.IssueTypes
-			}
-		}
-		if projectKey == "" && job.Prompt != "" {
-			projectKey = strings.ToUpper(strings.TrimSpace(job.Prompt))
-		}
-		if projectKey == "" {
-			projectKey = settings.JiraProject
-		}
-		if trackerUrl == "" {
-			trackerUrl = settings.JiraUrl
-		}
-		if repoPath == "" {
-			repoPath = settings.RepoPath
-		}
-		steps = append(steps, fmt.Sprintf("1. Lecture du projet Jira %s via %s (types : %s)...",
-			projectKey, runner.JiraReadSource(settings, trackerUrl), strings.Join(runner.NormalizeIssueTypes(issueTypes), ", ")))
-		outputLines = append(outputLines, fmt.Sprintf("### 🔷 Jira Synchronization (Project: %s)\n", projectKey))
-
-		tasks, err := d.runner.SyncFromJira(settings, projectKey, repoPath, trackerUrl, issueTypes, 0)
-		if err != nil {
-			hasError = true
-			errMsg := fmt.Sprintf("Jira synchronization failed: %v", err)
-			steps = append(steps, "⚠️ "+errMsg)
-			outputLines = append(outputLines, "**Error:** "+errMsg)
-			summary = "Error during Jira sync"
-		} else {
-			steps = append(steps, fmt.Sprintf("2. %d tickets fetched from Jira", len(tasks)))
-			if len(tasks) == 0 {
-				steps = append(steps, fmt.Sprintf("ℹ️ Aucun ticket de type %s dans %s : vérifiez les types importés dans les réglages du projet.",
-					strings.Join(runner.NormalizeIssueTypes(issueTypes), ", "), projectKey))
-			}
-			if job.ProjectID != "" {
-				for i := range tasks {
-					tasks[i].ProjectID = job.ProjectID
-				}
-			}
-			if impErr := d.ImportOrUpdateTasks(tasks); impErr != nil {
-				hasError = true
-				steps = append(steps, "⚠️ 3. Local database write failed: "+impErr.Error())
-				outputLines = append(outputLines, "**Error:** "+impErr.Error())
-			} else {
-				steps = append(steps, "3. Local database updated successfully")
-			}
-			totalImported = len(tasks)
-			summary = fmt.Sprintf("%d Jira issues synchronized successfully", len(tasks))
-
-			// Les horizons de roadmap sont portés par les labels des épics : la
-			// synchro ne les voit pas autrement, elle n'importe que Task et Story.
-			if job.ProjectID != "" {
-				if note, epicErr := d.ImportEpicHorizons(job.ProjectID); epicErr == nil {
-					steps = append(steps, "3b. "+note)
-				} else {
-					steps = append(steps, "ℹ️ Horizons de roadmap non importés : "+epicErr.Error())
-				}
-			}
-
-			// Les colonnes du board suivent le tracker sans import manuel.
-			if job.ProjectID != "" {
-				if note, colErr := d.SyncProjectBoardColumns(job.ProjectID); colErr != nil {
-					steps = append(steps, "ℹ️ Colonnes du board non rafraîchies : "+colErr.Error())
-				} else {
-					steps = append(steps, "4. "+note)
-				}
-			}
-
-			// Les équipes portées par les tickets donnent les personnes : le
-			// champ Team n'est pas obligatoire, donc un projet sans équipe passe
-			// ici sans rien faire et sans se plaindre.
-			if job.ProjectID != "" {
-				if note, teamErr := d.RefreshProjectTeamMembers(job.ProjectID, tasks); teamErr != nil {
-					steps = append(steps, "ℹ️ Membres des équipes non rafraîchis : "+teamErr.Error())
-				} else {
-					steps = append(steps, "5. "+note)
-				}
-			}
-
-			outputLines = append(outputLines, fmt.Sprintf("✅ **%d tickets imported / updated from Jira:**\n", len(tasks)))
-			for _, t := range tasks {
-				outputLines = append(outputLines, fmt.Sprintf("- **[%s]** %s *(Status: %s, Priority: %s)*", t.Key, t.Title, t.Status, t.Priority))
-			}
-		}
+		hasError = true
+		summary = "Support Jira retiré"
+		outputLines = append(outputLines, "Le support de Jira a été retiré de Taskacao. Utilisez GitHub.")
 
 	case "sync_all":
 		steps = append(steps, "1. Starting global multi-tracker synchronization...")
@@ -3901,38 +3782,6 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 						outputLines = append(outputLines, fmt.Sprintf("✅ GitHub (%s): %d issues synced", ghRepo, len(ghTasks)))
 						totalImported += len(ghTasks)
 					}
-				}
-			case "jira":
-				jKey := jiraProjectKeyFor(&p)
-				jUrl := p.TrackerUrl
-				jPath := p.RepoPath
-				if jKey == "" {
-					jKey = settings.JiraProject
-				}
-				if jUrl == "" {
-					jUrl = settings.JiraUrl
-				}
-				if jPath == "" {
-					jPath = settings.RepoPath
-				}
-				jTasks, jErr := d.runner.SyncFromJira(settings, jKey, jPath, jUrl, p.IssueTypes, 0)
-				if jErr != nil {
-					steps = append(steps, fmt.Sprintf("⚠️ Jira (%s): %v", jKey, jErr))
-					outputLines = append(outputLines, fmt.Sprintf("❌ Jira (%s): %v", jKey, jErr))
-				} else {
-					for i := range jTasks {
-						jTasks[i].ProjectID = p.ID
-					}
-					if note, colErr := d.SyncProjectBoardColumns(p.ID); colErr == nil {
-						steps = append(steps, fmt.Sprintf("Jira (%s): %s", jKey, note))
-					}
-					if impErr := d.ImportOrUpdateTasks(jTasks); impErr != nil {
-						hasError = true
-						steps = append(steps, fmt.Sprintf("⚠️ Jira: écriture locale échouée: %v", impErr))
-					}
-					steps = append(steps, fmt.Sprintf("✅ Jira (%s): %d issues imported", jKey, len(jTasks)))
-					outputLines = append(outputLines, fmt.Sprintf("✅ Jira (%s): %d issues synced", jKey, len(jTasks)))
-					totalImported += len(jTasks)
 				}
 			}
 		}
@@ -4192,45 +4041,9 @@ func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 			steps = append(steps, fmt.Sprintf("✅ Issue Linear %s mise à jour avec succès via la CLI", task.Key))
 		}
 	} else if isJira {
-		editedFields := []string{}
-		if job.SyncTitle {
-			editedFields = append(editedFields, "titre")
-		}
-		if job.SyncDescription {
-			editedFields = append(editedFields, "description")
-		}
-		if job.SyncPriority {
-			editedFields = append(editedFields, "priorité")
-		}
-		if len(editedFields) == 0 {
-			editedFields = append(editedFields, "aucun champ texte")
-		}
-		steps = append(steps, fmt.Sprintf("Exécution: acli jira workitem edit %s (champs édités: %s, Labels: %v, Supprimés: %v)", task.Key, strings.Join(editedFields, ", "), task.Labels, job.RemovedLabels))
-		// Statut du tracker connu : on transitionne dessus nommément, et on ne
-		// laisse pas UpdateJiraIssue deviner un état à partir du statut interne.
-		var statusForUpdate *models.Status
-		if job.TrackerStatus == "" {
-			statusForUpdate = &task.Status
-		}
-		err := d.runner.UpdateJiraIssue(task.Key, repoPath, titleForUpdate, descForUpdate, priorityForUpdate, statusForUpdate, task.Labels, job.RemovedLabels)
-		if err == nil && job.TrackerStatus != "" {
-			steps = append(steps, fmt.Sprintf("Transition vers le statut « %s »", job.TrackerStatus))
-			trackerURL := ""
-			if proj != nil {
-				trackerURL = proj.TrackerUrl
-			}
-			if trErr := d.runner.TransitionJiraIssueToStatus(settings, trackerURL, task.Key, job.TrackerStatus, repoPath); trErr != nil {
-				err = trErr
-			}
-		}
-		if err != nil {
-			hasError = true
-			outputText = fmt.Sprintf("Erreur Atlassian CLI (acli) : %v", err)
-			steps = append(steps, fmt.Sprintf("❌ Échec : %v", err))
-		} else {
-			outputText = fmt.Sprintf("Ticket Jira %s synchronisé avec succès (Titre: %s, Statut: %s, Labels: %v)", task.Key, task.Title, task.Status, task.Labels)
-			steps = append(steps, fmt.Sprintf("✅ Ticket Jira %s mis à jour avec succès via acli", task.Key))
-		}
+		hasError = true
+		outputText = "Erreur: Le support de Jira a été retiré"
+		steps = append(steps, "❌ Échec : Jira n'est plus pris en charge")
 	} else if isGithub {
 		steps = append(steps, fmt.Sprintf("Exécution: gh issue edit %s (Dépôt: %s, Statut: %s, Labels: %v, Supprimés: %v)", task.Key, repo, task.Status, task.Labels, job.RemovedLabels))
 		err := d.runner.UpdateGithubIssue(repo, repoPath, task.Key, titleForUpdate, descForUpdate, &task.Status, task.Labels, job.RemovedLabels)
@@ -4864,35 +4677,8 @@ func (d *DB) ConvertTaskToRemote(taskID string, target string) (*models.Task, er
 			_ = d.runner.UpdateGithubIssue(repo, repoPath, newKey, nil, nil, &task.Status, task.Labels, nil)
 		}
 
-	case "jira":
-		projectKey := ""
-		trackerUrl := ""
-		repoPath := ""
-		if proj != nil {
-			projectKey = jiraProjectKeyFor(proj)
-			trackerUrl = proj.TrackerUrl
-			repoPath = proj.RepoPath
-		}
-		if projectKey == "" {
-			projectKey = settings.JiraProject
-		}
-		if trackerUrl == "" {
-			trackerUrl = settings.JiraUrl
-		}
-		if repoPath == "" {
-			repoPath = settings.RepoPath
-		}
-		created, err := d.runner.CreateJiraIssue(projectKey, repoPath, trackerUrl, task.Title, task.Description, task.Priority, task.Labels)
-		if err != nil {
-			return nil, fmt.Errorf("création Jira impossible: %w", err)
-		}
-		newKey = created.Key
-		extURL = created.ExternalURL
-
-		_ = d.runner.UpdateJiraIssueState(newKey, task.Status, repoPath)
-
 	default:
-		return nil, fmt.Errorf("tracker distant non supporté: %s (choisir 'linear', 'github' ou 'jira')", target)
+		return nil, fmt.Errorf("tracker distant non supporté: %s (choisir 'linear' ou 'github')", target)
 	}
 
 	d.mu.Lock()
