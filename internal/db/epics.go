@@ -346,9 +346,10 @@ func projectRepoPath(proj *models.Project) string {
 }
 
 // PushEpicHorizonLabel mirrors the classification onto the Jira epic: it adds the
-// label of the chosen horizon and removes the other two. Synchronous on purpose —
-// the caller just clicked a classification and needs to know whether the tracker
-// took it.
+// label of the chosen horizon and removes the other two. It performs the tracker
+// call itself, so it is only ever run from a queued activity (TrackerOpEpicHorizon
+// or TrackerOpPushHorizons): a click must not wait on it, and its failure has to
+// stay readable in the activity rather than vanish.
 func (d *DB) PushEpicHorizonLabel(projectID string, epicKey string, horizon string) (string, error) {
 	proj, err := d.GetProjectByID(projectID)
 	if err != nil || proj == nil {
@@ -541,10 +542,52 @@ func (d *DB) PushPendingHorizons(projectID string) (int, []string, error) {
 	return pushed, failures, nil
 }
 
-// SetTaskEpic attaches a ticket to an epic, or detaches it when epicKey is
-// empty, then mirrors the change locally. This is what makes an epic
-// prototypable: pull existing tickets in, push the ones that do not belong out.
-func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, error) {
+// SetTaskEpic queues the attachment of a ticket to an epic, or its detachment
+// when epicKey is empty. The tracker call itself runs in the activity queue: it
+// takes seconds, and a failure has to be readable rather than swallowed by an
+// HTTP timeout. This is what makes an epic prototypable: pull existing tickets
+// in, push the ones that do not belong out.
+func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, *models.TaskActivity, error) {
+	task, err := d.GetTaskByID(taskIDOrKey)
+	if err != nil || task == nil {
+		return nil, nil, fmt.Errorf("tâche non trouvée")
+	}
+	if task.Source != "jira" {
+		return nil, nil, fmt.Errorf("le rattachement à un épic n'est disponible que sur un ticket Jira")
+	}
+	if _, err := d.jiraRESTClientForTask(task); err != nil {
+		// acli n'a pas de --parent : sans jeton, l'opération est impossible et il
+		// faut le dire tout de suite plutôt que de mettre en file un échec.
+		return nil, nil, fmt.Errorf("rattachement impossible sans jeton d'API Jira : acli n'expose pas le champ parent")
+	}
+
+	// L'état local est écrit tout de suite, comme pour le sprint et l'équipe :
+	// sans cela le ticket paraît toujours détaché tant que la file n'a pas tourné.
+	if err := d.writeTaskParentLocally(task, epicKey); err != nil {
+		return nil, nil, err
+	}
+
+	activity, err := d.EnqueueTrackerOp(TrackerOp{
+		Kind:      TrackerOpSetParent,
+		ProjectID: task.ProjectID,
+		TaskID:    task.ID,
+		TaskKey:   task.Key,
+		EpicKey:   strings.ToUpper(strings.TrimSpace(epicKey)),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	updated, err := d.GetTaskByID(task.ID)
+	if err != nil {
+		return nil, activity, err
+	}
+	return updated, activity, nil
+}
+
+// applyTaskEpic performs the attachment: the tracker write first, then the local
+// mirror. It runs inside a queued job, never on an HTTP request.
+func (d *DB) applyTaskEpic(taskIDOrKey string, epicKey string, steps *[]string) (*models.Task, error) {
 	task, err := d.GetTaskByID(taskIDOrKey)
 	if err != nil || task == nil {
 		return nil, fmt.Errorf("tâche non trouvée")
@@ -562,8 +605,6 @@ func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, erro
 
 	client := runner.NewJiraRESTClient(settings, trackerURL)
 	if client == nil {
-		// acli n'a pas de --parent : sans jeton, l'opération est impossible et
-		// il faut le dire plutôt que d'échouer silencieusement.
 		return nil, fmt.Errorf("rattachement impossible sans jeton d'API Jira : acli n'expose pas le champ parent")
 	}
 
@@ -572,16 +613,41 @@ func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, erro
 	if err := client.SetIssueParent(ctx, task.Key, epicKey); err != nil {
 		return nil, err
 	}
+	if steps != nil {
+		if strings.TrimSpace(epicKey) == "" {
+			*steps = append(*steps, fmt.Sprintf("✅ %s détaché de son épic sur Jira", task.Key))
+		} else {
+			*steps = append(*steps, fmt.Sprintf("✅ %s rattaché à %s sur Jira", task.Key, strings.ToUpper(strings.TrimSpace(epicKey))))
+		}
+	}
+
+	if err := d.writeTaskParentLocally(task, epicKey); err != nil {
+		return nil, err
+	}
+
+	return d.GetTaskByID(task.ID)
+}
+
+// writeTaskParentLocally mirrors the attachment in the local database. It runs
+// twice for the same change: once when the write is queued, so the board reflects
+// the intent immediately, and once when the tracker has accepted it. Writing it
+// only in the worker left a ticket looking unattached for the seconds the queue
+// took, and a triage view kept showing the line it had just handled.
+func (d *DB) writeTaskParentLocally(task *models.Task, epicKey string) error {
+	if task == nil {
+		return fmt.Errorf("tâche manquante")
+	}
 
 	// Titre de l'épic : celui que la synchro a lu, sinon celui que portent déjà
 	// ses autres enfants.
+	key := strings.ToUpper(strings.TrimSpace(epicKey))
 	parentTitle := ""
 	parentType := ""
-	if strings.TrimSpace(epicKey) != "" {
+	if key != "" {
 		parentType = "Epic"
 		if metas, _ := d.GetProjectEpics(task.ProjectID); metas != nil {
 			for _, m := range metas {
-				if m.Key == epicKey && m.Title != "" {
+				if m.Key == key && m.Title != "" {
 					parentTitle = m.Title
 					break
 				}
@@ -589,22 +655,18 @@ func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, erro
 		}
 		if parentTitle == "" {
 			d.mu.RLock()
-			_ = d.conn.QueryRow("SELECT parent_title FROM tasks WHERE parent_key = ? AND parent_title != '' LIMIT 1", epicKey).Scan(&parentTitle)
+			_ = d.conn.QueryRow("SELECT parent_title FROM tasks WHERE parent_key = ? AND parent_title != '' LIMIT 1", key).Scan(&parentTitle)
 			d.mu.RUnlock()
 		}
 	}
 
 	d.mu.Lock()
-	_, execErr := d.conn.Exec(
+	_, err := d.conn.Exec(
 		"UPDATE tasks SET parent_key = ?, parent_title = ?, parent_type = ?, updated_at = ? WHERE id = ?",
-		strings.ToUpper(strings.TrimSpace(epicKey)), parentTitle, parentType, time.Now(), task.ID,
+		key, parentTitle, parentType, time.Now(), task.ID,
 	)
 	d.mu.Unlock()
-	if execErr != nil {
-		return nil, execErr
-	}
-
-	return d.GetTaskByID(task.ID)
+	return err
 }
 
 // CreateStoryUnderEpic creates a story under an epic from a plain title, for the
@@ -709,46 +771,56 @@ func (d *DB) CreateEpic(projectID string, title string, horizon string, fields m
 	}
 
 	if horizonPtr != nil {
-		// Le label part en arrière-plan, comme pour un classement.
-		go func() {
-			if _, err := d.PushEpicHorizonLabel(proj.ID, key, normalized); err != nil {
-				log.Printf("[epics] label roadmap non posé sur %s: %v", key, err)
-			}
-		}()
+		// Le label part dans la file d'activités, comme tout classement : une
+		// goroutine anonyme n'écrivait son échec que dans le log du serveur, là
+		// où personne ne le lit.
+		if _, opErr := d.EnqueueTrackerOp(TrackerOp{
+			Kind:      TrackerOpEpicHorizon,
+			ProjectID: proj.ID,
+			TaskKey:   key,
+			EpicKey:   key,
+			Horizon:   normalized,
+		}); opErr != nil {
+			log.Printf("[epics] label roadmap de %s non mis en file: %v", key, opErr)
+		}
 	}
 	return meta, nil
 }
 
-// MoveTasksToEpic moves a batch of tickets to another epic, creating that epic
-// first when only a title is given. This is the actual "split an epic" gesture:
-// pick the stories that belong elsewhere and cut them out in one move.
-func (d *DB) MoveTasksToEpic(projectID string, taskIDs []string, targetEpicKey string, newEpicTitle string, fields map[string]string) (string, int, []string, error) {
+// MoveTasksToEpic queues the epic split: a batch of tickets moved to another
+// epic, created on the fly when only a title is given. One tracker call per
+// ticket plus a possible epic creation is well past what an HTTP request should
+// hold, so the whole batch runs as a single activity whose steps say what
+// happened to each ticket.
+func (d *DB) MoveTasksToEpic(projectID string, taskIDs []string, targetEpicKey string, newEpicTitle string, fields map[string]string) (*models.TaskActivity, error) {
 	if len(taskIDs) == 0 {
-		return "", 0, nil, fmt.Errorf("aucun ticket sélectionné")
+		return nil, fmt.Errorf("aucun ticket sélectionné")
 	}
 
 	targetEpicKey = strings.ToUpper(strings.TrimSpace(targetEpicKey))
-	if targetEpicKey == "" {
-		if strings.TrimSpace(newEpicTitle) == "" {
-			return "", 0, nil, fmt.Errorf("épic cible ou intitulé du nouvel épic obligatoire")
-		}
-		created, err := d.CreateEpic(projectID, newEpicTitle, "", fields)
-		if err != nil {
-			return "", 0, nil, err
-		}
-		targetEpicKey = created.Key
+	if targetEpicKey == "" && strings.TrimSpace(newEpicTitle) == "" {
+		return nil, fmt.Errorf("épic cible ou intitulé du nouvel épic obligatoire")
 	}
 
-	moved := 0
-	failures := []string{}
-	for _, id := range taskIDs {
-		if _, err := d.SetTaskEpic(id, targetEpicKey); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", id, err))
-			continue
+	// Cible connue : l'état local suit tout de suite. Sur un épic encore à créer,
+	// sa clé n'existe pas avant que la file ne tourne, et les tickets ne bougent
+	// donc qu'à ce moment là.
+	if targetEpicKey != "" {
+		for _, id := range taskIDs {
+			if task, err := d.GetTaskByID(id); err == nil && task != nil {
+				_ = d.writeTaskParentLocally(task, targetEpicKey)
+			}
 		}
-		moved++
 	}
-	return targetEpicKey, moved, failures, nil
+
+	return d.EnqueueTrackerOp(TrackerOp{
+		Kind:         TrackerOpMoveToEpic,
+		ProjectID:    projectID,
+		TaskIDs:      taskIDs,
+		EpicKey:      targetEpicKey,
+		NewEpicTitle: strings.TrimSpace(newEpicTitle),
+		Fields:       fields,
+	})
 }
 
 // appendActivityStep adds a line to an activity's step list, to trace what the

@@ -28,12 +28,20 @@ const (
 	jiraRESTTimeout  = 90 * time.Second
 	jiraRESTPageSize = 100
 	jiraRESTMaxPages = 40 // 4000 work items, well past the largest project here
+	// jiraErrorBodyLimit is how much of a refusal body is kept. Jira names the
+	// offending field in it ("customfield_14546: Epic Type is required"), and
+	// that sentence is what the activity has to show, so the old 200 characters
+	// cut exactly where it mattered.
+	jiraErrorBodyLimit = 800
 )
 
 // JiraFieldValues carries the tracker fields a ticket belongs to.
 type JiraFieldValues struct {
 	Sprint string
 	Team   string
+	// TeamID is the Atlassian team id. The members endpoint is keyed by id, so
+	// the label alone is not enough to read who is in the team.
+	TeamID string
 }
 
 // JiraRESTClient talks to the Jira Cloud REST API with Basic auth (email plus
@@ -46,6 +54,9 @@ type JiraRESTClient struct {
 
 	sprintFieldID string
 	teamFieldID   string
+	// cloudID identifies the site for the team endpoints, which live outside the
+	// Jira API and take it as siteId. Read once per client.
+	cloudID string
 }
 
 // NewJiraRESTClient builds a client from the settings, or returns nil when the
@@ -164,8 +175,8 @@ func (c *JiraRESTClient) UpdateIssueLabels(ctx context.Context, issueKey string,
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		snippet := strings.TrimSpace(string(respBody))
-		if len(snippet) > 200 {
-			snippet = snippet[:200]
+		if len(snippet) > jiraErrorBodyLimit {
+			snippet = snippet[:jiraErrorBodyLimit]
 		}
 		return fmt.Errorf("Jira a refusé la mise à jour des labels de %s (%d): %s", issueKey, resp.StatusCode, snippet)
 	}
@@ -212,8 +223,8 @@ func (c *JiraRESTClient) SetIssueParent(ctx context.Context, issueKey string, pa
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		snippet := strings.TrimSpace(string(respBody))
-		if len(snippet) > 250 {
-			snippet = snippet[:250]
+		if len(snippet) > jiraErrorBodyLimit {
+			snippet = snippet[:jiraErrorBodyLimit]
 		}
 		return fmt.Errorf("Jira a refusé le rattachement de %s (%d): %s", issueKey, resp.StatusCode, snippet)
 	}
@@ -243,6 +254,7 @@ func (c *JiraRESTClient) ListBoardSprints(ctx context.Context, boardID string) (
 		}
 		var payload struct {
 			Values []struct {
+				ID        int    `json:"id"`
 				Name      string `json:"name"`
 				State     string `json:"state"`
 				StartDate string `json:"startDate"`
@@ -258,6 +270,7 @@ func (c *JiraRESTClient) ListBoardSprints(ctx context.Context, boardID string) (
 				continue
 			}
 			out = append(out, models.TrackerSprint{
+				ID:        fmt.Sprintf("%d", sp.ID),
 				Name:      sp.Name,
 				State:     strings.ToLower(sp.State),
 				StartDate: sp.StartDate,
@@ -405,8 +418,8 @@ func (c *JiraRESTClient) get(ctx context.Context, path string, query url.Values)
 	}
 	if resp.StatusCode >= 300 {
 		snippet := strings.TrimSpace(string(body))
-		if len(snippet) > 200 {
-			snippet = snippet[:200]
+		if len(snippet) > jiraErrorBodyLimit {
+			snippet = snippet[:jiraErrorBodyLimit]
 		}
 		return nil, fmt.Errorf("Jira %s a répondu %d: %s", path, resp.StatusCode, snippet)
 	}
@@ -442,8 +455,8 @@ func (c *JiraRESTClient) post(ctx context.Context, path string, payload interfac
 	}
 	if resp.StatusCode >= 300 {
 		snippet := strings.TrimSpace(string(respBody))
-		if len(snippet) > 300 {
-			snippet = snippet[:300]
+		if len(snippet) > jiraErrorBodyLimit {
+			snippet = snippet[:jiraErrorBodyLimit]
 		}
 		return nil, fmt.Errorf("Jira %s a répondu %d: %s", path, resp.StatusCode, snippet)
 	}
@@ -617,27 +630,33 @@ func parseJiraSprintValue(raw json.RawMessage) string {
 }
 
 // parseJiraTeamValue reads the Team field, which is an object whose label lives
-// under one of several keys depending on the instance.
-func parseJiraTeamValue(raw json.RawMessage) string {
+// under one of several keys depending on the instance. The id is returned as
+// well: it is the only key the team members endpoint accepts, and it must be
+// kept verbatim — teams scoped to a site carry a suffix ("<uuid>-67") that is
+// part of the id, not noise to trim.
+func parseJiraTeamValue(raw json.RawMessage) (id string, name string) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return ""
+		return "", ""
 	}
 
 	var obj map[string]interface{}
 	if err := json.Unmarshal(raw, &obj); err == nil {
+		if v, ok := obj["id"].(string); ok {
+			id = strings.TrimSpace(v)
+		}
 		for _, key := range []string{"name", "title", "value", "displayName"} {
 			if v, ok := obj[key].(string); ok && strings.TrimSpace(v) != "" {
-				return strings.TrimSpace(v)
+				return id, strings.TrimSpace(v)
 			}
 		}
-		return ""
+		return id, ""
 	}
 
 	var asText string
 	if err := json.Unmarshal(raw, &asText); err == nil {
-		return strings.TrimSpace(asText)
+		return "", strings.TrimSpace(asText)
 	}
-	return ""
+	return "", ""
 }
 
 // JiraRESTSearchResult is one paginated read of a project: the work items in the
@@ -651,7 +670,15 @@ type JiraRESTSearchResult struct {
 // SearchProjectIssues reads every synced work item of a project over REST. It
 // projects parent as well, which removes the need for the epic-walking pass the
 // acli path has to run because its --fields rejects 'parent'.
-func (c *JiraRESTClient) SearchProjectIssues(ctx context.Context, projectKey string) (*JiraRESTSearchResult, error) {
+// SearchProjectIssues reads a project's work items. sinceMinutes limits the read
+// to what changed recently, which is what makes a background loop affordable: a
+// full pass on a 1400 ticket project is fourteen paginated requests, an
+// incremental one is a single request that usually answers nothing at all.
+//
+// The window is expressed in minutes rather than as a date, on purpose: JQL
+// interprets a written date in the user's own time zone, and a background loop
+// has no business guessing it.
+func (c *JiraRESTClient) SearchProjectIssues(ctx context.Context, projectKey string, issueTypes []string, sinceMinutes int) (*JiraRESTSearchResult, error) {
 	projectKey = strings.ToUpper(strings.TrimSpace(projectKey))
 	if projectKey == "" {
 		return nil, fmt.Errorf("clé de projet Jira manquante")
@@ -662,12 +689,15 @@ func (c *JiraRESTClient) SearchProjectIssues(ctx context.Context, projectKey str
 		_ = c.DiscoverFields(ctx)
 	}
 
-	quoted := make([]string, 0, len(jiraSyncedIssueTypes))
-	for _, t := range jiraSyncedIssueTypes {
+	quoted := make([]string, 0, len(issueTypes))
+	for _, t := range NormalizeIssueTypes(issueTypes) {
 		quoted = append(quoted, fmt.Sprintf("%q", t))
 	}
-	jql := fmt.Sprintf("project = %s AND issuetype IN (%s) ORDER BY updated DESC",
-		projectKey, strings.Join(quoted, ", "))
+	jql := fmt.Sprintf("project = %s AND issuetype IN (%s)", projectKey, strings.Join(quoted, ", "))
+	if sinceMinutes > 0 {
+		jql += fmt.Sprintf(" AND updated >= -%dm", sinceMinutes)
+	}
+	jql += " ORDER BY updated DESC"
 
 	fields := []string{"key", "summary", "description", "status", "priority", "assignee", "labels", "issuetype", "parent"}
 	if c.sprintFieldID != "" {
@@ -723,7 +753,7 @@ func (c *JiraRESTClient) SearchProjectIssues(ctx context.Context, projectKey str
 				values.Sprint = parseJiraSprintValue(dynamic.Fields[c.sprintFieldID])
 			}
 			if c.teamFieldID != "" {
-				values.Team = parseJiraTeamValue(dynamic.Fields[c.teamFieldID])
+				values.TeamID, values.Team = parseJiraTeamValue(dynamic.Fields[c.teamFieldID])
 			}
 			if values.Sprint != "" || values.Team != "" {
 				result.Fields[item.Key] = values

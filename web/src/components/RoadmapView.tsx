@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Target,
+  CalendarRange,
   Route,
   Compass,
   HelpCircle,
@@ -15,9 +16,13 @@ import {
   AlertTriangle,
   Save,
   X,
+  Filter,
   Scissors,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { LookupField } from './LookupField'
+import { MarkdownEditor } from './Markdown'
+import { sprintLookup } from '../lib/lookups'
 import {
   buildEpicRows,
   placementIssues,
@@ -74,7 +79,22 @@ export const RoadmapView: React.FC = () => {
     createStoryUnderEpic,
     createEpic,
     moveTasksToEpic,
+    setTaskSprint,
+    setTasksSprint,
+    assigneeFilter,
+    setAssigneeFilter,
+    sprintFilter,
+    setSprintFilter,
+    teamFilter,
+    setTeamFilter,
+    labelFilter,
+    setLabelFilter,
+    pinnedOnly,
+    setPinnedOnly,
+    searchQuery,
+    setSearchQuery,
     fetchEpicRequiredFields,
+    activeJobCount,
     addToast,
   } = useApp()
 
@@ -120,6 +140,95 @@ export const RoadmapView: React.FC = () => {
   const [moveTarget, setMoveTarget] = useState('')
   const [newEpicTitle, setNewEpicTitle] = useState('')
 
+  // Largeur du panneau de droite. C'est là que le travail se fait (les tickets de
+  // l'épic, la découpe), alors que la colonne de gauche n'a qu'à lister : la
+  // répartition par défaut donne donc la place au panneau, et la poignée permet
+  // de la régler. La valeur est mémorisée par navigateur.
+  // Sprints proposables : ceux du board du projet, actifs et futurs. Un sprint
+  // clos n'accueille plus de travail, et l'API Agile déplace par identifiant, donc
+  // ceux qui n'en portent pas (import antérieur) sont écartés.
+  const sprintOptions = useMemo(
+    () =>
+      (currentProject?.sprints || [])
+        .filter(sp => sp.id && sp.state !== 'closed')
+        .map(sp => ({ id: sp.id as string, name: sp.name, state: sp.state })),
+    [currentProject?.sprints]
+  )
+  const [sprintTarget, setSprintTarget] = useState<{ id: string; name: string }>({ id: '', name: '' })
+
+  // Épics et sprints se cherchent au clavier : cette vue en liste cent quarante
+  // et dix, et l'épic cible d'une découpe se choisissait dans un menu déroulant
+  // de tout le projet.
+  const searchSprint = useMemo(() => sprintLookup(currentProject?.sprints || []), [currentProject?.sprints])
+
+  // Ce qui restreint la liste de tickets sur laquelle la roadmap est construite.
+  const activeFilterChips = useMemo(() => {
+    const chips: { label: string; clear: () => void }[] = []
+    if (assigneeFilter) {
+      chips.push({
+        label: assigneeFilter === '__unassigned__' ? 'non assigné' : assigneeFilter,
+        clear: () => setAssigneeFilter(null),
+      })
+    }
+    if (sprintFilter) chips.push({ label: sprintFilter, clear: () => setSprintFilter(null) })
+    if (teamFilter) chips.push({ label: teamFilter, clear: () => setTeamFilter(null) })
+    if (labelFilter) chips.push({ label: `#${labelFilter.replace(/^#/, '')}`, clear: () => setLabelFilter(null) })
+    if (pinnedOnly) chips.push({ label: 'épinglés seulement', clear: () => setPinnedOnly(false) })
+    if (searchQuery) chips.push({ label: `« ${searchQuery} »`, clear: () => setSearchQuery('') })
+    return chips
+  }, [
+    assigneeFilter,
+    sprintFilter,
+    teamFilter,
+    labelFilter,
+    pinnedOnly,
+    searchQuery,
+    setAssigneeFilter,
+    setSprintFilter,
+    setTeamFilter,
+    setLabelFilter,
+    setPinnedOnly,
+    setSearchQuery,
+  ])
+
+  const PANEL_MIN = 420
+  const LIST_MIN = 280
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    const stored = Number(localStorage.getItem('taskacao_roadmap_panel_width') || '')
+    return Number.isFinite(stored) && stored >= PANEL_MIN ? stored : 720
+  })
+  const splitRef = useRef<HTMLDivElement>(null)
+  const [isDraggingSplit, setIsDraggingSplit] = useState(false)
+
+  const startSplitDrag = (e: React.PointerEvent) => {
+    e.preventDefault()
+    const container = splitRef.current
+    if (!container) return
+    setIsDraggingSplit(true)
+
+    const onMove = (ev: PointerEvent) => {
+      const rect = container.getBoundingClientRect()
+      const next = Math.round(rect.right - ev.clientX)
+      const max = Math.max(PANEL_MIN, rect.width - LIST_MIN)
+      setPanelWidth(Math.min(max, Math.max(PANEL_MIN, next)))
+    }
+    const onUp = () => {
+      setIsDraggingSplit(false)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      setPanelWidth(current => {
+        try {
+          localStorage.setItem('taskacao_roadmap_panel_width', String(current))
+        } catch {
+          // stockage indisponible : la largeur vaut pour cette session
+        }
+        return current
+      })
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
   useEffect(() => {
     if (!currentProject?.id) {
       setEpicMeta([])
@@ -127,7 +236,10 @@ export const RoadmapView: React.FC = () => {
     }
     fetchProjectEpics(currentProject.id).then(setEpicMeta)
     pendingHorizonPushes(currentProject.id).then(list => setPendingPushes(list.length))
-  }, [currentProject?.id, fetchProjectEpics, pendingHorizonPushes])
+    // activeJobCount en dépendance : les écritures Jira (rattachement, découpe,
+    // labels d'horizon) passent par la file, donc la liste des épics n'est à
+    // jour qu'une fois la file vidée.
+  }, [currentProject?.id, fetchProjectEpics, pendingHorizonPushes, activeJobCount])
 
   const allRows = useMemo(() => buildEpicRows(tasks, currentProject, epicMeta), [tasks, currentProject, epicMeta])
 
@@ -451,6 +563,33 @@ export const RoadmapView: React.FC = () => {
             </button>
           )}
 
+          {/* Les filtres globaux amputent aussi cette vue, puisqu'elle est bâtie sur
+              la même liste de tickets que le board. Sans les afficher ici, un
+              filtre resté actif ailleurs fait « disparaître » des tickets sans
+              explication : cette vue n'a pas de barre de filtres à elle. */}
+          {activeFilterChips.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {activeFilterChips.map(chip => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  onClick={chip.clear}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[10.5px] font-semibold cursor-pointer border"
+                  style={{
+                    background: 'rgb(var(--status-warn-rgb) / 0.14)',
+                    borderColor: 'rgb(var(--status-warn-rgb) / 0.34)',
+                    color: 'var(--status-warn)',
+                  }}
+                  title={`Filtre actif : ${chip.label}. Cliquer pour l'enlever.`}
+                >
+                  <Filter size={10} />
+                  {chip.label}
+                  <X size={10} />
+                </button>
+              ))}
+            </div>
+          )}
+
           {epicFieldSelectors}
 
           <button
@@ -515,7 +654,7 @@ export const RoadmapView: React.FC = () => {
         )}
       </div>
 
-      <div className="flex-1 flex min-h-0 min-w-0 overflow-hidden">
+      <div className="flex-1 flex min-h-0 min-w-0 overflow-hidden" ref={splitRef}>
         {/* Épics de l'horizon courant */}
         <div className="flex-1 overflow-y-auto p-3 min-w-0 space-y-2">
           {visibleRows.length === 0 ? (
@@ -635,10 +774,25 @@ export const RoadmapView: React.FC = () => {
           )}
         </div>
 
+        {/* Poignée de répartition : la liste des épics n'a pas besoin de la moitié
+            de l'écran, le panneau de travail oui. */}
+        {selected && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Répartition entre la liste des épics et le panneau"
+            onPointerDown={startSplitDrag}
+            onDoubleClick={() => setPanelWidth(720)}
+            title="Glisser pour répartir, double-clic pour revenir à la largeur par défaut"
+            className="w-1.5 shrink-0 cursor-col-resize transition-colors"
+            style={{ background: isDraggingSplit ? 'var(--accent-color)' : 'var(--border-color)' }}
+          />
+        )}
+
         {/* Panneau : vérification des sprints en NOW/NEXT, cadrage en LATER */}
         {selected && (
-          <aside className="flex flex-col min-h-0 shrink border-l border-[var(--border-color)] bg-[var(--bg-secondary)]"
-            style={{ width: 470, maxWidth: '38%', minWidth: 360 }}>
+          <aside className="flex flex-col min-h-0 shrink-0 bg-[var(--bg-secondary)]"
+            style={{ width: panelWidth }}>
             <div className="px-4 pt-3.5 pb-3 shrink-0 border-b border-[var(--border-color)]">
               <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <span className="text-[11px] font-mono font-bold" style={{ color: 'var(--accent-color)' }}>{selected.key}</span>
@@ -654,9 +808,15 @@ export const RoadmapView: React.FC = () => {
                 )}
                 {epicUrl(selected.key) && (
                   <a href={epicUrl(selected.key)} target="_blank" rel="noreferrer"
-                    className="ml-auto text-[10px] font-semibold inline-flex items-center gap-1 hover:underline"
-                    style={{ color: 'var(--status-info)' }}>
-                    Ouvrir dans Jira <ExternalLink size={10} />
+                    className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors"
+                    style={{
+                      color: 'var(--status-info)',
+                      background: 'rgb(var(--status-info-rgb) / 0.12)',
+                      border: '1px solid rgb(var(--status-info-rgb) / 0.32)',
+                    }}
+                    title={`Ouvrir ${selected.key} dans Jira`}>
+                    <ExternalLink size={13} />
+                    <span>Jira</span>
                   </a>
                 )}
               </div>
@@ -863,10 +1023,23 @@ export const RoadmapView: React.FC = () => {
                                 style={{ color: 'var(--status-info)' }}>
                                 {task.key}
                               </button>
-                              <span className="text-[9px] px-1 rounded font-mono ml-auto shrink-0 truncate max-w-[150px]"
-                                style={{ color: meta.color, background: meta.bg, border: `1px solid ${meta.border}` }}>
-                                {task.sprint || meta.label}
-                              </span>
+                              {sprintOptions.length > 0 ? (
+                                <div className="ml-auto shrink-0 w-[165px]">
+                                  <LookupField
+                                    value={task.sprint || ''}
+                                    icon={<CalendarRange size={10} />}
+                                    placeholder={meta.label}
+                                    clearLabel="Backlog (aucun sprint)"
+                                    onSearch={searchSprint}
+                                    onPick={option => setTaskSprint(task.id, option?.id || '', option?.label)}
+                                  />
+                                </div>
+                              ) : (
+                                <span className="text-[9px] px-1 rounded font-mono ml-auto shrink-0 truncate max-w-[150px]"
+                                  style={{ color: meta.color, background: meta.bg, border: `1px solid ${meta.border}` }}>
+                                  {task.sprint || meta.label}
+                                </span>
+                              )}
                               <button type="button" onClick={() => setChatTask(task)}
                                 className="p-0.5 rounded text-[var(--text-muted)] hover:text-cyan-300 cursor-pointer shrink-0"
                                 title={`Terminal de ${task.key}`}>
@@ -926,6 +1099,53 @@ export const RoadmapView: React.FC = () => {
                     </div>
                   )}
 
+                  {/* Planification : la même sélection sert à replanifier, ce qui
+                      est l'autre moitié du travail sur un épic trop gros. Couper
+                      change de contenant, changer de sprint change la date. */}
+                  {cutIds.length > 0 && sprintOptions.length > 0 && (
+                    <div className="p-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)]">
+                      <div className="text-[10px] font-bold uppercase tracking-[.08em] mb-1.5 text-[var(--text-muted)]">
+                        Replanifier {cutIds.length} ticket(s) dans…
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <LookupField
+                            value={sprintTarget.name}
+                            icon={<CalendarRange size={11} />}
+                            placeholder="sprint cible..."
+                            clearLabel="Backlog (retirer du sprint)"
+                            onSearch={searchSprint}
+                            onPick={option =>
+                              setSprintTarget({ id: option?.id || '', name: option?.label || 'Backlog' })
+                            }
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!sprintTarget.name || busyKey === 'sprint'}
+                          onClick={async () => {
+                            setBusyKey('sprint')
+                            await setTasksSprint(
+                              currentProject!.id,
+                              cutIds,
+                              sprintTarget.id,
+                              sprintTarget.name
+                            )
+                            setChecked({})
+                            setCutAt(-1)
+                            setSprintTarget({ id: '', name: '' })
+                            setBusyKey(null)
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer shrink-0 disabled:opacity-40"
+                          style={{ color: 'var(--status-ok)', background: 'rgb(var(--status-ok-rgb) / 0.12)', border: '1px solid rgb(var(--status-ok-rgb) / 0.32)' }}
+                          title="Déplacer la sélection dans ce sprint, via la file d'activités"
+                        >
+                          {busyKey === 'sprint' ? '…' : 'Replanifier'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Découpe : les stories cochées, ou celles au delà du
                       curseur, quittent l'épic pour un autre. */}
                   {cutIds.length > 0 && (
@@ -934,18 +1154,24 @@ export const RoadmapView: React.FC = () => {
                         Couper {cutIds.length} ticket(s) vers…
                       </div>
                       <div className="flex items-center gap-2">
-                        <select
-                          value={moveTarget}
-                          onChange={e => setMoveTarget(e.target.value)}
-                          className="flex-1 px-2 py-1.5 text-[11px] rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
-                        >
-                          <option value="">— épic existant —</option>
-                          {allRows
-                            .filter(r => r.key !== selected.key && !r.closed)
-                            .map(r => (
-                              <option key={r.key} value={r.key}>{r.key} · {r.title.slice(0, 40)}</option>
-                            ))}
-                        </select>
+                        <div className="flex-1">
+                          <LookupField
+                            value={moveTarget}
+                            icon={<Target size={11} />}
+                            placeholder="épic existant..."
+                            allowClear={false}
+                            emptyHint="Aucun épic ne correspond."
+                            onSearch={async query => {
+                              const q = query.trim().toLowerCase()
+                              return allRows
+                                .filter(r => r.key !== selected.key && !r.closed)
+                                .filter(r => !q || r.key.toLowerCase().includes(q) || r.title.toLowerCase().includes(q))
+                                .slice(0, 40)
+                                .map(r => ({ id: r.key, label: r.key, sublabel: r.title }))
+                            }}
+                            onPick={option => setMoveTarget(option?.id || '')}
+                          />
+                        </div>
                         <button
                           type="button"
                           disabled={!moveTarget || busyKey === 'move'}
@@ -975,21 +1201,32 @@ export const RoadmapView: React.FC = () => {
                           disabled={!newEpicTitle.trim() || busyKey === 'move' || Boolean(missingEpicField)}
                           onClick={async () => {
                             setBusyKey('move')
-                            const key = await moveTasksToEpic(currentProject!.id, cutIds, '', newEpicTitle.trim(), epicFieldValues)
-                            if (key && currentProject?.id) {
-                              fetchProjectEpics(currentProject.id).then(setEpicMeta)
-                            }
+                            // La découpe est mise en file : l'épic est créé par
+                            // l'activité, donc la liste se recharge quand la
+                            // file se vide, pas ici.
+                            await moveTasksToEpic(currentProject!.id, cutIds, '', newEpicTitle.trim(), epicFieldValues)
                             setChecked({})
                             setCutAt(-1)
                             setNewEpicTitle('')
                             setBusyKey(null)
                           }}
+                          title={
+                            missingEpicField
+                              ? `Jira impose « ${missingEpicField.name} » à la création d'un épic : choisissez une valeur ci-dessus.`
+                              : 'Créer l\'épic cible et y déplacer les tickets sélectionnés'
+                          }
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer shrink-0 disabled:opacity-40"
                           style={{ color: 'var(--status-info)', background: 'rgb(var(--status-info-rgb) / 0.12)', border: '1px solid rgb(var(--status-info-rgb) / 0.32)' }}
                         >
                           {busyKey === 'move' ? '…' : 'Créer et couper'}
                         </button>
                       </div>
+                      {missingEpicField && (
+                        <p className="mt-1 text-[9.5px] leading-snug" style={{ color: 'var(--status-danger)' }}>
+                          Jira impose « {missingEpicField.name} » pour créer un épic : sans valeur, la création est
+                          refusée en 400.
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -1013,15 +1250,14 @@ export const RoadmapView: React.FC = () => {
                         </button>
                       )}
                     </div>
-                    <textarea
-                      rows={8}
+                    <MarkdownEditor
                       value={draftDescription}
-                      onChange={e => {
-                        setDraftDescription(e.target.value)
+                      onChange={value => {
+                        setDraftDescription(value)
                         setDraftDirty(true)
                       }}
+                      minHeight={160}
                       placeholder="Le problème, le périmètre, ce qui est hors périmètre… Ce cadrage vit dans Taskacao."
-                      className="w-full px-3 py-2 text-[12px] rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] leading-relaxed resize-y"
                     />
                   </div>
 

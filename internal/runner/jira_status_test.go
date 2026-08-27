@@ -35,7 +35,7 @@ func TestJiraItemsToTasksStatusMapping(t *testing.T) {
 		item.Fields.Status.Name = tc.statusName
 		item.Fields.Status.StatusCategory.Key = tc.categoryKey
 
-		tasks := r.jiraItemsToTasks([]JiraIssueItem{item}, "")
+		tasks := r.jiraItemsToTasks([]JiraIssueItem{item}, "", nil)
 		if len(tasks) != 1 {
 			t.Fatalf("statut %q : %d tâche(s) importée(s), 1 attendue", tc.statusName, len(tasks))
 		}

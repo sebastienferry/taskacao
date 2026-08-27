@@ -479,12 +479,79 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
 			return
 		}
-		target, moved, failures, err := h.db.MoveTasksToEpic(id, req.TaskIDs, req.TargetEpicKey, req.NewEpicTitle, req.Fields)
+		activity, err := h.db.MoveTasksToEpic(id, req.TaskIDs, req.TargetEpicKey, req.NewEpicTitle, req.Fields)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"targetEpicKey": target, "moved": moved, "failures": failures})
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"queued":        true,
+			"activity":      activity,
+			"targetEpicKey": strings.ToUpper(strings.TrimSpace(req.TargetEpicKey)),
+			"count":         len(req.TaskIDs),
+		})
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/issue-types — the work item types the
+	// project's tracker exposes, for the picker in the project settings.
+	if len(parts) >= 2 && parts[1] == "issue-types" && r.Method == http.MethodGet {
+		types, err := h.db.ListProjectIssueTypes(id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, types)
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/team-move — set the team of a batch of work
+	// items, which is what triaging a backlog does.
+	if len(parts) >= 2 && parts[1] == "team-move" && r.Method == http.MethodPost {
+		var req struct {
+			TaskIDs  []string `json:"taskIds"`
+			TeamID   string   `json:"teamId"`
+			TeamName string   `json:"teamName"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		activity, err := h.db.SetTasksTeam(id, req.TaskIDs, req.TeamID, req.TeamName)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"queued":   true,
+			"activity": activity,
+			"count":    len(req.TaskIDs),
+		})
+		return
+	}
+
+	// Sub-action: /api/projects/{id}/sprint-move — send a batch of work items to a
+	// sprint, which is what planning from the roadmap does.
+	if len(parts) >= 2 && parts[1] == "sprint-move" && r.Method == http.MethodPost {
+		var req struct {
+			TaskIDs    []string `json:"taskIds"`
+			SprintID   string   `json:"sprintId"`
+			SprintName string   `json:"sprintName"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		activity, err := h.db.SetTasksSprint(id, req.TaskIDs, req.SprintID, req.SprintName)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"queued":   true,
+			"activity": activity,
+			"count":    len(req.TaskIDs),
+		})
 		return
 	}
 
@@ -501,12 +568,15 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, pending)
 			return
 		case http.MethodPost:
-			pushed, failures, err := h.db.PushPendingHorizons(id)
+			activity, err := h.db.EnqueueTrackerOp(db.TrackerOp{
+				Kind:      db.TrackerOpPushHorizons,
+				ProjectID: id,
+			})
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"pushed": pushed, "failures": failures})
+			writeJSON(w, http.StatusAccepted, map[string]interface{}{"queued": true, "activity": activity})
 			return
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -591,15 +661,17 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			// qui compare l'état local aux labels réels.
 			labelNote := ""
 			if req.Horizon != nil {
-				labelNote = "label roadmap en cours de poussée"
-				horizon := saved.Horizon
-				projectID := id
-				epicKey := key
-				go func() {
-					if _, err := h.db.PushEpicHorizonLabel(projectID, epicKey, horizon); err != nil {
-						log.Printf("[epics] label roadmap non posé sur %s: %v", epicKey, err)
-					}
-				}()
+				labelNote = "label roadmap en file d'attente"
+				if _, err := h.db.EnqueueTrackerOp(db.TrackerOp{
+					Kind:      db.TrackerOpEpicHorizon,
+					ProjectID: id,
+					TaskKey:   key,
+					EpicKey:   key,
+					Horizon:   saved.Horizon,
+				}); err != nil {
+					labelNote = "label roadmap non mis en file : " + err.Error()
+					log.Printf("[epics] label roadmap non mis en file pour %s: %v", key, err)
+				}
 			}
 			writeJSON(w, http.StatusOK, map[string]interface{}{"epic": saved, "labelNote": labelNote})
 			return
@@ -953,11 +1025,14 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 		projectID := r.URL.Query().Get("projectId")
 		sprint := r.URL.Query().Get("sprint")
 		team := r.URL.Query().Get("team")
+		assignee := r.URL.Query().Get("assignee")
+		// Statuts du tracker à afficher, répétables : ?trackerStatus=Draft&trackerStatus=Selected
+		trackerStatuses := r.URL.Query()["trackerStatus"]
 		// pinned=1 : les seuls tickets épinglés, le raccourci vers les chantiers
 		// en cours quand le board en porte trois cents.
 		pinnedOnly := r.URL.Query().Get("pinned") == "1" || r.URL.Query().Get("pinned") == "true"
 
-		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team, pinnedOnly)
+		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team, assignee, trackerStatuses, pinnedOnly)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -987,6 +1062,18 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandleAutoSyncStatus reports what the background sync loop has been doing:
+// whether it runs, when it last ran, how much it actually imported, and whether
+// the tracker asked it to step back. Switching it on or off goes through the
+// settings, like every other preference.
+func (h *Handler) HandleAutoSyncStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, h.db.AutoSyncStatus())
+}
+
 // HandleTaskFacets serves the distinct sprint and team values present on the
 // board, so the UI shows those filters only for trackers that feed them.
 func (h *Handler) HandleTaskFacets(w http.ResponseWriter, r *http.Request) {
@@ -1000,6 +1087,102 @@ func (h *Handler) HandleTaskFacets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, facets)
+}
+
+// HandleTeams serves the teams carried by a project's work items and the people
+// in them. The team is optional on a work item, so an empty list is a normal
+// answer, not an error: the UI then simply shows no team filter.
+//
+//	GET  /api/teams?projectId=&members=1   the project's teams
+//	GET  /api/teams/search?projectId=&q=   lookup of the instance's teams, by name
+//	GET  /api/teams/members?team=<name>    the people of one team, by its label
+//	GET  /api/teams/workload?projectId=&team=<name>
+//	POST /api/teams/refresh                {projectId, teamId} re-read from Jira
+func (h *Handler) HandleTeams(w http.ResponseWriter, r *http.Request) {
+	sub := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/teams"), "/")
+
+	switch sub {
+	case "":
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		withMembers := r.URL.Query().Get("members") == "1" || r.URL.Query().Get("members") == "true"
+		teams, err := h.db.ListProjectTeams(r.URL.Query().Get("projectId"), withMembers)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, teams)
+
+	case "search":
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		teams, err := h.db.SearchTrackerTeams(r.URL.Query().Get("projectId"), r.URL.Query().Get("q"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, teams)
+
+	case "members":
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		members, err := h.db.MembersForTeamName(r.URL.Query().Get("team"))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, members)
+
+	case "workload":
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		team := strings.TrimSpace(r.URL.Query().Get("team"))
+		if team == "" {
+			writeError(w, http.StatusBadRequest, "Le nom de l'équipe est requis")
+			return
+		}
+		load, err := h.db.GetTeamWorkload(r.URL.Query().Get("projectId"), team)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, load)
+
+	case "refresh":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		var req struct {
+			ProjectID string `json:"projectId"`
+			TeamID    string `json:"teamId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		if strings.TrimSpace(req.TeamID) == "" {
+			writeError(w, http.StatusBadRequest, "L'identifiant de l'équipe est requis : il n'arrive qu'avec une synchronisation Jira")
+			return
+		}
+		team, err := h.db.RefreshTeamMembersNow(req.ProjectID, req.TeamID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, team)
+
+	default:
+		writeError(w, http.StatusNotFound, "Unknown teams endpoint")
+	}
 }
 
 func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
@@ -1062,6 +1245,15 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/epic"):
 		subAction = "epic"
 		id = strings.TrimSuffix(rawPath, "/epic")
+	case strings.HasSuffix(rawPath, "/team"):
+		subAction = "team"
+		id = strings.TrimSuffix(rawPath, "/team")
+	case strings.HasSuffix(rawPath, "/sprint"):
+		subAction = "sprint"
+		id = strings.TrimSuffix(rawPath, "/sprint")
+	case strings.HasSuffix(rawPath, "/assignable"):
+		subAction = "assignable"
+		id = strings.TrimSuffix(rawPath, "/assignable")
 	case strings.HasSuffix(rawPath, "/comments"):
 		subAction = "comments"
 		id = strings.TrimSuffix(rawPath, "/comments")
@@ -1352,12 +1544,68 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
 			return
 		}
-		task, err := h.db.SetTaskEpic(id, req.EpicKey)
+		// L'écriture part dans la file d'activités : la réponse porte l'activité
+		// à suivre, pas un ticket déjà modifié.
+		task, activity, err := h.db.SetTaskEpic(id, req.EpicKey)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, task)
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{"queued": true, "task": task, "activity": activity})
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/team — change the ticket's team, or clear it with
+	// an empty id. The team is optional on a work item, so clearing it is a
+	// legitimate instruction and not a missing parameter.
+	if subAction == "team" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
+		var req struct {
+			TeamID   string `json:"teamId"`
+			TeamName string `json:"teamName"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		task, activity, err := h.db.SetTaskTeam(id, req.TeamID, req.TeamName)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{"queued": true, "task": task, "activity": activity})
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/sprint — move the ticket to a sprint of the
+	// project's board, or back to the backlog with an empty id.
+	if subAction == "sprint" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
+		var req struct {
+			SprintID   string `json:"sprintId"`
+			SprintName string `json:"sprintName"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		task, activity, err := h.db.SetTaskSprint(id, req.SprintID, req.SprintName)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{"queued": true, "task": task, "activity": activity})
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/assignable — who this ticket can be assigned to.
+	// With no query it answers the ticket's team; typing searches the instance,
+	// which is what allows assigning someone outside the team.
+	if subAction == "assignable" && r.Method == http.MethodGet {
+		people, err := h.db.SearchAssignableUsers(id, r.URL.Query().Get("q"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, people)
 		return
 	}
 
@@ -1394,9 +1642,10 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sub-action: /api/tasks/{id}/tracker-status — move a card to a board column,
-	// which means transitioning the ticket to that column's status. Synchronous
-	// on purpose: the front moves the card optimistically and needs to know
-	// whether the tracker accepted it.
+	// which means transitioning the ticket to that column's status. The local
+	// status is written straight away, so the card stays where it was dropped,
+	// and the tracker transition runs in the activity queue: it takes seconds,
+	// and its refusal belongs in an activity rather than in a timed-out request.
 	if subAction == "tracker-status" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
 		var req struct {
 			Status string `json:"status"`
@@ -1405,12 +1654,12 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
 			return
 		}
-		task, err := h.db.MoveTaskToTrackerStatus(id, req.Status)
+		task, activity, err := h.db.MoveTaskToTrackerStatus(id, req.Status)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, task)
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{"queued": true, "task": task, "activity": activity})
 		return
 	}
 
@@ -1520,24 +1769,6 @@ func (h *Handler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
-}
-
-func (h *Handler) HandleSeed(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	if err := h.db.SeedDemoData(); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	tasks, _ := h.db.GetTasks("", "", "", "", "", "", "", false)
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message": "Database reset & demo tasks reseeded successfully",
-		"tasks":   tasks,
-	})
 }
 
 func (h *Handler) HandleActivities(w http.ResponseWriter, r *http.Request) {

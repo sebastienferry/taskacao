@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { MessageSquare, Send, RefreshCw, Loader2, User } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { MarkdownEditor, MarkdownView } from './Markdown'
 import type { Task, TaskComment } from '../types'
 
 /**
@@ -92,7 +93,7 @@ export const TaskComments: React.FC<{ task: Task }> = ({ task }) => {
           Aucun commentaire{task.source && task.source !== 'local' ? ` sur ${task.key}` : ''}. Le premier ci-dessous partira {task.source && task.source !== 'local' ? `dans ${task.source}` : 'en base locale'}.
         </p>
       ) : (
-        <div className="space-y-2 max-h-[42vh] overflow-y-auto pr-1">
+        <div className="space-y-2 max-h-[calc(var(--app-h)*0.42)] overflow-y-auto pr-1">
           {comments.map(comment => (
             <div
               key={comment.id}
@@ -111,19 +112,17 @@ export const TaskComments: React.FC<{ task: Task }> = ({ task }) => {
                   </span>
                 )}
               </div>
-              <p className="text-[11px] text-[var(--text-secondary)] whitespace-pre-wrap leading-relaxed">
-                {comment.body}
-              </p>
+              <MarkdownView compact>{comment.body}</MarkdownView>
             </div>
           ))}
         </div>
       )}
 
       <div className="space-y-1.5">
-        <textarea
-          rows={3}
+        <MarkdownEditor
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={setDraft}
+          minHeight={80}
           onKeyDown={e => {
             // Cmd/Ctrl+Entrée publie, comme partout ailleurs dans l'app.
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -136,7 +135,6 @@ export const TaskComments: React.FC<{ task: Task }> = ({ task }) => {
               ? `Commenter ${task.key} dans ${task.source}… (Cmd+Entrée pour publier)`
               : 'Ajouter un commentaire… (Cmd+Entrée pour enregistrer)'
           }
-          className="w-full px-3 py-2 text-[12px] rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] leading-relaxed resize-y"
         />
         <div className="flex items-center justify-end gap-2">
           <button

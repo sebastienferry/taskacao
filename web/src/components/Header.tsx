@@ -221,8 +221,10 @@ export const Header: React.FC = () => {
           </button>
         </div>
 
-        {/* Active Git Branch Badge */}
-        {gitStatus?.branch && (
+        {/* Branche Git active. Masquée sur un projet multi-dépôts : elle y
+            désignerait la branche d'un dépôt parmi d'autres, et le sélecteur
+            ferait changer de branche dans ce dépôt là seulement. */}
+        {gitStatus?.branch && currentProject?.monoRepo !== false && (
           <div
             onClick={() => setIsBranchModalOpen(true)}
             className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono font-semibold bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-cyan-500/50 hover:bg-cyan-500/15 cursor-pointer transition-all shadow-xs"

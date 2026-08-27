@@ -1062,11 +1062,35 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 // rejected by the CLI, so task timestamps fall back to the import time.
 const jiraSearchFields = "key,summary,description,status,priority,assignee,labels,issuetype"
 
-// jiraSyncedIssueTypes is the set of Jira work item types Taskacao imports as
-// board cards. Epics are containers, and the other project-specific types
-// (Vulnerability, Corrective Action, Technical debt…) are out of scope: they
-// would flood the board without being part of the dev workflow.
+// jiraSyncedIssueTypes is the default set of Jira work item types Taskacao
+// imports as board cards, used when a project names none of its own. Epics are
+// containers, and the other types a project may expose (Vulnerability,
+// Corrective Action, Technical debt…) are out of the default: they would flood
+// the board without being part of the dev workflow.
+//
+// A project can override the list, and has to: an instance may carry a project
+// whose only type is its own (PEF holds nothing but "Platform Feedback"), and
+// the default would import exactly nothing from it.
 var jiraSyncedIssueTypes = []string{"Task", "Story"}
+
+// NormalizeIssueTypes cleans a configured list of work item types, and falls
+// back to the default when it is empty.
+func NormalizeIssueTypes(types []string) []string {
+	out := make([]string, 0, len(types))
+	seen := map[string]bool{}
+	for _, t := range types {
+		t = strings.TrimSpace(t)
+		if t == "" || seen[strings.ToLower(t)] {
+			continue
+		}
+		seen[strings.ToLower(t)] = true
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return append([]string{}, jiraSyncedIssueTypes...)
+	}
+	return out
+}
 
 // jiraSyncTimeout covers a full paginated fetch of a project's work items.
 const jiraSyncTimeout = 4 * time.Minute
@@ -1213,9 +1237,13 @@ func parseJiraSearchOutput(output string) ([]JiraIssueItem, error) {
 // when credentials are configured, which returns the parent, Sprint and Team in
 // the same pass, and acli otherwise, which needs two extra passes because its
 // --fields rejects those.
-func (r *Runner) SyncFromJira(settings *models.Settings, projectKey string, repoPath string, trackerUrl string) ([]models.Task, error) {
+// SyncFromJira reads a Jira project. sinceMinutes limits the read to what changed
+// in that window, which is what a background loop uses: zero means the full
+// project, as a manual sync does.
+func (r *Runner) SyncFromJira(settings *models.Settings, projectKey string, repoPath string, trackerUrl string, issueTypes []string, sinceMinutes int) ([]models.Task, error) {
+	issueTypes = NormalizeIssueTypes(issueTypes)
 	if client := NewJiraRESTClient(settings, trackerUrl); client != nil {
-		tasks, err := r.syncFromJiraREST(client, projectKey, trackerUrl)
+		tasks, err := r.syncFromJiraREST(client, projectKey, trackerUrl, issueTypes, sinceMinutes)
 		if err == nil {
 			return tasks, nil
 		}
@@ -1223,24 +1251,35 @@ func (r *Runner) SyncFromJira(settings *models.Settings, projectKey string, repo
 		// the path that worked before credentials existed.
 		log.Printf("[SyncFromJira] REST read failed (%v), falling back on acli", err)
 	}
-	return r.syncFromJiraCLI(projectKey, repoPath, trackerUrl)
+	if sinceMinutes > 0 {
+		// acli ne sait pas restreindre par date de mise à jour : une passe
+		// incrémentale sans jeton REST n'existe pas, et refaire la passe complète
+		// à chaque minute serait exactement ce qu'on cherche à éviter.
+		return nil, fmt.Errorf("lecture incrémentale indisponible sans jeton d'API Jira")
+	}
+	return r.syncFromJiraCLI(projectKey, repoPath, trackerUrl, issueTypes)
 }
 
 // syncFromJiraREST reads the project over the REST API, including the fields
 // acli cannot project.
-func (r *Runner) syncFromJiraREST(client *JiraRESTClient, projectKey string, trackerUrl string) ([]models.Task, error) {
+func (r *Runner) syncFromJiraREST(client *JiraRESTClient, projectKey string, trackerUrl string, issueTypes []string, sinceMinutes int) ([]models.Task, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), jiraRESTTimeout)
 	defer cancel()
 
-	result, err := client.SearchProjectIssues(ctx, projectKey)
+	result, err := client.SearchProjectIssues(ctx, projectKey, issueTypes, sinceMinutes)
 	if err != nil {
 		return nil, err
 	}
 	if len(result.Items) == 0 {
+		if sinceMinutes > 0 {
+			// Rien n'a bougé dans la fenêtre : c'est le cas courant d'une boucle
+			// de fond, pas une erreur.
+			return []models.Task{}, nil
+		}
 		return nil, fmt.Errorf("aucun ticket renvoyé par l'API Jira pour %s", projectKey)
 	}
 
-	tasks := r.jiraItemsToTasks(result.Items, trackerUrl)
+	tasks := r.jiraItemsToTasks(result.Items, trackerUrl, issueTypes)
 	for i := range tasks {
 		// The parent comes straight from the payload here, so the epic-walking
 		// pass the acli path needs is not run at all.
@@ -1252,6 +1291,7 @@ func (r *Runner) syncFromJiraREST(client *JiraRESTClient, projectKey string, tra
 		if values, ok := result.Fields[tasks[i].Key]; ok {
 			tasks[i].Sprint = values.Sprint
 			tasks[i].Team = values.Team
+			tasks[i].TeamID = values.TeamID
 		}
 	}
 	return tasks, nil
@@ -1290,14 +1330,14 @@ func jiraStatusIsClosed(lowerStatusName string) bool {
 
 // jiraItemsToTasks converts Jira work items into board cards. Shared by the
 // REST and the acli read paths, which return the same payload shape.
-func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string) []models.Task {
+func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string, issueTypes []string) []models.Task {
 	var tasks []models.Task
 	for i, item := range items {
 		// Second line of defence: the legacy 'workitem list' fallback above
 		// cannot filter by type, so enforce the allow-list here as well. An
 		// empty type (older payloads) is kept rather than silently dropped.
 		itemType := strings.TrimSpace(item.Fields.IssueType.Name)
-		if itemType != "" && !jiraTypeIsSynced(itemType) {
+		if itemType != "" && !jiraTypeIsSynced(itemType, issueTypes) {
 			continue
 		}
 
@@ -1380,7 +1420,7 @@ func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string) []mo
 	return tasks
 }
 
-func (r *Runner) syncFromJiraCLI(projectKey string, repoPath string, trackerUrl string) ([]models.Task, error) {
+func (r *Runner) syncFromJiraCLI(projectKey string, repoPath string, trackerUrl string, issueTypes []string) ([]models.Task, error) {
 	// A full paginated fetch of a large project (1300+ work items) takes about
 	// 40 seconds, so the old 20s budget silently truncated the import.
 	ctx, cancel := context.WithTimeout(context.Background(), jiraSyncTimeout)
@@ -1402,8 +1442,8 @@ func (r *Runner) syncFromJiraCLI(projectKey string, repoPath string, trackerUrl 
 	//
 	// acli queries work items through JQL. 'search' is the current command;
 	// older builds exposed 'list --project', kept here as a fallback.
-	quoted := make([]string, 0, len(jiraSyncedIssueTypes))
-	for _, t := range jiraSyncedIssueTypes {
+	quoted := make([]string, 0, len(issueTypes))
+	for _, t := range NormalizeIssueTypes(issueTypes) {
 		quoted = append(quoted, fmt.Sprintf("%q", t))
 	}
 	jql := fmt.Sprintf("project = %s AND issuetype IN (%s) ORDER BY updated DESC",
@@ -1437,7 +1477,7 @@ func (r *Runner) syncFromJiraCLI(projectKey string, repoPath string, trackerUrl 
 		return nil, err
 	}
 
-	tasks := r.jiraItemsToTasks(items, trackerUrl)
+	tasks := r.jiraItemsToTasks(items, trackerUrl, issueTypes)
 
 	// Attach the parent (epic, or parent story for a sub-task) as a property of
 	// each task. Best-effort: a failure here leaves tasks without a parent
@@ -1463,9 +1503,10 @@ func (r *Runner) syncFromJiraCLI(projectKey string, repoPath string, trackerUrl 
 	return tasks, nil
 }
 
-// jiraTypeIsSynced reports whether a Jira work item type is imported as a card.
-func jiraTypeIsSynced(issueType string) bool {
-	for _, t := range jiraSyncedIssueTypes {
+// jiraTypeIsSynced reports whether a Jira work item type is imported as a card,
+// against the types the project asked for.
+func jiraTypeIsSynced(issueType string, syncedTypes []string) bool {
+	for _, t := range NormalizeIssueTypes(syncedTypes) {
 		if strings.EqualFold(strings.TrimSpace(issueType), t) {
 			return true
 		}
@@ -1607,10 +1648,21 @@ func (r *Runner) CreateJiraEpic(projectKey string, repoPath string, title string
 
 // CreateJiraEpicWith creates an epic through the REST API when a token is
 // available, and falls back to acli otherwise.
+// jiraRESTRefusalSuffix appends the REST refusal to the acli one. Both paths
+// failing is the interesting case: acli says "création refusée" without ever
+// naming the field, and the REST body is the only place the reason appears.
+func jiraRESTRefusalSuffix(restRefusal string) string {
+	if strings.TrimSpace(restRefusal) == "" {
+		return ""
+	}
+	return fmt.Sprintf(" | refus de l'API REST : %s", restRefusal)
+}
+
 func (r *Runner) CreateJiraEpicWith(settings *models.Settings, trackerURL, projectKey, repoPath, title string, extraFields map[string]string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	restRefusal := ""
 	if client := NewJiraRESTClient(settings, trackerURL); client != nil {
 		key, err := client.CreateIssue(ctx, projectKey, "Epic", title, "", extraFields)
 		if err == nil {
@@ -1622,6 +1674,10 @@ func (r *Runner) CreateJiraEpicWith(settings *models.Settings, trackerURL, proje
 		if strings.Contains(err.Error(), "is required") {
 			return "", err
 		}
+		// Le motif du refus REST est conservé : quand acli échoue à son tour,
+		// son message générique ne dit pas ce que Jira reproche, et c'est ce
+		// motif que l'appelant a besoin de lire dans son activité.
+		restRefusal = err.Error()
 		log.Printf("[jira] création REST de l'épic refusée (%v), repli sur acli", err)
 	}
 
@@ -1642,10 +1698,10 @@ func (r *Runner) CreateJiraEpicWith(settings *models.Settings, trackerURL, proje
 	out, err := r.runCommand(ctx, repoPath, acliPath,
 		"jira", "workitem", "create", "--project", projectKey, "--type", "Epic", "--summary", title, "--json")
 	if err != nil {
-		return "", fmt.Errorf("création de l'épic impossible: %w", err)
+		return "", fmt.Errorf("création de l'épic impossible: %w%s", err, jiraRESTRefusalSuffix(restRefusal))
 	}
 	if failure := jiraCLIFailure(out); failure != "" {
-		return "", fmt.Errorf("création refusée: %s", failure)
+		return "", fmt.Errorf("création refusée: %s%s", failure, jiraRESTRefusalSuffix(restRefusal))
 	}
 
 	var created struct {

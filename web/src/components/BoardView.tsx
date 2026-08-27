@@ -290,13 +290,40 @@ export const BoardView: React.FC = () => {
   const columnStatuses = (columnName: string): string[] =>
     trackerColumns.find(c => c.name === columnName)?.statuses || []
 
-  const tasksForColumn = (col: StatusColumnConfig): Task[] => {
+  /**
+   * Une colonne de tracker est terminale quand tous ses statuts ferment le
+   * ticket. Le nom seul ne suffit pas (une équipe appelle sa dernière colonne
+   * « TO MERGE/DEPLOY »), et les tickets seuls non plus (une colonne vide n'a
+   * rien à dire) : les deux se complètent.
+   */
+  const CLOSED_MARKERS = ['done', 'closed', 'terminé', 'termine', 'fini', 'resolved', 'wontdo', "won't do", 'cancel', 'annul', 'rejet', 'reject']
+
+  const isClosedColumn = (col: StatusColumnConfig): boolean => {
+    if (!useTrackerBoard) return col.id === 'finished'
+    const statuses = columnStatuses(col.title)
+    if (statuses.length === 0) return false
+    const allClosedByName = statuses.every(st => {
+      const lower = st.toLowerCase()
+      return CLOSED_MARKERS.some(marker => lower.includes(marker))
+    })
+    if (allClosedByName) return true
+    const lowered = statuses.map(st => st.toLowerCase())
+    const inColumn = tasks.filter(t => lowered.includes((t.trackerStatus || '').toLowerCase()))
+    return inColumn.length > 0 && inColumn.every(t => t.status === 'finished' || t.status === 'done')
+  }
+
+  const tasksForColumn = (col: StatusColumnConfig, opts?: { includeDone?: boolean }): Task[] => {
     if (!useTrackerBoard) {
       return byPriorityDesc(tasks.filter(t => isTaskInStatusColumn(t.status, col.id)))
     }
     const statuses = columnStatuses(col.title).map(st => st.toLowerCase())
     return byPriorityDesc(
-      tasks.filter(t => statuses.includes((t.trackerStatus || '').toLowerCase()))
+      tasks
+        .filter(t => statuses.includes((t.trackerStatus || '').toLowerCase()))
+        // Masquer les terminés porte sur les tickets : un ticket fermé peut vivre
+        // dans une colonne qui n'est pas terminale, et il n'a alors rien à y
+        // faire. La colonne terminale repliée, elle, garde son décompte complet.
+        .filter(t => opts?.includeDone || !hideDone || (t.status !== 'finished' && t.status !== 'done'))
     )
   }
 
@@ -372,26 +399,28 @@ export const BoardView: React.FC = () => {
           <div className="flex items-center p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] shadow-2xs">
             <button
               onClick={() => setBoardGrouping('workflow')}
-              className={`p-1.5 rounded-md transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
                 boardGrouping === 'workflow'
                   ? 'bg-[var(--accent-color)] text-white shadow-xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]'
               }`}
               title="Workflow Agentic (Labels : new ➔ clarified ➔ specified ➔ implemented ➔ reviewed ➔ finished)"
             >
-              <Sparkles size={15} className={boardGrouping === 'workflow' ? 'text-amber-300' : 'text-amber-400'} />
+              <Sparkles size={15} className={boardGrouping === 'workflow' ? 'text-white' : 'text-amber-400'} />
+              <span className="hidden md:inline">Workflow</span>
             </button>
 
             <button
               onClick={() => setBoardGrouping('status')}
-              className={`p-1.5 rounded-md transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
                 boardGrouping === 'status'
                   ? 'bg-[var(--accent-color)] text-white shadow-xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]'
               }`}
-              title="Board Agile (Statuts : Todo ➔ In Progress ➔ In Review & Testing ➔ Done)"
+              title="Classical status based board from left to right"
             >
-              <Kanban size={15} className={boardGrouping === 'status' ? 'text-cyan-300' : 'text-cyan-400'} />
+              <Kanban size={15} className={boardGrouping === 'status' ? 'text-white' : 'text-cyan-400'} />
+              <span className="hidden md:inline">{t.list.columns.status}</span>
             </button>
           </div>
         </div>
@@ -551,16 +580,16 @@ export const BoardView: React.FC = () => {
           {/* ========================================================= */}
           {boardGrouping === 'status' &&
             effectiveStatusColumns.map(col => {
-              const colTasks = tasksForColumn(col)
+              const colTasks = tasksForColumn(col, { includeDone: hideDone && isClosedColumn(col) })
               const isOver = dragOverColumn === col.id
               const onDropColumn = useTrackerBoard
                 ? (e: React.DragEvent) => handleDropTrackerColumn(e, col.title)
                 : (e: React.DragEvent) => handleDropStatus(e, col.id)
 
-              // Collapsed Done Column when hideDone is enabled. Sur un board de
-              // tracker, les colonnes viennent du projet : aucune n'est « la »
-              // colonne terminée, donc pas de repli automatique.
-              if (!useTrackerBoard && col.id === 'finished' && hideDone) {
+              // Colonne terminale repliée quand « masquer terminé » est actif,
+              // board interne comme board de tracker : ses tickets sont sortis
+              // des autres colonnes, la laisser ouverte et vide n'apprend rien.
+              if (hideDone && isClosedColumn(col)) {
                 return (
                   <div
                     key={col.id}
@@ -573,7 +602,7 @@ export const BoardView: React.FC = () => {
                         ? 'border-emerald-500 ring-2 ring-emerald-500/30 bg-emerald-500/15'
                         : 'border-[var(--border-color)] hover:border-emerald-500/40'
                     }`}
-                    title="Colonne Done masquée - Glissez une tâche ici pour la fermer, ou cliquez pour l'afficher"
+                    title={`Colonne ${col.title} masquée : glissez une tâche ici pour la fermer, ou cliquez pour la rouvrir`}
                   >
                     <div className="flex flex-col items-center gap-1.5">
                       <CheckCircle2 size={18} className="text-emerald-400" />

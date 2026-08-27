@@ -52,6 +52,28 @@ func (d *DB) ListProjectTrackerBoards(projectID string) ([]models.TrackerBoard, 
 	return client.ListBoards(ctx, key)
 }
 
+// ListProjectIssueTypes returns the work item types the project's tracker
+// exposes, for the settings that pick which ones are imported.
+func (d *DB) ListProjectIssueTypes(projectID string) ([]string, error) {
+	client, proj, err := d.jiraRESTClientForProject(projectID)
+	if err != nil {
+		return nil, err
+	}
+	key := jiraProjectKeyFor(proj)
+	if key == "" {
+		if settings, _ := d.GetSettings(); settings != nil {
+			key = settings.JiraProject
+		}
+	}
+	if key == "" {
+		return nil, fmt.Errorf("clé de projet Jira absente de la configuration du projet")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), boardAPITimeout)
+	defer cancel()
+	return client.ListProjectIssueTypes(ctx, key)
+}
+
 // ImportProjectBoardColumns retains a board for the project then refreshes from
 // it. Le bouton « Détecter » et la synchro doivent donner le même résultat, donc
 // les deux passent par la même fusion : elle préserve les statuts affectés à la
@@ -133,18 +155,20 @@ func (d *DB) GetProjectTrackerStatuses(projectID string) ([]string, error) {
 	return out, nil
 }
 
-// MoveTaskToTrackerStatus transitions a ticket to a status named as the tracker
-// spells it, then records it locally. Synchronous: the caller moved the card
-// optimistically and needs to know whether the tracker accepted the move.
-func (d *DB) MoveTaskToTrackerStatus(taskIDOrKey string, statusName string) (*models.Task, error) {
+// MoveTaskToTrackerStatus records the new tracker status locally and queues the
+// transition. The local write comes first so the card stays in the column it was
+// dropped in; the tracker call runs in the activity queue, where a refusal stays
+// readable instead of being lost in an expired request. The returned task is the
+// local state, the returned activity is the transition to follow.
+func (d *DB) MoveTaskToTrackerStatus(taskIDOrKey string, statusName string) (*models.Task, *models.TaskActivity, error) {
 	statusName = strings.TrimSpace(statusName)
 	if statusName == "" {
-		return nil, fmt.Errorf("statut cible manquant")
+		return nil, nil, fmt.Errorf("statut cible manquant")
 	}
 
 	task, err := d.GetTaskByID(taskIDOrKey)
 	if err != nil || task == nil {
-		return nil, fmt.Errorf("tâche non trouvée")
+		return nil, nil, fmt.Errorf("tâche non trouvée")
 	}
 
 	source := task.Source
@@ -154,29 +178,32 @@ func (d *DB) MoveTaskToTrackerStatus(taskIDOrKey string, statusName string) (*mo
 		}
 	}
 	if source != "jira" {
-		return nil, fmt.Errorf("le déplacement par colonne de tracker n'est disponible que sur un ticket Jira")
-	}
-
-	repoPath := d.ResolveTaskRepoPath(task)
-	settings, _ := d.GetSettings()
-	trackerURL := ""
-	if task.ProjectID != "" {
-		if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
-			trackerURL = proj.TrackerUrl
-		}
-	}
-	if err := d.runner.TransitionJiraIssueToStatus(settings, trackerURL, task.Key, statusName, repoPath); err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("le déplacement par colonne de tracker n'est disponible que sur un ticket Jira")
 	}
 
 	d.mu.Lock()
 	_, execErr := d.conn.Exec("UPDATE tasks SET tracker_status = ?, updated_at = ? WHERE id = ?", statusName, time.Now(), task.ID)
 	d.mu.Unlock()
 	if execErr != nil {
-		return nil, execErr
+		return nil, nil, execErr
 	}
 
-	return d.GetTaskByID(task.ID)
+	activity, opErr := d.EnqueueTrackerOp(TrackerOp{
+		Kind:         TrackerOpTransition,
+		ProjectID:    task.ProjectID,
+		TaskID:       task.ID,
+		TaskKey:      task.Key,
+		TargetStatus: statusName,
+	})
+	if opErr != nil {
+		return nil, nil, opErr
+	}
+
+	updated, err := d.GetTaskByID(task.ID)
+	if err != nil {
+		return nil, activity, err
+	}
+	return updated, activity, nil
 }
 
 // SyncProjectBoardColumns refreshes a project's columns from its tracker board,

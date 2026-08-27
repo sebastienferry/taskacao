@@ -1,6 +1,8 @@
 import React from 'react'
-import { Flame, Calendar, Layers, Pin } from 'lucide-react'
+import { Flame, Calendar, Layers, Pin, User, SlidersHorizontal, Check } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { LookupField } from './LookupField'
+import { valueLookup } from '../lib/lookups'
 import type { Priority } from '../types'
 
 /**
@@ -12,6 +14,10 @@ import type { Priority } from '../types'
  * Sprint et Équipe n'apparaissent que si le tracker alimente réellement ces
  * champs, ce que dit l'endpoint des facettes. Un projet local ou GitHub n'affiche
  * donc que la priorité.
+ *
+ * Le filtre par personne se restreint à l'équipe sélectionnée quand il y en a
+ * une, et propose alors ses membres même ceux qui ne portent encore aucun
+ * ticket : c'est ce qui rend une charge vide visible.
  */
 export const TaskFilters: React.FC = () => {
   const {
@@ -22,6 +28,12 @@ export const TaskFilters: React.FC = () => {
     setSprintFilter,
     teamFilter,
     setTeamFilter,
+    assigneeFilter,
+    setAssigneeFilter,
+    trackerStatusFilters,
+    setTrackerStatusFilters,
+    availableAssignees,
+    unassignedFilterValue,
     pinnedOnly,
     setPinnedOnly,
     pinnedTasks,
@@ -37,8 +49,41 @@ export const TaskFilters: React.FC = () => {
     low: { color: 'var(--text-muted)', label: t.priority.low },
   }
 
-  const selectClass =
-    'text-[11px] font-medium bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border-color)] rounded-md px-2 py-1 focus:outline-none focus:border-[var(--accent-color)] cursor-pointer'
+  const [isStatusMenuOpen, setIsStatusMenuOpen] = React.useState(false)
+  const statusMenuRef = React.useRef<HTMLDivElement>(null)
+
+  // Fermeture au clic extérieur : ce menu vit dans une barre d'outils dense.
+  React.useEffect(() => {
+    if (!isStatusMenuOpen) return
+    const onDocClick = (e: MouseEvent) => {
+      if (statusMenuRef.current && !statusMenuRef.current.contains(e.target as Node)) {
+        setIsStatusMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [isStatusMenuOpen])
+
+  // Les valeurs proposées sont celles que le board porte réellement, filtrées en
+  // mémoire : elles arrivent déjà avec les facettes, aucun appel n'est utile.
+  const searchSprintValue = React.useMemo(() => valueLookup(taskFacets.sprints), [taskFacets.sprints])
+  const searchTeamValue = React.useMemo(() => valueLookup(taskFacets.teams), [taskFacets.teams])
+  const searchAssigneeValue = React.useMemo(() => {
+    const base = valueLookup(availableAssignees)
+    return async (query: string) => {
+      const people = await base(query)
+      // « Non assigné » est une valeur de filtre à part entière, et c'est souvent
+      // la plus utile : elle est proposée en tête tant qu'il y a de quoi la
+      // remplir.
+      if (taskFacets.unassignedCount > 0 && (!query.trim() || 'non assigné'.includes(query.trim().toLowerCase()))) {
+        return [
+          { id: unassignedFilterValue, label: 'Non assigné', sublabel: `${taskFacets.unassignedCount} ticket(s)` },
+          ...people,
+        ]
+      }
+      return people
+    }
+  }, [availableAssignees, taskFacets.unassignedCount, unassignedFilterValue])
 
   return (
     <div className="flex items-center gap-2 shrink-0">
@@ -102,37 +147,122 @@ export const TaskFilters: React.FC = () => {
         </div>
       </div>
 
-      {taskFacets.sprints.length > 0 && (
-        <div className="flex items-center gap-1">
-          <Calendar size={12} className={sprintFilter ? 'text-cyan-400' : 'text-[var(--text-muted)]'} />
-          <select
-            value={sprintFilter || ''}
-            onChange={e => setSprintFilter(e.target.value || null)}
-            title="Filtrer par sprint"
-            className={`${selectClass} max-w-[170px]`}
+      {/* Statuts affichés : la même sélection vaut pour le board, la liste et le
+          triage, puisque les trois lisent la même liste de tickets. Vide veut
+          dire « tous », ce qui est l'état par défaut. */}
+      {taskFacets.trackerStatuses.length > 0 && (
+        <div className="relative" ref={statusMenuRef}>
+          <button
+            type="button"
+            onClick={() => setIsStatusMenuOpen(open => !open)}
+            title="Choisir les statuts affichés"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-semibold border cursor-pointer transition-colors"
+            style={{
+              color: trackerStatusFilters.length > 0 ? 'var(--accent-color)' : 'var(--text-secondary)',
+              background: trackerStatusFilters.length > 0 ? 'var(--accent-light)' : 'var(--bg-secondary)',
+              borderColor: trackerStatusFilters.length > 0 ? 'rgb(var(--accent-rgb) / 0.4)' : 'var(--border-color)',
+            }}
           >
-            <option value="">Tous sprints</option>
-            {taskFacets.sprints.map(sprint => (
-              <option key={sprint} value={sprint}>{sprint}</option>
-            ))}
-          </select>
+            <SlidersHorizontal size={11} />
+            {trackerStatusFilters.length > 0
+              ? `${trackerStatusFilters.length} · ${t.list.columns.status}`
+              : t.list.columns.status}
+          </button>
+
+          {isStatusMenuOpen && (
+            <div className="absolute right-0 z-50 mt-1 w-[240px] max-h-[300px] overflow-auto rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-lg p-1">
+              <div className="flex items-center justify-between px-1.5 py-1">
+                <span className="text-[9.5px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
+                  {t.list.columns.status}
+                </span>
+                {trackerStatusFilters.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setTrackerStatusFilters([])}
+                    className="text-[10px] font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                  >
+                    Tous
+                  </button>
+                )}
+              </div>
+              {taskFacets.trackerStatuses.map(status => {
+                const isActive = trackerStatusFilters.includes(status.value)
+                return (
+                  <button
+                    key={status.value}
+                    type="button"
+                    onClick={() =>
+                      setTrackerStatusFilters(
+                        isActive
+                          ? trackerStatusFilters.filter(s => s !== status.value)
+                          : [...trackerStatusFilters, status.value]
+                      )
+                    }
+                    className="w-full flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-[var(--bg-tertiary)] cursor-pointer"
+                  >
+                    <span
+                      className="w-3 h-3 rounded flex items-center justify-center shrink-0"
+                      style={{
+                        background: isActive ? 'var(--accent-color)' : 'transparent',
+                        border: `1px solid ${isActive ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                      }}
+                    >
+                      {isActive && <Check size={8} className="text-white" />}
+                    </span>
+                    <span className="text-[11px] text-[var(--text-primary)] truncate flex-1 text-left">
+                      {status.value}
+                    </span>
+                    <span className="text-[9.5px] font-mono text-[var(--text-muted)]">{status.count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {taskFacets.sprints.length > 0 && (
+        <div className="flex items-center gap-1 w-[190px]">
+          <Calendar size={12} className={sprintFilter ? 'text-cyan-400' : 'text-[var(--text-muted)]'} />
+          <div className="flex-1">
+            <LookupField
+              value={sprintFilter || ''}
+              placeholder="Tous sprints"
+              clearLabel="Tous sprints"
+              onSearch={searchSprintValue}
+              onPick={option => setSprintFilter(option?.id || null)}
+            />
+          </div>
         </div>
       )}
 
       {taskFacets.teams.length > 0 && (
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 w-[200px]">
           <Layers size={12} className={teamFilter ? 'text-violet-400' : 'text-[var(--text-muted)]'} />
-          <select
-            value={teamFilter || ''}
-            onChange={e => setTeamFilter(e.target.value || null)}
-            title="Filtrer par équipe"
-            className={`${selectClass} max-w-[170px]`}
-          >
-            <option value="">Toutes équipes</option>
-            {taskFacets.teams.map(team => (
-              <option key={team} value={team}>{team}</option>
-            ))}
-          </select>
+          <div className="flex-1">
+            <LookupField
+              value={teamFilter || ''}
+              placeholder="Toutes équipes"
+              clearLabel="Toutes équipes"
+              onSearch={searchTeamValue}
+              onPick={option => setTeamFilter(option?.id || null)}
+            />
+          </div>
+        </div>
+      )}
+
+      {(availableAssignees.length > 0 || taskFacets.unassignedCount > 0) && (
+        <div className="flex items-center gap-1 w-[200px]">
+          <User size={12} className={assigneeFilter ? 'text-emerald-400' : 'text-[var(--text-muted)]'} />
+          <div className="flex-1">
+            <LookupField
+              value={assigneeFilter === unassignedFilterValue ? 'Non assigné' : assigneeFilter || ''}
+              placeholder={teamFilter ? `Toute l'équipe` : 'Toutes personnes'}
+              clearLabel={teamFilter ? `Toute l'équipe` : 'Toutes personnes'}
+              onSearch={searchAssigneeValue}
+              onPick={option => setAssigneeFilter(option?.id || null)}
+            />
+          </div>
         </div>
       )}
     </div>

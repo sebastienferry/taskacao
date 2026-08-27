@@ -24,9 +24,11 @@ import {
   Code2,
   Layers,
   Pin,
+  ListChecks,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { TaskFilters } from './TaskFilters'
+import { CurationTable } from './CurationTable'
 import type { Task, Status, Priority } from '../types'
 
 export const ListView: React.FC = () => {
@@ -69,6 +71,28 @@ export const ListView: React.FC = () => {
   const [advancing, setAdvancing] = useState<Record<string, 'step' | 'auto'>>({})
   const [sortAsc, setSortAsc] = useState(false)
   const [groupByStatus, setGroupByStatus] = useState(true)
+  // Mode triage : la même vue, mais orientée « qu'est-ce qui n'est rattaché à
+  // rien », avec les champs éditables dans la ligne. Le choix est mémorisé, sinon
+  // il faut le refaire à chaque retour dans la vue.
+  const [curationMode, setCurationMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('taskacao_list_curation') === '1'
+    } catch {
+      return false
+    }
+  })
+
+  const toggleCuration = () => {
+    setCurationMode(prev => {
+      const next = !prev
+      try {
+        localStorage.setItem('taskacao_list_curation', next ? '1' : '0')
+      } catch {
+        // stockage indisponible : le mode vaut pour cette session
+      }
+      return next
+    })
+  }
 
   const handleSort = (field: typeof sortField) => {
     if (sortField === field) {
@@ -467,7 +491,7 @@ export const ListView: React.FC = () => {
             <span className="text-xs font-semibold text-[var(--text-secondary)]">
               {visibleTasks.length} {visibleTasks.length > 1 ? 'tâches visibles' : 'tâche visible'}
             </span>
-            <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-primary)] transition-colors">
+            <label className={`flex items-center gap-1.5 text-xs text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-primary)] transition-colors ${curationMode ? 'hidden' : ''}`}>
               <input
                 type="checkbox"
                 checked={groupByStatus}
@@ -488,6 +512,19 @@ export const ListView: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={toggleCuration}
+              title="Triage : ce qui n'a ni sprint, ni équipe, ni épic, ni assigné, modifiable dans la ligne"
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-semibold border transition-colors cursor-pointer ${
+                curationMode
+                  ? 'bg-[var(--accent-light)] accent-text border-[var(--accent-color)]/40'
+                  : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <ListChecks size={12} />
+              <span>Triage</span>
+            </button>
             <TaskFilters />
             <button
               type="button"
@@ -506,7 +543,9 @@ export const ListView: React.FC = () => {
           </div>
         </div>
 
-        {visibleTasks.length === 0 ? (
+        {curationMode ? (
+          <CurationTable />
+        ) : visibleTasks.length === 0 ? (
           <div className="py-16 text-center text-[var(--text-muted)] space-y-3">
             <Clock size={32} className="mx-auto opacity-40" />
             <p className="text-sm font-medium">{t.list.empty}</p>

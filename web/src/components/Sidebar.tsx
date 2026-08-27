@@ -16,8 +16,8 @@ import {
   ChevronDown,
   ShieldCheck,
   User,
+  Users,
   Layers,
-  RotateCcw,
   RefreshCw,
   Folder,
   Terminal,
@@ -52,9 +52,66 @@ const renderProjectIcon = (iconName: string, size = 15, className = '') => {
   }
 }
 
+/**
+ * Section repliable de la barre latérale. Le repli est mémorisé par section : la
+ * barre porte cinq listes, et personne ne les regarde toutes en même temps.
+ */
+const SidebarSection: React.FC<{
+  id: string
+  title: string
+  collapsedBar: boolean
+  children: React.ReactNode
+  action?: React.ReactNode
+}> = ({ id, title, collapsedBar, children, action }) => {
+  const [isOpen, setIsOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(`taskacao_sidebar_section_${id}`) !== 'closed'
+    } catch {
+      return true
+    }
+  })
+
+  const toggle = () => {
+    setIsOpen(prev => {
+      const next = !prev
+      try {
+        localStorage.setItem(`taskacao_sidebar_section_${id}`, next ? 'open' : 'closed')
+      } catch {
+        // stockage indisponible : le repli vaut pour cette session
+      }
+      return next
+    })
+  }
+
+  // Barre repliée : les titres disparaissent déjà, replier n'aurait plus de sens.
+  if (collapsedBar) {
+    return <div>{children}</div>
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 px-2 pb-1">
+        <button
+          type="button"
+          onClick={toggle}
+          className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+          title={isOpen ? `Replier ${title}` : `Déplier ${title}`}
+        >
+          <ChevronDown
+            size={11}
+            className={`transition-transform ${isOpen ? '' : '-rotate-90'}`}
+          />
+          {title}
+        </button>
+        {action && <span className="ml-auto">{action}</span>}
+      </div>
+      {isOpen && children}
+    </div>
+  )
+}
+
 export const Sidebar: React.FC = () => {
   const {
-    tasks,
     projects,
     selectedProjectId,
     setSelectedProjectId,
@@ -83,9 +140,14 @@ export const Sidebar: React.FC = () => {
     setSidebarCollapsed,
     setIsProfileOpen,
     isSyncing,
-    reseedDemo,
     settings,
     availableLabels,
+    teams,
+    tasks,
+    taskFacets,
+    boardGrouping,
+    trackerStatusFilters,
+    setTrackerStatusFilters,
     t,
   } = useApp()
 
@@ -102,24 +164,62 @@ export const Sidebar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const counts: Record<string, number> = {
-    all: tasks.length,
-    to_clarify: tasks.filter(t => t.status === 'to_clarify' || t.status === 'backlog').length,
-    to_specify: tasks.filter(t => t.status === 'to_specify' || t.status === 'specified').length,
-    to_implement: tasks.filter(t => t.status === 'to_implement' || t.status === 'in_progress').length,
-    to_test: tasks.filter(t => t.status === 'to_test' || t.status === 'to_validate').length,
-    to_close: tasks.filter(t => t.status === 'to_close').length,
-    finished: tasks.filter(t => t.status === 'finished' || t.status === 'done').length,
-  }
+  /**
+   * Les compteurs viennent des facettes du serveur, qui ignorent les filtres et
+   * ne connaissent que le projet. Les calculer sur la liste affichée les faisait
+   * fondre à mesure qu'on filtrait, jusqu'à zéro en croisant deux filtres, et un
+   * compteur de filtre qui compte le résultat du filtre ne sert à rien.
+   */
+  const facetCount = (values: { value: string; count: number }[], ...keys: string[]): number =>
+    values.filter(v => keys.includes(v.value)).reduce((sum, v) => sum + v.count, 0)
+
+  /**
+   * Les facettes peuvent manquer : serveur d'une version antérieure, appel en
+   * échec, ou premier rendu avant leur arrivée. Dans ce cas les compteurs se
+   * calculent sur la liste affichée, comme avant. C'est moins juste dès qu'un
+   * filtre est posé, mais un compteur approximatif vaut mieux qu'un zéro
+   * partout.
+   */
+  const hasStatusFacets = taskFacets.statuses.length > 0
+  const hasSourceFacets = taskFacets.sources.length > 0
+  const totalCount = taskFacets.total || tasks.length
+
+  const counts: Record<string, number> = hasStatusFacets
+    ? {
+        all: totalCount,
+        to_clarify: facetCount(taskFacets.statuses, 'to_clarify', 'backlog'),
+        to_specify: facetCount(taskFacets.statuses, 'to_specify', 'specified'),
+        to_implement: facetCount(taskFacets.statuses, 'to_implement', 'in_progress'),
+        to_test: facetCount(taskFacets.statuses, 'to_test', 'to_validate'),
+        to_close: facetCount(taskFacets.statuses, 'to_close'),
+        finished: facetCount(taskFacets.statuses, 'finished', 'done'),
+      }
+    : {
+        all: tasks.length,
+        to_clarify: tasks.filter(t => t.status === 'to_clarify' || t.status === 'backlog').length,
+        to_specify: tasks.filter(t => t.status === 'to_specify' || t.status === 'specified').length,
+        to_implement: tasks.filter(t => t.status === 'to_implement' || t.status === 'in_progress').length,
+        to_test: tasks.filter(t => t.status === 'to_test' || t.status === 'to_validate').length,
+        to_close: tasks.filter(t => t.status === 'to_close').length,
+        finished: tasks.filter(t => t.status === 'finished' || t.status === 'done').length,
+      }
 
   // Tracker origin counts, used by the source filter below the quick filters.
-  const sourceCounts: Record<'all' | TaskSource, number> = {
-    all: tasks.length,
-    linear: tasks.filter(t => t.source === 'linear').length,
-    github: tasks.filter(t => t.source === 'github').length,
-    jira: tasks.filter(t => t.source === 'jira').length,
-    local: tasks.filter(t => !t.source || t.source === 'local').length,
-  }
+  const sourceCounts: Record<'all' | TaskSource, number> = hasSourceFacets
+    ? {
+        all: totalCount,
+        linear: facetCount(taskFacets.sources, 'linear'),
+        github: facetCount(taskFacets.sources, 'github'),
+        jira: facetCount(taskFacets.sources, 'jira'),
+        local: facetCount(taskFacets.sources, 'local'),
+      }
+    : {
+        all: tasks.length,
+        linear: tasks.filter(t => t.source === 'linear').length,
+        github: tasks.filter(t => t.source === 'github').length,
+        jira: tasks.filter(t => t.source === 'jira').length,
+        local: tasks.filter(t => !t.source || t.source === 'local').length,
+      }
 
   const sourceItems: { id: 'all' | TaskSource; label: string; icon: string; color: string }[] = [
     { id: 'all', label: t.nav.allSources, icon: '◎', color: 'text-slate-400' },
@@ -140,13 +240,39 @@ export const Sidebar: React.FC = () => {
   ]
 
   const isMyTasksActive = assigneeFilter === settings.userName
-  const isUrgentActive = priorityFilter === 'urgent' || priorityFilter === 'high'
+
+  /**
+   * La barre suit le mode du board : en mode « statuts », les étapes du workflow
+   * agentique n'ont pas cours à l'écran, ce sont les colonnes du tracker qui
+   * découpent le travail. Le filtre posé est celui des statuts, le même que la
+   * barre d'outils des vues.
+   */
+  const showTrackerStatuses = boardGrouping === 'status' && (currentProject?.trackerColumns || []).length > 0
+
+  const trackerColumnItems = React.useMemo(() => {
+    const columns = (currentProject?.trackerColumns || []).filter(col => !col.hidden)
+    return columns.map(col => {
+      const statuses = col.statuses || []
+      const lowered = statuses.map(st => st.toLowerCase())
+      const fromFacets = taskFacets.trackerStatuses
+        .filter(st => lowered.includes(st.value.toLowerCase()))
+        .reduce((sum, st) => sum + st.count, 0)
+      return {
+        name: col.name,
+        statuses,
+        count:
+          taskFacets.trackerStatuses.length > 0
+            ? fromFacets
+            : tasks.filter(t => lowered.includes((t.trackerStatus || '').toLowerCase())).length,
+      }
+    })
+  }, [currentProject?.trackerColumns, taskFacets.trackerStatuses, tasks])
 
   return (
     <aside
       className={`relative flex flex-col border-r transition-all duration-300 ease-in-out select-none ${
         sidebarCollapsed ? 'w-16' : 'w-64'
-      } h-screen z-20 shrink-0 border-[var(--sidebar-border)] shadow-xs`}
+      } h-full z-20 shrink-0 border-[var(--sidebar-border)] shadow-xs`}
       style={{
         background: 'linear-gradient(180deg, var(--sidebar-accent-tint) 0%, var(--bg-secondary) 85%)',
       }}
@@ -343,13 +469,24 @@ export const Sidebar: React.FC = () => {
       {/* Navigation & Filters Container */}
       <div className="flex-1 overflow-y-auto px-2.5 py-3 space-y-4">
         {/* Quick Views */}
-        <div>
-          {!sidebarCollapsed && (
-            <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-              Vues
-            </div>
-          )}
+        <SidebarSection id="views" title="Vues" collapsedBar={sidebarCollapsed}>
           <div className="space-y-0.5">
+            {/* Mes tâches en tête : c'est le premier geste d'une journée, avant
+                même de choisir une vue. */}
+            <button
+              onClick={() => setAssigneeFilter(isMyTasksActive ? null : settings.userName)}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                isMyTasksActive
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={`${t.nav.myTasks} (${settings.userName || 'nom non renseigné dans le profil'})`}
+            >
+              <div className="flex items-center gap-2.5 truncate">
+                <User size={15} className="text-cyan-400 shrink-0" />
+                {!sidebarCollapsed && <span className="truncate">{t.nav.myTasks}</span>}
+              </div>
+            </button>
             <button
               onClick={() => setActiveView('board')}
               className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -464,16 +601,76 @@ export const Sidebar: React.FC = () => {
                 </span>
               )}
             </button>
+            {/* Équipes : la charge par personne, quand les tickets portent une équipe */}
+            {teams.length > 0 && (
+              <button
+                onClick={() => setActiveView('team')}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                  activeView === 'team'
+                    ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                }`}
+                title="Charge de l'équipe, personne par personne"
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <Users size={15} className="shrink-0 text-violet-400" />
+                  {!sidebarCollapsed && <span className="truncate">Équipes</span>}
+                </span>
+                {!sidebarCollapsed && (
+                  <span className="text-[9px] font-bold px-1.5 rounded text-violet-300 bg-violet-400/10 border border-violet-400/30">
+                    {teams.length}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
-        </div>
+        </SidebarSection>
 
-        {/* Workflow Stages */}
-        <div>
-          {!sidebarCollapsed && (
-            <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-              Agentic Workflow
+        {/* Étapes ou statuts : la barre suit le mode du board, sinon elle propose
+            un découpage que l'écran de droite n'utilise pas. */}
+        <SidebarSection
+          id="stages"
+          title={showTrackerStatuses ? t.list.columns.status : 'Agentic Workflow'}
+          collapsedBar={sidebarCollapsed}
+        >
+          {showTrackerStatuses ? (
+            <div className="space-y-0.5">
+              {trackerColumnItems.map(item => {
+                const isActive =
+                  item.statuses.length > 0 &&
+                  item.statuses.every(st => trackerStatusFilters.includes(st)) &&
+                  trackerStatusFilters.length === item.statuses.length
+                return (
+                  <button
+                    key={item.name}
+                    onClick={() => setTrackerStatusFilters(isActive ? [] : item.statuses)}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                      isActive
+                        ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                    }`}
+                    title={`${item.name} : ${item.statuses.join(', ')}`}
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <Columns size={14} className="shrink-0 text-cyan-400" />
+                      {!sidebarCollapsed && <span className="truncate">{item.name}</span>}
+                    </div>
+                    {!sidebarCollapsed && (
+                      <span
+                        className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                          isActive
+                            ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                            : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
+                        }`}
+                      >
+                        {item.count}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
             </div>
-          )}
+          ) : (
           <div className="space-y-0.5">
             {workflowItems.map(item => {
               const isActive = statusFilter === item.status && !assigneeFilter && !priorityFilter && !labelFilter
@@ -521,46 +718,8 @@ export const Sidebar: React.FC = () => {
               )
             })}
           </div>
-        </div>
-
-        {/* Quick Filters */}
-        <div>
-          {!sidebarCollapsed && (
-            <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-              {t.nav.filters}
-            </div>
           )}
-          <div className="space-y-0.5">
-            <button
-              onClick={() => setAssigneeFilter(isMyTasksActive ? null : settings.userName)}
-              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                isMyTasksActive
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
-              }`}
-              title={t.nav.myTasks}
-            >
-              <div className="flex items-center gap-2.5 truncate">
-                <User size={15} className="text-cyan-400 shrink-0" />
-                {!sidebarCollapsed && <span className="truncate">{t.nav.myTasks}</span>}
-              </div>
-            </button>
-            <button
-              onClick={() => setPriorityFilter(isUrgentActive ? null : 'urgent')}
-              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                isUrgentActive
-                  ? 'bg-rose-500/20 text-rose-300 font-bold shadow-xs border-l-2 border-rose-500 pl-2'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
-              }`}
-              title={t.nav.urgentHigh}
-            >
-              <div className="flex items-center gap-2.5 truncate">
-                <Flame size={15} className="text-rose-400 shrink-0" />
-                {!sidebarCollapsed && <span className="truncate">{t.nav.urgentHigh}</span>}
-              </div>
-          </button>
-          </div>
-        </div>
+        </SidebarSection>
 
         {/* Tracker Origin Filter (Linear / GitHub / Jira / Local) */}
         <div>
@@ -726,16 +885,6 @@ export const Sidebar: React.FC = () => {
           )}
         </button>
 
-        {!sidebarCollapsed && (
-          <button
-            onClick={() => reseedDemo()}
-            className="w-full flex items-center gap-2 px-2.5 py-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] rounded-lg transition-colors cursor-pointer"
-            title={t.nav.reseedDemo}
-          >
-            <RotateCcw size={11} />
-            <span className="truncate">{t.nav.reseedDemo}</span>
-          </button>
-        )}
       </div>
     </aside>
   )

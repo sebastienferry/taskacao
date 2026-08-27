@@ -86,6 +86,8 @@ export interface TaskComment {
 }
 
 export interface TrackerSprint {
+  /** Identifiant du sprint côté tracker : l'API Agile ne déplace que par id. */
+  id?: string
   name: string
   /** « active », « future » ou « closed » : ce qui sépare NOW de NEXT. */
   state: string
@@ -152,6 +154,17 @@ export interface Project {
   trackerColumns?: TrackerColumn[]
   /** Sprints du board avec leur état, rafraîchis par la synchro. */
   sprints?: TrackerSprint[]
+  /**
+   * Types de tickets importés depuis le tracker. Vide vaut « les types par
+   * défaut » (Task et Story). Un projet dont le tracker n'expose que son propre
+   * type n'importe rien sans ce réglage.
+   */
+  issueTypes?: string[]
+  /**
+   * Le projet tient dans un seul dépôt. La branche courante, son sélecteur et la
+   * branche affichée sur une carte n'ont de sens que dans ce cas.
+   */
+  monoRepo?: boolean
   /** Étape du workflow agentique -> colonnes concernées (une ou plusieurs). */
   stageColumns?: Record<string, string[]>
   gitRemoteUrl?: string
@@ -176,6 +189,51 @@ export interface Project {
   specFramework?: SpecFramework
   createdAt: string
   updatedAt: string
+}
+
+/**
+ * Équipe du tracker telle que les tickets la portent, avec les personnes qu'elle
+ * contient. Les membres viennent de l'API des équipes Atlassian, lus à chaque
+ * synchronisation Jira.
+ */
+export interface TrackerTeam {
+  id: string
+  name: string
+  memberCount: number
+  members?: TeamMember[]
+  /** Dernière lecture des membres depuis le tracker, ISO 8601. */
+  syncedAt?: string
+  /** Nombre de tickets synchronisés qui portent cette équipe. */
+  taskCount: number
+}
+
+/** Une personne d'une équipe. accountId est ce par quoi Jira assigne. */
+export interface TeamMember {
+  teamId: string
+  teamName?: string
+  accountId: string
+  displayName: string
+  email?: string
+  avatarUrl?: string
+  active: boolean
+}
+
+/** Charge d'un membre : ses tickets dans l'équipe consultée. */
+export interface TeamMemberLoad {
+  member: TeamMember
+  tasks: Task[]
+  byStatus: Record<string, number>
+  total: number
+}
+
+/** Charge d'une équipe, par personne. */
+export interface TeamWorkload {
+  team: TrackerTeam
+  members: TeamMemberLoad[]
+  /** Tickets de l'équipe que personne ne porte. */
+  unassigned: Task[]
+  /** Tickets de l'équipe assignés à quelqu'un qui n'en est pas membre. */
+  outside: TeamMemberLoad[]
 }
 
 export interface DetectedStatus {
@@ -207,8 +265,10 @@ export interface Task {
   trackerStatus?: string
   /** Sprint / itération du tracker (champ Sprint côté Jira). */
   sprint?: string
-  /** Équipe du tracker (champ Team côté Jira). */
+  /** Équipe du tracker (champ Team côté Jira). Facultative sur un ticket. */
   team?: string
+  /** Identifiant de l'équipe Atlassian : c'est lui qui donne accès à ses membres. */
+  teamId?: string
   source?: TaskSource
   externalUrl?: string
   /** Tracker work item type. Only "Task" and "Story" are imported. */
@@ -306,7 +366,7 @@ export type Language = 'fr' | 'en'
 
 export type Density = 'compact' | 'standard' | 'comfortable'
 
-export type ViewMode = 'board' | 'list' | 'roadmap' | 'activities' | 'sync' | 'digest' | 'skills'
+export type ViewMode = 'board' | 'list' | 'roadmap' | 'activities' | 'sync' | 'digest' | 'skills' | 'team'
 
 export type BoardGroupingMode = 'workflow' | 'status'
 
@@ -366,6 +426,20 @@ export interface UserSettings {
   accentColor: AccentColor
   language: Language
   density: Density
+  /**
+   * Zoom de l'interface en pourcentage (90, 100, 112, 125). La densité ne bouge
+   * que la taille de police racine, ce qui laisse intactes toutes les tailles
+   * fixées en pixels : l'échelle, elle, zoome toute l'interface.
+   */
+  uiScale?: number
+  /**
+   * Boucle de synchronisation de fond. Elle ne relit que ce qui a changé depuis
+   * sa passe précédente : une passe complète coûte une requête par centaine de
+   * tickets, une passe incrémentale une seule requête.
+   */
+  autoSyncEnabled?: boolean
+  /** Période de cette boucle, en secondes. Plancher à 30. */
+  autoSyncIntervalSec?: number
   defaultView: ViewMode
   detailMode: DetailMode
   userName: string
@@ -437,6 +511,25 @@ export interface DigestStats {
   doneLast7Days: number
   openDateUnknown: number
   closedDateUnknown: number
+}
+
+/** Une valeur filtrable et le nombre de tickets derrière elle. */
+export interface TaskFacetValue {
+  value: string
+  count: number
+}
+
+/** État de la boucle de synchronisation de fond. */
+export interface AutoSyncState {
+  enabled: boolean
+  intervalSec: number
+  running: boolean
+  lastRunAt?: string
+  lastError?: string
+  lastImported: number
+  passes: number
+  imported: number
+  backoffUntil?: string
 }
 
 export type DigestAIStatus = 'none' | 'queued' | 'running' | 'completed' | 'failed'
