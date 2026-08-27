@@ -548,17 +548,20 @@ type Settings struct {
 	// JiraAPIToken never leaves the server: the API responses carry the two
 	// flags below instead, so the token cannot be read back by anything that
 	// can reach the settings endpoint.
-	JiraAPIToken        string    `json:"jiraApiToken,omitempty"`
-	JiraAPITokenSet     bool      `json:"jiraApiTokenSet"`
-	JiraAPITokenFromEnv bool      `json:"jiraApiTokenFromEnv"` // e.g. "https://acme.atlassian.net"
-	PromptClarify       string    `json:"promptClarify"`
-	PromptSpecify       string    `json:"promptSpecify"`
-	PromptImplement     string    `json:"promptImplement"`
-	PromptCreatePR      string    `json:"promptCreatePr"`
-	PromptPick          string    `json:"promptPick"`
-	EditorCommand       string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
-	SpecFramework       string    `json:"specFramework"` // "speckit", "openspec"
-	UpdatedAt           time.Time `json:"updatedAt"`
+	JiraAPIToken        string `json:"jiraApiToken,omitempty"`
+	JiraAPITokenSet     bool   `json:"jiraApiTokenSet"`
+	JiraAPITokenFromEnv bool   `json:"jiraApiTokenFromEnv"` // e.g. "https://acme.atlassian.net"
+	// PromptDigestAgenda replaces the built-in agenda prompt of the daily digest.
+	// Empty keeps the default. Placeholders: {project}, {date}.
+	PromptDigestAgenda string    `json:"promptDigestAgenda"`
+	PromptClarify      string    `json:"promptClarify"`
+	PromptSpecify      string    `json:"promptSpecify"`
+	PromptImplement    string    `json:"promptImplement"`
+	PromptCreatePR     string    `json:"promptCreatePr"`
+	PromptPick         string    `json:"promptPick"`
+	EditorCommand      string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
+	SpecFramework      string    `json:"specFramework"` // "speckit", "openspec"
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 // SpecFrameworkInstallRequest asks Taskacao to bootstrap a Spec-Driven Design

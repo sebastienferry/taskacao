@@ -16,6 +16,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { MarkdownView } from './Markdown'
 import type { DigestTaskRef } from '../types'
 
 /** Today in the local timezone, as YYYY-MM-DD. */
@@ -160,6 +161,7 @@ export const DigestView: React.FC = () => {
     currentProject,
     isDigestAvailable,
     addToast,
+    t,
   } = useApp()
 
   const [date, setDate] = useState<string>(todayISO())
@@ -264,10 +266,10 @@ export const DigestView: React.FC = () => {
             onClick={() => void generateDailyDigest({ date, assignee, enrich: true })}
             disabled={isDigestEnriching || isDigestLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white accent-bg shadow-xs hover:opacity-90 active:scale-95 disabled:opacity-50 cursor-pointer"
-            title="Demander l'agenda du jour à l'agent IA du projet"
+            title="Demander le brief du jour à l'agent du projet : réunions, annonces, tout ce que Taskacao ne voit pas dans les tickets"
           >
             {isDigestEnriching ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-            <span>{isDigestEnriching ? 'Agent en cours…' : 'Récupérer l\'agenda'}</span>
+            <span>{isDigestEnriching ? t.nav.dailyBriefRunning : t.nav.dailyBrief}</span>
           </button>
           <button
             type="button"
@@ -332,16 +334,14 @@ export const DigestView: React.FC = () => {
         </header>
         <div className="p-4">
           {dailyDigest?.agenda ? (
-            <pre className="text-[11px] text-[var(--text-secondary)] whitespace-pre-wrap font-sans leading-relaxed">
-              {dailyDigest.agenda}
-            </pre>
+            <MarkdownView compact>{dailyDigest.agenda}</MarkdownView>
           ) : (
             <div className="flex items-start gap-2 text-[11px] text-[var(--text-muted)] leading-relaxed">
               <Info size={13} className="shrink-0 mt-0.5 text-amber-400" />
               <span>
                 {dailyDigest?.aiStatus === 'failed'
                   ? `Agenda indisponible : ${dailyDigest.aiError}`
-                  : "Taskacao ne voit pas votre calendrier. Lancez « Récupérer l'agenda » pour que l'agent IA du projet remonte les réunions du jour avec ses propres connecteurs."}
+                  : `Taskacao ne voit pas votre calendrier. Lancez « ${t.nav.dailyBrief} » pour que l'agent du projet remonte les réunions du jour avec ses propres connecteurs.`}
               </span>
             </div>
           )}

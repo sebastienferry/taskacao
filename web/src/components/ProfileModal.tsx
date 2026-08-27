@@ -16,6 +16,7 @@ import {
   Terminal,
   FileCode,
   HelpCircle,
+  CalendarDays,
   Flame,
   GitPullRequest,
   Info,
@@ -72,6 +73,7 @@ export const ProfileModal: React.FC = () => {
   const [autoSyncIntervalSec, setAutoSyncIntervalSec] = useState(60)
 
   // Skill Prompts
+  const [promptDigestAgenda, setPromptDigestAgenda] = useState(settings.promptDigestAgenda || '')
   const [promptClarify, setPromptClarify] = useState(settings.promptClarify || '')
   const [promptSpecify, setPromptSpecify] = useState(settings.promptSpecify || '')
   const [promptImplement, setPromptImplement] = useState(settings.promptImplement || '')
@@ -95,6 +97,7 @@ export const ProfileModal: React.FC = () => {
       setJiraApiToken('')
       setAutoSyncEnabled(Boolean(settings.autoSyncEnabled))
       setAutoSyncIntervalSec(settings.autoSyncIntervalSec || 60)
+      setPromptDigestAgenda(settings.promptDigestAgenda || '')
       setPromptClarify(settings.promptClarify || '')
       setPromptSpecify(settings.promptSpecify || '')
       setPromptImplement(settings.promptImplement || '')
@@ -148,6 +151,7 @@ export const ProfileModal: React.FC = () => {
       jiraApiToken: jiraApiToken.trim(),
       autoSyncEnabled,
       autoSyncIntervalSec,
+      promptDigestAgenda: promptDigestAgenda.trim(),
       promptClarify: promptClarify.trim(),
       promptSpecify: promptSpecify.trim(),
       promptImplement: promptImplement.trim(),
@@ -733,6 +737,33 @@ export const ProfileModal: React.FC = () => {
             <div className="space-y-5 animate-in fade-in duration-150">
               <div className="text-[11px] text-[var(--text-muted)] leading-relaxed">
                 Personnalisez les invites (prompts) envoyées au CLI Agentic pour chaque étape du workflow. Si laissé vide, les invites par défaut sont utilisées.
+              </div>
+
+              {/* Digest Agenda Prompt : la seule partie du digest qui passe par
+                  l'agent, les autres sections étant calculées sur les tickets. */}
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-bold text-[var(--text-primary)] flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-emerald-400">
+                    <CalendarDays size={13} />
+                    <span>Prompt de l'agenda du Daily Digest</span>
+                  </span>
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                    Marqueurs : {'{project}'} {'{date}'}
+                  </span>
+                </label>
+                <textarea
+                  value={promptDigestAgenda}
+                  onChange={e => setPromptDigestAgenda(e.target.value)}
+                  rows={3}
+                  placeholder="/daily-brief {date}"
+                  className="w-full p-2.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-emerald-500 transition-all resize-y"
+                />
+                <span className="text-[10px] text-[var(--text-muted)] block">
+                  Vide garde le prompt d'origine, qui demande un tableau des réunions et interdit
+                  d'inventer un agenda. Une commande de votre agent fait aussi l'affaire, par exemple
+                  <code className="text-cyan-400"> /daily-brief {'{date}'}</code> : c'est ce texte,
+                  marqueurs substitués, qui lui est envoyé tel quel.
+                </span>
               </div>
 
               {/* Clarify Prompt */}

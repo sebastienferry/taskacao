@@ -471,8 +471,26 @@ export const Sidebar: React.FC = () => {
         {/* Quick Views */}
         <SidebarSection id="views" title="Vues" collapsedBar={sidebarCollapsed}>
           <div className="space-y-0.5">
-            {/* Mes tâches en tête : c'est le premier geste d'une journée, avant
-                même de choisir une vue. */}
+            {/* Le digest ouvre la journée : réunions, ce qui traîne, ce qui
+                ferme. Il est en tête parce que c'est par là qu'on commence. */}
+            {isDigestAvailable && (
+            <button
+              onClick={() => setActiveView('digest')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'digest'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t.nav.digest}
+            >
+              <div className="flex items-center gap-2.5 min-w-0 truncate">
+                <CalendarDays size={15} className="shrink-0 text-emerald-400" />
+                {!sidebarCollapsed && <span className="truncate">{t.nav.digest}</span>}
+              </div>
+            </button>
+            )}
+
+            {/* Puis « Mes tâches » : ce qui m'attend, avant de choisir une vue. */}
             <button
               onClick={() => setAssigneeFilter(isMyTasksActive ? null : settings.userName)}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -565,22 +583,6 @@ export const Sidebar: React.FC = () => {
                 {!sidebarCollapsed && <span className="truncate">{t.nav.sync || "Synchronisation"}</span>}
               </div>
             </button>
-            {isDigestAvailable && (
-            <button
-              onClick={() => setActiveView('digest')}
-              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                activeView === 'digest'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
-              }`}
-              title={t.nav.digest}
-            >
-              <div className="flex items-center gap-2.5 min-w-0 truncate">
-                <CalendarDays size={15} className="shrink-0 text-emerald-400" />
-                {!sidebarCollapsed && <span className="truncate">{t.nav.digest}</span>}
-              </div>
-            </button>
-            )}
             {/* Roadmap : les épics par horizon */}
             <button
               onClick={() => setActiveView('roadmap')}

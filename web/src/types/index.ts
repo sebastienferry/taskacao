@@ -464,6 +464,11 @@ export interface UserSettings {
   jiraApiTokenSet?: boolean
   /** Le jeton vient de TASKACAO_JIRA_API_TOKEN et prime sur la base. */
   jiraApiTokenFromEnv?: boolean
+  /**
+   * Remplace le prompt d'agenda du digest quotidien. Vide garde celui d'origine.
+   * Marqueurs disponibles : {project}, {date}.
+   */
+  promptDigestAgenda?: string
   promptClarify: string
   promptSpecify: string
   promptImplement: string

@@ -129,6 +129,7 @@ func (d *DB) initSchema() error {
 			ui_scale INTEGER NOT NULL DEFAULT 100,
 			auto_sync_enabled INTEGER NOT NULL DEFAULT 0,
 			auto_sync_interval_sec INTEGER NOT NULL DEFAULT 60,
+			prompt_digest_agenda TEXT NOT NULL DEFAULT '',
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`CREATE TABLE IF NOT EXISTS projects (
@@ -300,6 +301,9 @@ func (d *DB) initSchema() error {
 	// périodique au tracker et personne ne doit le découvrir après coup.
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN auto_sync_enabled INTEGER NOT NULL DEFAULT 0;")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN auto_sync_interval_sec INTEGER NOT NULL DEFAULT 60;")
+	// Prompt de l'agenda du digest : vide vaut « celui d'origine », ce qui laisse
+	// les installations existantes inchangées.
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_digest_agenda TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_project TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_url TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_email TEXT NOT NULL DEFAULT '';")
@@ -2289,11 +2293,12 @@ func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, jiraMail, jiraTok, pClar, pSpec, pImpl, pPR, pPick, editCmd, specFw sql.NullString
 	var uiScale sql.NullInt64
 	var autoSyncEnabled, autoSyncInterval sql.NullInt64
+	var promptDigest sql.NullString
 
 	err := d.conn.QueryRow(`
 		SELECT id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar,
 		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token,
-		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, updated_at
+		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
 		&s.ID,
@@ -2326,6 +2331,7 @@ func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 		&uiScale,
 		&autoSyncEnabled,
 		&autoSyncInterval,
+		&promptDigest,
 		&s.UpdatedAt,
 	)
 	if err != nil {
@@ -2339,6 +2345,7 @@ func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 	s.UIScale = NormalizeUIScale(int(uiScale.Int64))
 	s.AutoSyncEnabled = autoSyncEnabled.Int64 == 1
 	s.AutoSyncIntervalSec = NormalizeAutoSyncInterval(int(autoSyncInterval.Int64))
+	s.PromptDigestAgenda = promptDigest.String
 	if aiProv.Valid {
 		s.AIProvider = aiProv.String
 	}
@@ -2652,11 +2659,12 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, jiraMail, jiraTok, pClar, pSpec, pImpl, pPR, pPick, specFw sql.NullString
 	var uiScale sql.NullInt64
 	var autoSyncEnabled, autoSyncInterval sql.NullInt64
+	var promptDigest sql.NullString
 
 	err := d.conn.QueryRow(`
 		SELECT id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar,
 		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token,
-		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, updated_at
+		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
 		&s.ID,
@@ -2689,6 +2697,7 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 		&uiScale,
 		&autoSyncEnabled,
 		&autoSyncInterval,
+		&promptDigest,
 		&s.UpdatedAt,
 	)
 	if err != nil {
@@ -2731,6 +2740,7 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	s.UIScale = NormalizeUIScale(int(uiScale.Int64))
 	s.AutoSyncEnabled = autoSyncEnabled.Int64 == 1
 	s.AutoSyncIntervalSec = NormalizeAutoSyncInterval(int(autoSyncInterval.Int64))
+	s.PromptDigestAgenda = promptDigest.String
 	if aiProv.Valid {
 		s.AIProvider = aiProv.String
 	} else {
@@ -2936,8 +2946,8 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 
 	now := time.Now()
 	_, err := d.conn.Exec(`
-		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			theme = excluded.theme,
 			accent_color = excluded.accent_color,
@@ -2968,8 +2978,9 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 			ui_scale = excluded.ui_scale,
 			auto_sync_enabled = excluded.auto_sync_enabled,
 			auto_sync_interval_sec = excluded.auto_sync_interval_sec,
+			prompt_digest_agenda = excluded.prompt_digest_agenda,
 			updated_at = excluded.updated_at
-	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.JiraProject, s.JiraUrl, s.JiraEmail, s.JiraAPIToken, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, s.SpecFramework, s.UIScale, autoSyncEnabledInt, s.AutoSyncIntervalSec, now)
+	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.JiraProject, s.JiraUrl, s.JiraEmail, s.JiraAPIToken, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, s.SpecFramework, s.UIScale, autoSyncEnabledInt, s.AutoSyncIntervalSec, s.PromptDigestAgenda, now)
 
 	if err != nil {
 		return nil, err

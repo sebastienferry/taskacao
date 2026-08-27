@@ -24,6 +24,7 @@ import {
   Bot
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { MarkdownView } from './Markdown'
 import type { ActivityStatus } from '../types'
 
 export const ActivitiesView: React.FC = () => {
@@ -788,8 +789,19 @@ export const ActivitiesView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Console Output Viewer */}
-                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 shadow-inner font-mono text-xs overflow-x-auto text-slate-200 min-h-[160px] max-h-[450px]">
+                {/* Sortie de l'agent. Le fond console vaut pour les logs bruts ;
+                    en Markdown rendu, il vaut mieux le fond du thème, sur lequel
+                    titres, tableaux et blocs de code se lisent vraiment. Le
+                    bouton « Markdown rendu » existait déjà mais affichait le
+                    texte tel quel : ses classes prose supposaient une extension
+                    Tailwind absente du projet. */}
+                <div
+                  className={`p-4 rounded-2xl border shadow-inner overflow-x-auto min-h-[160px] max-h-[450px] ${
+                    outputViewMode === 'rendered'
+                      ? 'bg-[var(--bg-tertiary)] border-[var(--border-color)]'
+                      : 'bg-slate-950 border-slate-800 font-mono text-xs text-slate-200'
+                  }`}
+                >
                   {selectedActivity.status === 'running' && !selectedActivity.output ? (
                     <div className="flex items-center justify-center py-12 text-slate-400 gap-2">
                       <Loader2 size={16} className="animate-spin text-blue-400" />
@@ -797,9 +809,7 @@ export const ActivitiesView: React.FC = () => {
                     </div>
                   ) : selectedActivity.output ? (
                     outputViewMode === 'rendered' ? (
-                      <div className="prose prose-invert prose-sm max-w-none text-slate-200 leading-relaxed whitespace-pre-wrap">
-                        {selectedActivity.output}
-                      </div>
+                      <MarkdownView>{selectedActivity.output}</MarkdownView>
                     ) : (
                       <pre className="text-[11px] leading-relaxed text-emerald-400 whitespace-pre-wrap">
                         {selectedActivity.output}
