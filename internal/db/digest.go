@@ -182,7 +182,7 @@ func (d *DB) ComputeDailyDigest(projectID string, dateRaw string, assignee strin
 		return nil, fmt.Errorf("le digest quotidien est réservé aux projets de type personnel (projet %s)", proj.Name)
 	}
 
-	tasks, err := d.GetTasks("", "", "", "", proj.ID, "", "", false)
+	tasks, err := d.GetTasks("", "", "", "", proj.ID, "", "", "", nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -573,8 +573,13 @@ func (d *DB) ListDigestDates(projectID string, limit int) ([]string, error) {
 // digestAgendaPrompt is what the project's agent is asked for. It is
 // deliberately narrow: Taskacao already owns the task sections, so the agent is
 // asked only for what it alone can see, and told to say so when it cannot.
-func digestAgendaPrompt(projectName string, date string) string {
-	return fmt.Sprintf(`Tu prépares la section "Agenda du jour" d'un daily brief pour le projet %s, à la date du %s.
+// DefaultDigestAgendaPrompt is used when the settings name none. It is written
+// as a template so a custom prompt uses the same placeholders: {project} and
+// {date}.
+//
+// Someone who already has their own daily brief command puts it here instead,
+// "/daily-brief {date}" for example, and the agent runs that.
+const DefaultDigestAgendaPrompt = `Tu prépares la section "Agenda du jour" d'un daily brief pour le projet {project}, à la date du {date}.
 
 Réponds UNIQUEMENT en Markdown, sans préambule ni conclusion.
 
@@ -585,7 +590,19 @@ Réponds UNIQUEMENT en Markdown, sans préambule ni conclusion.
    "Pas d'annonce notable détectée aujourd'hui."
 
 Si tu n'as pas accès au calendrier, écris exactement : "Agenda indisponible : pas d'accès au
-calendrier depuis cet agent." N'invente aucune réunion.`, projectName, date)
+calendrier depuis cet agent." N'invente aucune réunion.`
+
+// digestAgendaPrompt renders the agenda prompt, custom one first. The
+// substitution is deliberately the same as the skills': a placeholder that is
+// not in the text is simply not replaced, so a one line prompt works.
+func digestAgendaPrompt(projectName string, date string, custom string) string {
+	template := strings.TrimSpace(custom)
+	if template == "" {
+		template = DefaultDigestAgendaPrompt
+	}
+	replaced := strings.ReplaceAll(template, "{project}", projectName)
+	replaced = strings.ReplaceAll(replaced, "{date}", date)
+	return replaced
 }
 
 // EnqueueDigestAgenda runs the agenda pass for a digest and records it as an
@@ -626,7 +643,7 @@ func (d *DB) EnqueueDigestAgenda(projectID string, dateRaw string, assignee stri
 
 	activityID := uuid.New().String()
 	now := time.Now()
-	prompt := digestAgendaPrompt(dg.ProjectName, date)
+	prompt := digestAgendaPrompt(dg.ProjectName, date, settings.PromptDigestAgenda)
 
 	act := models.TaskActivity{
 		ID:        activityID,

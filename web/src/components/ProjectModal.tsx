@@ -135,6 +135,7 @@ export const ProjectModal: React.FC = () => {
     createProject,
     updateProject,
     deleteProject,
+    fetchProjectIssueTypes,
     settings,
     addToast,
     t,
@@ -155,6 +156,8 @@ export const ProjectModal: React.FC = () => {
   const [repoPath, setRepoPath] = useState('')
   const [repoPaths, setRepoPaths] = useState<string[]>([])
   const [useWorktrees, setUseWorktrees] = useState(true)
+  // Mono-dépôt : conditionne tout ce qui parle de « la » branche courante.
+  const [monoRepo, setMonoRepo] = useState(true)
   const [trackerColumns, setTrackerColumns] = useState<TrackerColumn[]>([])
   const [stageColumns, setStageColumns] = useState<Record<string, string[]>>({})
   const [newRepoPathInput, setNewRepoPathInput] = useState('')
@@ -185,6 +188,11 @@ export const ProjectModal: React.FC = () => {
   const [linearTeam, setLinearTeam] = useState('')
   const [githubRepo, setGithubRepo] = useState('')
   const [jiraProject, setJiraProject] = useState('')
+  // Types de tickets importés. Vide vaut « les types par défaut » : c'est ce que
+  // porte un projet qui n'a jamais eu besoin d'y toucher.
+  const [issueTypes, setIssueTypes] = useState<string[]>([])
+  const [availableIssueTypes, setAvailableIssueTypes] = useState<string[]>([])
+  const [isLoadingIssueTypes, setIsLoadingIssueTypes] = useState(false)
   const [stageMapping, setStageMapping] = useState<Record<WorkflowStage, string>>(DEFAULT_STAGE_MAPPING)
   const [customInputMode, setCustomInputMode] = useState<Record<WorkflowStage, boolean>>({
     new: false,
@@ -386,6 +394,7 @@ export const ProjectModal: React.FC = () => {
       setRepoPath(editingProject.repoPath || '')
       setRepoPaths(editingProject.repoPaths || [])
       setUseWorktrees(editingProject.useWorktrees !== false)
+      setMonoRepo(editingProject.monoRepo !== false)
       setTrackerColumns(editingProject.trackerColumns || [])
       setStageColumns(editingProject.stageColumns || {})
       setGitRemoteUrl(editingProject.gitRemoteUrl || '')
@@ -401,6 +410,7 @@ export const ProjectModal: React.FC = () => {
       setLinearTeam(editingProject.linearTeam || '')
       setGithubRepo(editingProject.githubRepo || '')
       setJiraProject(editingProject.jiraProject || '')
+      setIssueTypes(editingProject.issueTypes || [])
       setStageMapping(
         editingProject.stageMapping && Object.keys(editingProject.stageMapping).length > 0
           ? { ...DEFAULT_STAGE_MAPPING, ...editingProject.stageMapping }
@@ -411,6 +421,16 @@ export const ProjectModal: React.FC = () => {
       fetchSkillsStatus(editingProject.id)
       fetchSddStatuses(editingProject.id)
       fetchDetectedStatuses(editingProject.linearTeam, editingProject.issueTracker, editingProject.githubRepo)
+      // Types réellement exposés par le projet Jira : sans eux, le réglage se
+      // ferait à l'aveugle, et c'est justement là que se cache un projet qui ne
+      // ramène rien.
+      if (editingProject.issueTracker === 'jira') {
+        setIsLoadingIssueTypes(true)
+        fetchProjectIssueTypes(editingProject.id).then(list => {
+          setAvailableIssueTypes(list)
+          setIsLoadingIssueTypes(false)
+        })
+      }
     } else {
       setName('')
       setSlug('')
@@ -570,6 +590,7 @@ export const ProjectModal: React.FC = () => {
         repoPath: repoPath.trim(),
         repoPaths,
         useWorktrees,
+        monoRepo,
         trackerColumns,
         stageColumns,
         gitRemoteUrl: gitRemoteUrl.trim(),
@@ -581,6 +602,7 @@ export const ProjectModal: React.FC = () => {
         linearTeam: linearTeam.trim().toUpperCase(),
         githubRepo: computedGithubRepo,
         jiraProject: jiraProject.trim().toUpperCase(),
+        issueTypes,
         stageMapping,
         skillOverrides,
       }
@@ -612,8 +634,8 @@ export const ProjectModal: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150 select-none">
-      <div className="relative w-full max-w-5xl xl:max-w-6xl 2xl:max-w-[1400px] h-[92vh] rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150 select-none">
+      <div className="relative w-full max-w-5xl xl:max-w-6xl 2xl:max-w-[1400px] h-[calc(var(--app-h)*0.92)] rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 shrink-0">
           <div className="flex items-center gap-2.5">
@@ -949,6 +971,38 @@ export const ProjectModal: React.FC = () => {
                     Ajouter
                   </button>
                 </div>
+              </div>
+
+              {/* Un projet réparti sur plusieurs dépôts n'a pas de branche
+                  courante : afficher celle d'un dépôt au hasard trompe plus
+                  qu'elle n'informe. */}
+              <div className="p-3 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="text-xs font-bold text-[var(--text-primary)] block">
+                    Projet mono-dépôt
+                  </span>
+                  <span className="text-[10px] text-[var(--text-muted)] block mt-0.5">
+                    {monoRepo
+                      ? "Le projet tient dans un seul dépôt : la branche courante est affichée dans l'en-tête, avec le sélecteur de branche, et sur les cartes."
+                      : 'Les tickets de ce projet vivent dans plusieurs dépôts : la branche courante et son sélecteur sont masqués, faute de dépôt unique à désigner.'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMonoRepo(v => !v)}
+                  role="switch"
+                  aria-checked={monoRepo}
+                  className={`relative w-10 h-5 rounded-full transition-colors shrink-0 cursor-pointer ${
+                    monoRepo ? 'bg-[var(--accent-color)]' : 'bg-[var(--border-color)]'
+                  }`}
+                  title={monoRepo ? 'Marquer ce projet comme multi-dépôts' : 'Marquer ce projet comme mono-dépôt'}
+                >
+                  <span
+                    className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
+                      monoRepo ? 'left-[22px]' : 'left-0.5'
+                    }`}
+                  />
+                </button>
               </div>
 
               {/* Isolation par worktree : utile quand plusieurs agents
@@ -1305,6 +1359,60 @@ export const ProjectModal: React.FC = () => {
                     </div>
                     <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
                       Passée à <code className="text-cyan-400">acli jira workitem --project</code>. La CLI Atlassian doit être authentifiée (<code className="text-cyan-400">acli jira auth login</code>).
+                    </span>
+                  </div>
+                )}
+
+                {issueTracker === 'jira' && (
+                  <div className="col-span-2">
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                      Types de tickets importés
+                    </label>
+                    {isLoadingIssueTypes ? (
+                      <span className="text-[10px] text-[var(--text-muted)]">Lecture des types du projet…</span>
+                    ) : availableIssueTypes.length === 0 ? (
+                      <span className="text-[10px] text-[var(--text-muted)]">
+                        Types indisponibles : enregistrez le projet avec sa clé Jira, puis rouvrez cette fiche.
+                      </span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {availableIssueTypes.map(type => {
+                          const isDefault = type === 'Task' || type === 'Story'
+                          const isActive = issueTypes.length === 0 ? isDefault : issueTypes.includes(type)
+                          return (
+                            <button
+                              key={type}
+                              type="button"
+                              onClick={() => {
+                                // Le premier clic fige la sélection courante : sans
+                                // cela, décocher « Task » sur un projet resté aux
+                                // valeurs par défaut ne changerait rien.
+                                const current = issueTypes.length === 0
+                                  ? availableIssueTypes.filter(t2 => t2 === 'Task' || t2 === 'Story')
+                                  : issueTypes
+                                setIssueTypes(
+                                  current.includes(type)
+                                    ? current.filter(t2 => t2 !== type)
+                                    : [...current, type]
+                                )
+                              }}
+                              className="px-2 py-1 rounded-lg text-[10.5px] font-semibold border cursor-pointer transition-colors"
+                              style={{
+                                color: isActive ? 'var(--accent-color)' : 'var(--text-secondary)',
+                                background: isActive ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                                borderColor: isActive ? 'rgb(var(--accent-rgb) / 0.4)' : 'var(--border-color)',
+                              }}
+                            >
+                              {type}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                    <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
+                      Rien de sélectionné vaut Task et Story. Un projet dont le tracker n'expose que
+                      son propre type (un type maison, par exemple) n'importe aucun ticket tant
+                      qu'il n'est pas coché ici.
                     </span>
                   </div>
                 )}

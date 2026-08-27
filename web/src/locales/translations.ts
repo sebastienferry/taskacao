@@ -26,6 +26,9 @@ export interface TranslationSchema {
     parents: string
     clearParentFilter: string
     digest: string
+    /** Bouton qui demande le brief du jour à l'agent du projet. */
+    dailyBrief: string
+    dailyBriefRunning: string
     settings: string
     reseedDemo: string
     toggleSidebar: string
@@ -400,6 +403,8 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       parents: 'Epics / Parents',
       clearParentFilter: 'Retirer le filtre parent',
       digest: 'Digest quotidien',
+      dailyBrief: 'Brief du jour',
+      dailyBriefRunning: 'Brief en cours…',
       settings: 'Profil & Préférences',
       reseedDemo: 'Réinitialiser démo',
       toggleSidebar: 'Replier / Déplier le menu',
@@ -772,6 +777,8 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       parents: 'Epics / Parents',
       clearParentFilter: 'Clear parent filter',
       digest: 'Daily digest',
+      dailyBrief: 'Daily brief',
+      dailyBriefRunning: 'Brief running…',
       settings: 'Profile & Preferences',
       reseedDemo: 'Reset Demo Data',
       toggleSidebar: 'Toggle Sidebar',

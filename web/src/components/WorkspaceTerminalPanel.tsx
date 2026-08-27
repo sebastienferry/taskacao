@@ -231,7 +231,7 @@ export const WorkspaceTerminalPanel: React.FC = () => {
     <aside
       className={
         isFullscreen
-          ? 'fixed inset-0 z-50 flex bg-[var(--bg-primary)]'
+          ? 'fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-50 flex bg-[var(--bg-primary)]'
           : 'relative shrink-0 h-full flex bg-[var(--bg-primary)] border-l border-[var(--border-color)]'
       }
       style={isFullscreen ? undefined : { width }}

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,13 +45,18 @@ type SkillJob struct {
 	// l'étape de revue. Porté par le job et non par l'interface : la chaîne doit
 	// survivre à la fermeture de l'onglet.
 	AutoChain bool
+	// Op porte l'écriture tracker à effectuer quand SkillID vaut "tracker_op" :
+	// assignation, rattachement à un épic, découpe d'épic, labels d'horizon.
+	Op *TrackerOp
 }
 
 type DB struct {
-	conn      *sql.DB
-	runner    *runner.Runner
-	mu        sync.RWMutex
-	jobQueue  chan SkillJob
+	conn     *sql.DB
+	runner   *runner.Runner
+	mu       sync.RWMutex
+	jobQueue chan SkillJob
+	// auto porte l'état de la boucle de synchronisation de fond.
+	auto      *autoSync
 	cancelMap map[string]context.CancelFunc
 	cancelMu  sync.Mutex
 	// termRunner, quand il est branché, fait tourner les pas du workflow dans
@@ -120,6 +126,10 @@ func (d *DB) initSchema() error {
 			prompt_create_pr TEXT NOT NULL DEFAULT '',
 			prompt_pick TEXT NOT NULL DEFAULT '',
 			editor_command TEXT NOT NULL DEFAULT 'code',
+			ui_scale INTEGER NOT NULL DEFAULT 100,
+			auto_sync_enabled INTEGER NOT NULL DEFAULT 0,
+			auto_sync_interval_sec INTEGER NOT NULL DEFAULT 60,
+			prompt_digest_agenda TEXT NOT NULL DEFAULT '',
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`CREATE TABLE IF NOT EXISTS projects (
@@ -135,6 +145,8 @@ func (d *DB) initSchema() error {
 			board_id TEXT NOT NULL DEFAULT '',
 			tracker_columns TEXT NOT NULL DEFAULT '[]',
 			sprints TEXT NOT NULL DEFAULT '[]',
+			issue_types TEXT NOT NULL DEFAULT '[]',
+			mono_repo INTEGER NOT NULL DEFAULT 1,
 			stage_columns TEXT NOT NULL DEFAULT '{}',
 			linear_team TEXT NOT NULL DEFAULT '',
 			github_repo TEXT NOT NULL DEFAULT '',
@@ -164,6 +176,7 @@ func (d *DB) initSchema() error {
 			repo_path TEXT NOT NULL DEFAULT '',
 			sprint TEXT NOT NULL DEFAULT '',
 			team TEXT NOT NULL DEFAULT '',
+			team_id TEXT NOT NULL DEFAULT '',
 			tracker_status TEXT NOT NULL DEFAULT '',
 			source TEXT NOT NULL DEFAULT 'local',
 			external_url TEXT,
@@ -209,6 +222,14 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN board_id TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN tracker_columns TEXT NOT NULL DEFAULT '[]';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN sprints TEXT NOT NULL DEFAULT '[]';")
+	// issue_types : les types de tickets qu'un projet importe. Une liste vide vaut
+	// « les types par défaut », ce qui laisse les projets existants inchangés.
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN issue_types TEXT NOT NULL DEFAULT '[]';")
+	// mono_repo : un projet tenu dans un seul dépôt. La branche courante et le
+	// sélecteur de branche n'ont de sens que là ; sur un projet dont les tickets
+	// s'étalent sur plusieurs dépôts, ils montrent la branche d'un dépôt choisi
+	// au hasard. Vrai par défaut, ce qui est le comportement d'avant ce réglage.
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN mono_repo INTEGER NOT NULL DEFAULT 1;")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN stage_columns TEXT NOT NULL DEFAULT '{}';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN ai_provider TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN ai_command_template TEXT NOT NULL DEFAULT '';")
@@ -222,6 +243,11 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN repo_path TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN sprint TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN team TEXT NOT NULL DEFAULT '';")
+	// team_id : le nom d'équipe ne suffit pas pour lire ses membres, l'API des
+	// équipes est indexée par identifiant.
+	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN team_id TEXT NOT NULL DEFAULT '';")
+	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_team ON tasks(team);")
+	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN tracker_status TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_sprint ON tasks(sprint);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'local';")
@@ -270,6 +296,14 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_pick TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN editor_command TEXT NOT NULL DEFAULT 'code';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN spec_framework TEXT NOT NULL DEFAULT 'speckit';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN ui_scale INTEGER NOT NULL DEFAULT 100;")
+	// Boucle de synchronisation de fond : éteinte par défaut, c'est un appel
+	// périodique au tracker et personne ne doit le découvrir après coup.
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN auto_sync_enabled INTEGER NOT NULL DEFAULT 0;")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN auto_sync_interval_sec INTEGER NOT NULL DEFAULT 60;")
+	// Prompt de l'agenda du digest : vide vaut « celui d'origine », ce qui laisse
+	// les installations existantes inchangées.
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN prompt_digest_agenda TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_project TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_url TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN jira_email TEXT NOT NULL DEFAULT '';")
@@ -417,9 +451,9 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 				`, newID, t.UpdatedAt.Format(time.RFC3339))
 			}
 			if _, insErr := d.conn.Exec(`
-				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, team, tracker_status, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), pinnedVal, t.Assignee, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.Sprint, t.Team, t.TrackerStatus, t.CreatedAt, now); insErr != nil {
+				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, team, team_id, tracker_status, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), pinnedVal, t.Assignee, t.AssigneeAvatar, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.Sprint, t.Team, t.TeamID, t.TrackerStatus, t.CreatedAt, now); insErr != nil {
 				// Never swallow this: a silent failure here makes a sync report
 				// "N tickets imported" while the board stays empty.
 				log.Printf("[DB.ImportOrUpdateTasks] insert of %s failed: %v", t.Key, insErr)
@@ -437,19 +471,20 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 			// Update existing task title/desc/status/labels/source
 			if _, updErr := d.conn.Exec(`
 				UPDATE tasks
-				SET title = ?, description = ?, status = ?, priority = ?, labels = ?, pinned = ?, assignee = ?, source = ?, external_url = ?,
+				SET title = ?, description = ?, status = ?, priority = ?, labels = ?, pinned = ?, assignee = ?, assignee_avatar = ?, source = ?, external_url = ?,
 				    issue_type = CASE WHEN ? != '' THEN ? ELSE issue_type END,
 				    parent_key = CASE WHEN ? != '' THEN ? ELSE parent_key END,
 				    parent_title = CASE WHEN ? != '' THEN ? ELSE parent_title END,
 				    parent_type = CASE WHEN ? != '' THEN ? ELSE parent_type END,
 				    sprint = CASE WHEN ? != '' THEN ? ELSE sprint END,
 				    team = CASE WHEN ? != '' THEN ? ELSE team END,
+				    team_id = CASE WHEN ? != '' THEN ? ELSE team_id END,
 				    tracker_status = CASE WHEN ? != '' THEN ? ELSE tracker_status END,
 				    updated_at = ?
 				WHERE id = ?
-			`, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), pinnedVal, t.Assignee, src, t.ExternalURL,
+			`, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), pinnedVal, t.Assignee, t.AssigneeAvatar, src, t.ExternalURL,
 				t.IssueType, t.IssueType, t.ParentKey, t.ParentKey, t.ParentTitle, t.ParentTitle, t.ParentType, t.ParentType,
-				t.Sprint, t.Sprint, t.Team, t.Team, t.TrackerStatus, t.TrackerStatus, now, existingID); updErr != nil {
+				t.Sprint, t.Sprint, t.Team, t.Team, t.TeamID, t.TeamID, t.TrackerStatus, t.TrackerStatus, now, existingID); updErr != nil {
 				log.Printf("[DB.ImportOrUpdateTasks] update of %s failed: %v", t.Key, updErr)
 				importErrs = append(importErrs, fmt.Sprintf("%s: %v", t.Key, updErr))
 			}
@@ -521,9 +556,42 @@ func (d *DB) computeExternalURLUnsafe(t *models.Task) *string {
 // TaskFacets lists the distinct tracker values present in the board, so the UI
 // can offer a filter only when the tracker actually feeds the field. A GitHub or
 // local project simply returns empty lists.
+// unassignedFilterValue is the sentinel the assignee filter uses to ask for the
+// work items nobody owns. An empty parameter cannot say it: it means "no filter".
+const unassignedFilterValue = "__unassigned__"
+
 type TaskFacets struct {
 	Sprints []string `json:"sprints"`
 	Teams   []string `json:"teams"`
+	// Assignees are the people carried by the project's work items, in the
+	// tracker's own spelling. The team members are served separately: somebody
+	// can be in a team without owning a single ticket yet.
+	Assignees []string `json:"assignees"`
+	// UnassignedCount lets the filter offer "unassigned" only when there is
+	// something to show under it.
+	UnassignedCount int `json:"unassignedCount"`
+	// TrackerStatuses are the tracker's own status names present on the board,
+	// most used first. The internal status folds a dozen tracker states onto six
+	// values, which is too lossy to choose what to display.
+	TrackerStatuses []TaskFacetValue `json:"trackerStatuses"`
+	// Statuses, Sources and Labels count the project's work items per internal
+	// status, per tracker of origin and per label.
+	//
+	// These counts exist because a filter's own counter must not be computed on
+	// the filtered list: doing so made every counter shrink as soon as a filter
+	// was set, and fall to zero once two were combined. The facets ignore every
+	// filter but the project.
+	Statuses []TaskFacetValue `json:"statuses"`
+	Sources  []TaskFacetValue `json:"sources"`
+	Labels   []TaskFacetValue `json:"labels"`
+	// Total is the project's work item count, all filters ignored.
+	Total int `json:"total"`
+}
+
+// TaskFacetValue is one filterable value with the number of work items behind it.
+type TaskFacetValue struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
 }
 
 // GetTaskFacets returns the sprints and teams found on the tasks of a project,
@@ -534,7 +602,15 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	facets := &TaskFacets{Sprints: []string{}, Teams: []string{}}
+	facets := &TaskFacets{
+		Sprints:         []string{},
+		Teams:           []string{},
+		Assignees:       []string{},
+		TrackerStatuses: []TaskFacetValue{},
+		Statuses:        []TaskFacetValue{},
+		Sources:         []TaskFacetValue{},
+		Labels:          []TaskFacetValue{},
+	}
 
 	for _, column := range []string{"sprint", "team"} {
 		query := fmt.Sprintf("SELECT DISTINCT %s FROM tasks WHERE %s != ''", column, column)
@@ -567,13 +643,134 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 		rows.Close()
 	}
 
+	// Les personnes sont triées par nom : un ordre décroissant sur une colonne
+	// texte n'a de sens que pour un sprint, dont le nom porte le numéro.
+	assigneeQuery := "SELECT assignee, COUNT(*) FROM tasks WHERE TRIM(assignee) != ''"
+	unassignedQuery := "SELECT COUNT(*) FROM tasks WHERE TRIM(assignee) = ''"
+	scopeArgs := []interface{}{}
+	if projectID != "" {
+		scope := " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
+		assigneeQuery += scope
+		unassignedQuery += scope
+		scopeArgs = append(scopeArgs, projectID, projectID, projectID)
+	}
+	assigneeQuery += " GROUP BY assignee ORDER BY COUNT(*) DESC, assignee ASC"
+
+	if rows, err := d.conn.Query(assigneeQuery, scopeArgs...); err == nil {
+		for rows.Next() {
+			var name string
+			var count int
+			if err := rows.Scan(&name, &count); err != nil {
+				continue
+			}
+			if name = strings.TrimSpace(name); name != "" {
+				facets.Assignees = append(facets.Assignees, name)
+			}
+		}
+		rows.Close()
+	}
+	_ = d.conn.QueryRow(unassignedQuery, scopeArgs...).Scan(&facets.UnassignedCount)
+
+	statusQuery := "SELECT tracker_status, COUNT(*) FROM tasks WHERE TRIM(tracker_status) != ''"
+	if projectID != "" {
+		statusQuery += " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
+	}
+	statusQuery += " GROUP BY tracker_status ORDER BY COUNT(*) DESC, tracker_status ASC"
+
+	if rows, err := d.conn.Query(statusQuery, scopeArgs...); err == nil {
+		for rows.Next() {
+			var value string
+			var count int
+			if err := rows.Scan(&value, &count); err != nil {
+				continue
+			}
+			if value = strings.TrimSpace(value); value != "" {
+				facets.TrackerStatuses = append(facets.TrackerStatuses, TaskFacetValue{Value: value, Count: count})
+			}
+		}
+		rows.Close()
+	}
+
+	// Statut interne et tracker d'origine : deux regroupements simples, comptés
+	// sur le même périmètre que le reste.
+	for _, column := range []string{"status", "source"} {
+		countQuery := fmt.Sprintf("SELECT %s, COUNT(*) FROM tasks WHERE TRIM(%s) != ''", column, column)
+		if projectID != "" {
+			countQuery += " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
+		}
+		countQuery += fmt.Sprintf(" GROUP BY %s ORDER BY COUNT(*) DESC", column)
+
+		rows, err := d.conn.Query(countQuery, scopeArgs...)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var value string
+			var count int
+			if err := rows.Scan(&value, &count); err != nil {
+				continue
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				continue
+			}
+			if column == "status" {
+				facets.Statuses = append(facets.Statuses, TaskFacetValue{Value: value, Count: count})
+			} else {
+				facets.Sources = append(facets.Sources, TaskFacetValue{Value: value, Count: count})
+			}
+		}
+		rows.Close()
+	}
+
+	// Les labels sont stockés en JSON dans une colonne : ils se comptent en
+	// mémoire, sur les seules valeurs, ce qui reste négligeable à l'échelle d'un
+	// projet.
+	labelQuery := "SELECT labels FROM tasks WHERE labels != '' AND labels != '[]'"
+	if projectID != "" {
+		labelQuery += " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
+	}
+	labelCounts := map[string]int{}
+	if rows, err := d.conn.Query(labelQuery, scopeArgs...); err == nil {
+		for rows.Next() {
+			var raw string
+			if err := rows.Scan(&raw); err != nil {
+				continue
+			}
+			var labels []string
+			if err := json.Unmarshal([]byte(raw), &labels); err != nil {
+				continue
+			}
+			for _, label := range labels {
+				if label = strings.TrimSpace(label); label != "" {
+					labelCounts[label]++
+				}
+			}
+		}
+		rows.Close()
+	}
+	for label, count := range labelCounts {
+		facets.Labels = append(facets.Labels, TaskFacetValue{Value: label, Count: count})
+	}
+	sort.Slice(facets.Labels, func(i, j int) bool {
+		if facets.Labels[i].Count != facets.Labels[j].Count {
+			return facets.Labels[i].Count > facets.Labels[j].Count
+		}
+		return facets.Labels[i].Value < facets.Labels[j].Value
+	})
+
+	totalQuery := "SELECT COUNT(*) FROM tasks"
+	if projectID != "" {
+		totalQuery += " WHERE (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
+	}
+	_ = d.conn.QueryRow(totalQuery, scopeArgs...).Scan(&facets.Total)
+
 	return facets, nil
 }
 
 // GetTasks lists the tasks matching the filters. pinnedOnly restricts to the
 // pinned tickets, which is the fastest way back to the two or three chantiers in
 // flight when the board carries three hundred.
-func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team string, pinnedOnly bool) ([]models.Task, error) {
+func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, assignee string, trackerStatuses []string, pinnedOnly bool) ([]models.Task, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -623,7 +820,37 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 		args = append(args, team)
 	}
 
-	sqlQuery := "SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at FROM tasks"
+	// Statuts du tracker retenus : c'est le choix explicite de ce qu'on veut voir,
+	// et il remplace avantageusement le masquage des terminés, qui ne connaissait
+	// que le statut interne.
+	if len(trackerStatuses) > 0 {
+		placeholders := make([]string, 0, len(trackerStatuses))
+		for _, st := range trackerStatuses {
+			st = strings.TrimSpace(st)
+			if st == "" {
+				continue
+			}
+			placeholders = append(placeholders, "?")
+			args = append(args, st)
+		}
+		if len(placeholders) > 0 {
+			conditions = append(conditions, fmt.Sprintf("tracker_status IN (%s)", strings.Join(placeholders, ", ")))
+		}
+	}
+
+	// L'assigné se filtre côté base comme l'équipe : le raccourci « Mes tâches »
+	// et le sélecteur de personne portent le nom tel que le tracker l'écrit, et
+	// aucune vue ne refiltrait la liste côté client.
+	if assignee != "" {
+		if strings.EqualFold(assignee, unassignedFilterValue) {
+			conditions = append(conditions, "TRIM(assignee) = ''")
+		} else {
+			conditions = append(conditions, "assignee = ?")
+			args = append(args, assignee)
+		}
+	}
+
+	sqlQuery := "SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at FROM tasks"
 	if len(conditions) > 0 {
 		sqlQuery += " WHERE " + strings.Join(conditions, " AND ")
 	}
@@ -639,7 +866,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 	for rows.Next() {
 		var t models.Task
 		var labelsJSON string
-		var dueDate, branchName, prURL, repoPath, sprint, team, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+		var dueDate, branchName, prURL, repoPath, sprint, team, teamID, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
 		var statusStr, priorityStr string
 
 		err := rows.Scan(
@@ -660,6 +887,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 			&repoPath,
 			&sprint,
 			&team,
+			&teamID,
 			&trackerStatus,
 			&source,
 			&extURL,
@@ -694,6 +922,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team st
 		}
 		if team.Valid {
 			t.Team = team.String
+			t.TeamID = teamID.String
 		}
 		if trackerStatus.Valid {
 			t.TrackerStatus = trackerStatus.String
@@ -741,11 +970,11 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 
 	var t models.Task
 	var labelsJSON string
-	var dueDate, branchName, prURL, repoPath, sprint, team, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+	var dueDate, branchName, prURL, repoPath, sprint, team, teamID, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
 	var statusStr, priorityStr string
 
 	err := d.conn.QueryRow(`
-		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
 		FROM tasks WHERE id = ? OR key = ?
 	`, id, id).Scan(
 		&t.ID,
@@ -765,6 +994,7 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 		&repoPath,
 		&sprint,
 		&team,
+		&teamID,
 		&trackerStatus,
 		&source,
 		&extURL,
@@ -802,6 +1032,7 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 	}
 	if team.Valid {
 		t.Team = team.String
+		t.TeamID = teamID.String
 	}
 	if trackerStatus.Valid {
 		t.TrackerStatus = trackerStatus.String
@@ -1883,6 +2114,7 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 	}
 
 	oldLabels := existing.Labels
+	oldAssignee := strings.TrimSpace(existing.Assignee)
 	var removedLabels []string
 
 	if req.ProjectID != nil && *req.ProjectID != "" {
@@ -2030,6 +2262,26 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 		})
 	}
 
+	// L'assignation ne peut pas voyager avec la synchro des champs : acli n'a pas
+	// de --assignee, et Jira n'assigne que par identifiant de compte. Elle part
+	// donc comme écriture dédiée, dans la même file d'activités.
+	if newAssignee := strings.TrimSpace(existing.Assignee); newAssignee != oldAssignee && existing.Source == "jira" {
+		accountID := ""
+		if req.AssigneeAccountID != nil {
+			accountID = strings.TrimSpace(*req.AssigneeAccountID)
+		}
+		if _, opErr := d.enqueueTrackerOpUnsafe(TrackerOp{
+			Kind:         TrackerOpAssign,
+			ProjectID:    existing.ProjectID,
+			TaskID:       existing.ID,
+			TaskKey:      existing.Key,
+			AccountID:    accountID,
+			AssigneeName: newAssignee,
+		}); opErr != nil {
+			log.Printf("[UpdateTask] assignation de %s non mise en file: %v", existing.Key, opErr)
+		}
+	}
+
 	acts, _ := d.getTaskActivitiesUnsafe(existing.ID)
 	existing.Activities = acts
 
@@ -2039,11 +2291,14 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 	var s models.Settings
 	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, jiraMail, jiraTok, pClar, pSpec, pImpl, pPR, pPick, editCmd, specFw sql.NullString
+	var uiScale sql.NullInt64
+	var autoSyncEnabled, autoSyncInterval sql.NullInt64
+	var promptDigest sql.NullString
 
 	err := d.conn.QueryRow(`
 		SELECT id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar,
 		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token,
-		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, updated_at
+		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
 		&s.ID,
@@ -2073,6 +2328,10 @@ func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 		&pPick,
 		&editCmd,
 		&specFw,
+		&uiScale,
+		&autoSyncEnabled,
+		&autoSyncInterval,
+		&promptDigest,
 		&s.UpdatedAt,
 	)
 	if err != nil {
@@ -2083,6 +2342,10 @@ func (d *DB) getSettingsUnsafe() (*models.Settings, error) {
 	} else {
 		s.DetailMode = "panel"
 	}
+	s.UIScale = NormalizeUIScale(int(uiScale.Int64))
+	s.AutoSyncEnabled = autoSyncEnabled.Int64 == 1
+	s.AutoSyncIntervalSec = NormalizeAutoSyncInterval(int(autoSyncInterval.Int64))
+	s.PromptDigestAgenda = promptDigest.String
 	if aiProv.Valid {
 		s.AIProvider = aiProv.String
 	}
@@ -2209,11 +2472,11 @@ func (d *DB) DeleteTask(id string) error {
 func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	var t models.Task
 	var labelsJSON string
-	var dueDate, branchName, prURL, repoPath, sprint, team, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+	var dueDate, branchName, prURL, repoPath, sprint, team, teamID, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
 	var statusStr, priorityStr string
 
 	err := d.conn.QueryRow(`
-		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
 		FROM tasks WHERE id = ? OR key = ?
 	`, id, id).Scan(
 		&t.ID,
@@ -2233,6 +2496,7 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 		&repoPath,
 		&sprint,
 		&team,
+		&teamID,
 		&trackerStatus,
 		&source,
 		&extURL,
@@ -2270,6 +2534,7 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	}
 	if team.Valid {
 		t.Team = team.String
+		t.TeamID = teamID.String
 	}
 	if trackerStatus.Valid {
 		t.TrackerStatus = trackerStatus.String
@@ -2392,11 +2657,14 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 
 	var s models.Settings
 	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, jiraMail, jiraTok, pClar, pSpec, pImpl, pPR, pPick, specFw sql.NullString
+	var uiScale sql.NullInt64
+	var autoSyncEnabled, autoSyncInterval sql.NullInt64
+	var promptDigest sql.NullString
 
 	err := d.conn.QueryRow(`
 		SELECT id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar,
 		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token,
-		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, updated_at
+		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
 		&s.ID,
@@ -2426,6 +2694,10 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 		&pPick,
 		&s.EditorCommand,
 		&specFw,
+		&uiScale,
+		&autoSyncEnabled,
+		&autoSyncInterval,
+		&promptDigest,
 		&s.UpdatedAt,
 	)
 	if err != nil {
@@ -2465,6 +2737,10 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	} else {
 		s.DetailMode = "panel"
 	}
+	s.UIScale = NormalizeUIScale(int(uiScale.Int64))
+	s.AutoSyncEnabled = autoSyncEnabled.Int64 == 1
+	s.AutoSyncIntervalSec = NormalizeAutoSyncInterval(int(autoSyncInterval.Int64))
+	s.PromptDigestAgenda = promptDigest.String
 	if aiProv.Valid {
 		s.AIProvider = aiProv.String
 	} else {
@@ -2661,11 +2937,17 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 	}
 	s.SpecFramework = runner.NormalizeSpecFramework(s.SpecFramework)
 	s.JiraProject = strings.ToUpper(strings.TrimSpace(s.JiraProject))
+	s.UIScale = NormalizeUIScale(s.UIScale)
+	s.AutoSyncIntervalSec = NormalizeAutoSyncInterval(s.AutoSyncIntervalSec)
+	autoSyncEnabledInt := 0
+	if s.AutoSyncEnabled {
+		autoSyncEnabledInt = 1
+	}
 
 	now := time.Now()
 	_, err := d.conn.Exec(`
-		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			theme = excluded.theme,
 			accent_color = excluded.accent_color,
@@ -2693,8 +2975,12 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 			prompt_pick = excluded.prompt_pick,
 			editor_command = excluded.editor_command,
 			spec_framework = excluded.spec_framework,
+			ui_scale = excluded.ui_scale,
+			auto_sync_enabled = excluded.auto_sync_enabled,
+			auto_sync_interval_sec = excluded.auto_sync_interval_sec,
+			prompt_digest_agenda = excluded.prompt_digest_agenda,
 			updated_at = excluded.updated_at
-	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.JiraProject, s.JiraUrl, s.JiraEmail, s.JiraAPIToken, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, s.SpecFramework, now)
+	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.JiraProject, s.JiraUrl, s.JiraEmail, s.JiraAPIToken, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, s.SpecFramework, s.UIScale, autoSyncEnabledInt, s.AutoSyncIntervalSec, s.PromptDigestAgenda, now)
 
 	if err != nil {
 		return nil, err
@@ -2709,6 +2995,46 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 // StageSkills table: the skill the UI offers, the file installed in the
 // repository and the step the worker runs are by construction the same thing.
 // The old pick-issue auto-pilot is gone, the autonomous run button replaced it.
+// UIScaleOptions are the four interface zoom levels the status bar switches
+// between. Four steps is what a quick switch can hold: a free number would need
+// a settings screen and a keyboard, which is not what "make it bigger, now" asks
+// for.
+var UIScaleOptions = []int{90, 100, 112, 125}
+
+// NormalizeAutoSyncInterval floors the background loop's period. Below thirty
+// seconds, the tracker is polled faster than it changes, for nothing.
+func NormalizeAutoSyncInterval(seconds int) int {
+	if seconds <= 0 {
+		return 60
+	}
+	if seconds < 30 {
+		return 30
+	}
+	return seconds
+}
+
+// NormalizeUIScale keeps the stored scale on one of the offered steps. A value
+// from an older database (zero) becomes 100, and anything off the list snaps to
+// the nearest step rather than being refused.
+func NormalizeUIScale(scale int) int {
+	if scale <= 0 {
+		return 100
+	}
+	best := UIScaleOptions[0]
+	bestGap := -1
+	for _, option := range UIScaleOptions {
+		gap := option - scale
+		if gap < 0 {
+			gap = -gap
+		}
+		if bestGap < 0 || gap < bestGap {
+			best = option
+			bestGap = gap
+		}
+	}
+	return best
+}
+
 func (d *DB) GetAvailableSkills() []models.Skill {
 	specFramework := "speckit"
 	if st, _ := d.GetSettings(); st != nil && strings.TrimSpace(st.SpecFramework) != "" {
@@ -2827,6 +3153,12 @@ func (d *DB) processSkillJob(job SkillJob) {
 	// 3b. Special handling for background Tracker update jobs
 	if job.SkillID == "tracker_update" {
 		d.processTrackerUpdateJob(ctx, job)
+		return
+	}
+
+	// 3c. Écritures tracker unitaires : assignation, épic, labels d'horizon.
+	if job.SkillID == "tracker_op" {
+		d.processTrackerOpJob(ctx, job)
 		return
 	}
 
@@ -3301,11 +3633,15 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 		projectKey := ""
 		trackerUrl := ""
 		repoPath := ""
+		// Les types importés appartiennent au projet : un projet dont le tracker
+		// n'expose que son propre type n'importerait rien avec la liste par défaut.
+		var issueTypes []string
 		if job.ProjectID != "" {
 			if p, _ := d.getProjectByIDUnsafe(job.ProjectID); p != nil {
 				projectKey = jiraProjectKeyFor(p)
 				trackerUrl = p.TrackerUrl
 				repoPath = p.RepoPath
+				issueTypes = p.IssueTypes
 			}
 		}
 		if projectKey == "" && job.Prompt != "" {
@@ -3320,10 +3656,11 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 		if repoPath == "" {
 			repoPath = settings.RepoPath
 		}
-		steps = append(steps, fmt.Sprintf("1. Lecture du projet Jira %s via %s...", projectKey, runner.JiraReadSource(settings, trackerUrl)))
+		steps = append(steps, fmt.Sprintf("1. Lecture du projet Jira %s via %s (types : %s)...",
+			projectKey, runner.JiraReadSource(settings, trackerUrl), strings.Join(runner.NormalizeIssueTypes(issueTypes), ", ")))
 		outputLines = append(outputLines, fmt.Sprintf("### 🔷 Jira Synchronization (Project: %s)\n", projectKey))
 
-		tasks, err := d.runner.SyncFromJira(settings, projectKey, repoPath, trackerUrl)
+		tasks, err := d.runner.SyncFromJira(settings, projectKey, repoPath, trackerUrl, issueTypes, 0)
 		if err != nil {
 			hasError = true
 			errMsg := fmt.Sprintf("Jira synchronization failed: %v", err)
@@ -3332,6 +3669,10 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 			summary = "Error during Jira sync"
 		} else {
 			steps = append(steps, fmt.Sprintf("2. %d tickets fetched from Jira", len(tasks)))
+			if len(tasks) == 0 {
+				steps = append(steps, fmt.Sprintf("ℹ️ Aucun ticket de type %s dans %s : vérifiez les types importés dans les réglages du projet.",
+					strings.Join(runner.NormalizeIssueTypes(issueTypes), ", "), projectKey))
+			}
 			if job.ProjectID != "" {
 				for i := range tasks {
 					tasks[i].ProjectID = job.ProjectID
@@ -3363,6 +3704,17 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 					steps = append(steps, "ℹ️ Colonnes du board non rafraîchies : "+colErr.Error())
 				} else {
 					steps = append(steps, "4. "+note)
+				}
+			}
+
+			// Les équipes portées par les tickets donnent les personnes : le
+			// champ Team n'est pas obligatoire, donc un projet sans équipe passe
+			// ici sans rien faire et sans se plaindre.
+			if job.ProjectID != "" {
+				if note, teamErr := d.RefreshProjectTeamMembers(job.ProjectID, tasks); teamErr != nil {
+					steps = append(steps, "ℹ️ Membres des équipes non rafraîchis : "+teamErr.Error())
+				} else {
+					steps = append(steps, "5. "+note)
 				}
 			}
 
@@ -3454,7 +3806,7 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 				if jPath == "" {
 					jPath = settings.RepoPath
 				}
-				jTasks, jErr := d.runner.SyncFromJira(settings, jKey, jPath, jUrl)
+				jTasks, jErr := d.runner.SyncFromJira(settings, jKey, jPath, jUrl, p.IssueTypes, 0)
 				if jErr != nil {
 					steps = append(steps, fmt.Sprintf("⚠️ Jira (%s): %v", jKey, jErr))
 					outputLines = append(outputLines, fmt.Sprintf("❌ Jira (%s): %v", jKey, jErr))
@@ -4676,6 +5028,19 @@ func parseSprints(raw string) []models.TrackerSprint {
 	return list
 }
 
+// parseIssueTypes decodes the work item types a project imports. An empty list
+// is not a misconfiguration: it means the default types apply.
+func parseIssueTypes(raw string) []string {
+	if strings.TrimSpace(raw) == "" || raw == "[]" {
+		return []string{}
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return []string{}
+	}
+	return list
+}
+
 // parseStageColumns decodes the workflow stage to columns assignment.
 func parseStageColumns(raw string) map[string][]string {
 	if strings.TrimSpace(raw) == "" || raw == "{}" {
@@ -4690,7 +5055,7 @@ func parseStageColumns(raw string) map[string][]string {
 
 func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 	rows, err := d.conn.Query(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
 		       COUNT(t.id) as task_count
 		FROM projects p
 		LEFT JOIN tasks t ON t.project_id = p.id
@@ -4708,10 +5073,11 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		var isDefault int
 		var stageMappingJSON, skillOverridesJSON, repoPathsJSON string
 		var useWorktrees int
-		var trackerColumnsJSON, stageColumnsJSON, sprintsJSON string
+		var trackerColumnsJSON, stageColumnsJSON, sprintsJSON, issueTypesJSON string
+		var monoRepo int
 		var aiProv, aiCmd, specFw, jiraProj, projType sql.NullString
 		err := rows.Scan(
-			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 		)
 		if err != nil {
 			return nil, err
@@ -4730,6 +5096,8 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		p.TrackerColumns = parseTrackerColumns(trackerColumnsJSON)
 		p.StageColumns = parseStageColumns(stageColumnsJSON)
 		p.Sprints = parseSprints(sprintsJSON)
+		p.IssueTypes = parseIssueTypes(issueTypesJSON)
+		p.MonoRepo = monoRepo == 1
 		if aiProv.Valid {
 			p.AIProvider = aiProv.String
 		}
@@ -4766,15 +5134,16 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	var isDefault int
 	var stageMappingJSON, skillOverridesJSON, repoPathsJSON string
 	var useWorktrees int
-	var trackerColumnsJSON, stageColumnsJSON, sprintsJSON string
+	var trackerColumnsJSON, stageColumnsJSON, sprintsJSON, issueTypesJSON string
+	var monoRepo int
 	var aiProv, aiCmd, specFw, jiraProj, projType sql.NullString
 	err := d.conn.QueryRow(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
 		       (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count
 		FROM projects p
 		WHERE p.id = ? OR p.slug = ?
 	`, id, id).Scan(
-		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -4796,6 +5165,8 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	p.TrackerColumns = parseTrackerColumns(trackerColumnsJSON)
 	p.StageColumns = parseStageColumns(stageColumnsJSON)
 	p.Sprints = parseSprints(sprintsJSON)
+	p.IssueTypes = parseIssueTypes(issueTypesJSON)
+	p.MonoRepo = monoRepo == 1
 	if aiProv.Valid {
 		p.AIProvider = aiProv.String
 	}
@@ -4878,6 +5249,21 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 	}
 	skillOverridesBytes, _ := json.Marshal(skillOverrides)
 
+	// Types importés : vides à la création, ce qui vaut « les types par défaut ».
+	// Les réglages du projet les nomment ensuite, à partir des types réels du
+	// tracker.
+	issueTypes := runner.NormalizeIssueTypes(req.IssueTypes)
+	if len(req.IssueTypes) == 0 {
+		issueTypes = []string{}
+	}
+	issueTypesBytes, _ := json.Marshal(issueTypes)
+
+	// Mono-dépôt par défaut : c'est le cas courant, et le comportement d'avant.
+	monoRepoInt := 1
+	if req.MonoRepo != nil && !*req.MonoRepo {
+		monoRepoInt = 0
+	}
+
 	repoPathsBytes, _ := json.Marshal(normalizeRepoPaths(req.RepoPaths))
 
 	// Worktrees stay on unless the project explicitly opts out, which keeps the
@@ -4888,9 +5274,9 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 	}
 
 	_, err := d.conn.Exec(`
-		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, use_worktrees, board_id, tracker_columns, stage_columns, sprints, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), useWorktreesInt, req.BoardID, "[]", "{}", "[]", gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, now, now)
+		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, use_worktrees, board_id, tracker_columns, stage_columns, sprints, issue_types, mono_repo, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), useWorktreesInt, req.BoardID, "[]", "{}", "[]", string(issueTypesBytes), monoRepoInt, gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -4973,6 +5359,12 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if req.Sprints != nil {
 		p.Sprints = *req.Sprints
 	}
+	if req.IssueTypes != nil {
+		p.IssueTypes = runner.NormalizeIssueTypes(*req.IssueTypes)
+	}
+	if req.MonoRepo != nil {
+		p.MonoRepo = *req.MonoRepo
+	}
 	if req.AIProvider != nil {
 		p.AIProvider = *req.AIProvider
 	}
@@ -5023,12 +5415,20 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 		p.Sprints = []models.TrackerSprint{}
 	}
 	sprintsBytes, _ := json.Marshal(p.Sprints)
+	if p.IssueTypes == nil {
+		p.IssueTypes = []string{}
+	}
+	issueTypesBytes, _ := json.Marshal(p.IssueTypes)
+	monoRepoInt := 0
+	if p.MonoRepo {
+		monoRepoInt = 1
+	}
 
 	_, err = d.conn.Exec(`
 		UPDATE projects
-		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, use_worktrees = ?, board_id = ?, tracker_columns = ?, stage_columns = ?, sprints = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, updated_at = ?
+		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, use_worktrees = ?, board_id = ?, tracker_columns = ?, stage_columns = ?, sprints = ?, issue_types = ?, mono_repo = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, updated_at = ?
 		WHERE id = ?
-	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), useWorktreesInt, p.BoardID, string(trackerColumnsBytes), string(stageColumnsBytes), string(sprintsBytes), p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.UpdatedAt, p.ID)
+	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), useWorktreesInt, p.BoardID, string(trackerColumnsBytes), string(stageColumnsBytes), string(sprintsBytes), string(issueTypesBytes), monoRepoInt, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.UpdatedAt, p.ID)
 	if err != nil {
 		return nil, err
 	}

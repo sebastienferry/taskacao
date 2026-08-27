@@ -48,7 +48,7 @@ const PRIORITY_RANK: Record<Priority, number> = { urgent: 4, high: 3, medium: 2,
 
 /**
  * Couleurs de la vue : uniquement des variables globales de l'app, jamais de
- * valeur en dur. Le design system Equativ vit déjà dans index.css — accent,
+ * valeur en dur. Le thème du produit vit déjà dans index.css : accent,
  * couleurs de signal, thèmes clair et sombre, variantes par projet — donc figer
  * la palette du design ici priverait la vue du thème et de l'accent choisis.
  *

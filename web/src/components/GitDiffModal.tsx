@@ -145,8 +145,8 @@ export const GitDiffModal: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="relative w-full max-w-6xl h-[90vh] rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl flex flex-col overflow-hidden">
+    <div className="fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="relative w-full max-w-6xl h-[calc(var(--app-h)*0.9)] rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/50 shrink-0">
           <div className="flex items-center gap-3 min-w-0">

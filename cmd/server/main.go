@@ -74,6 +74,11 @@ func main() {
 
 	h := handlers.NewHandler(database)
 
+	// Boucle de synchronisation de fond. Elle ne fait rien tant que le réglage
+	// est éteint, et ne lit ensuite que ce qui a changé depuis sa passe
+	// précédente.
+	database.StartAutoSync()
+
 	// Les pas du workflow tournent dans la session PTY de leur tâche : visibles
 	// pendant qu'ils travaillent, ouvrables d'un clic, et interrogeables.
 	database.SetTerminalRunner(h.TerminalRunner())
@@ -95,6 +100,7 @@ func main() {
 	mux.HandleFunc("/api/sync/linear", h.HandleSyncLinear)
 	mux.HandleFunc("/api/sync/github", h.HandleSyncGithub)
 	mux.HandleFunc("/api/sync/jira", h.HandleSyncJira)
+	mux.HandleFunc("/api/sync/auto", h.HandleAutoSyncStatus)
 	mux.HandleFunc("/api/skills", h.HandleSkills)
 	mux.HandleFunc("/api/spec-framework/status", h.HandleSpecFrameworkStatus)
 	mux.HandleFunc("/api/spec-framework/install", h.HandleSpecFrameworkInstall)
@@ -102,12 +108,13 @@ func main() {
 	mux.HandleFunc("/api/projects/", h.HandleProjectDetail)
 	mux.HandleFunc("/api/tasks", h.HandleTasks)
 	mux.HandleFunc("/api/tasks/facets", h.HandleTaskFacets)
+	mux.HandleFunc("/api/teams", h.HandleTeams)
+	mux.HandleFunc("/api/teams/", h.HandleTeams)
 	mux.HandleFunc("/api/tasks/pins", h.HandleTaskPins)
 	mux.HandleFunc("/api/tasks/", h.HandleTaskDetail)
 	mux.HandleFunc("/api/activities", h.HandleActivities)
 	mux.HandleFunc("/api/activities/", h.HandleActivityDetail)
 	mux.HandleFunc("/api/settings", h.HandleSettings)
-	mux.HandleFunc("/api/seed", h.HandleSeed)
 	mux.HandleFunc("/api/open-editor", h.HandleOpenEditor)
 	mux.HandleFunc("/api/editor/open", h.HandleOpenEditor)
 

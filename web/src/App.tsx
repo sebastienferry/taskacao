@@ -5,6 +5,7 @@ import { Header } from './components/Header'
 import { BoardView } from './components/BoardView'
 import { ListView } from './components/ListView'
 import { RoadmapView } from './components/RoadmapView'
+import { TeamView } from './components/TeamView'
 import { ActivitiesView } from './components/ActivitiesView'
 import { SyncView } from './components/SyncView'
 import { DigestView } from './components/DigestView'
@@ -26,7 +27,7 @@ const MainContent: React.FC = () => {
   const { activeView, isLoading, error, tasks } = useApp()
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[var(--bg-primary)]">
+    <div className="flex flex-col h-[var(--app-h)] w-[var(--app-w)] overflow-hidden bg-[var(--bg-primary)]">
       <div className="flex flex-1 overflow-hidden">
         {/* Navigation Sidebar */}
         <Sidebar />
@@ -56,6 +57,8 @@ const MainContent: React.FC = () => {
               <ListView />
             ) : activeView === 'roadmap' ? (
               <RoadmapView />
+            ) : activeView === 'team' ? (
+              <TeamView />
             ) : activeView === 'sync' ? (
               <SyncView />
             ) : activeView === 'digest' ? (

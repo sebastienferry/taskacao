@@ -92,6 +92,16 @@ type Project struct {
 	// hand.
 	BoardID        string          `json:"boardId,omitempty"`
 	TrackerColumns []TrackerColumn `json:"trackerColumns,omitempty"`
+	// MonoRepo says the project lives in a single repository. The current branch,
+	// the branch switcher and the branch shown on a card only mean something
+	// there: on a project whose tickets span several repositories, they display
+	// the branch of whichever repository happens to be configured.
+	MonoRepo bool `json:"monoRepo"`
+	// IssueTypes names the tracker work item types this project imports as cards.
+	// Empty means the default (Task and Story). A project whose tracker exposes
+	// its own type imports nothing without it: a feedback project may carry a
+	// single custom type, which the default list would match on no ticket.
+	IssueTypes []string `json:"issueTypes,omitempty"`
 	// Sprints mirrors the board's sprints with their state, refreshed by the sync.
 	Sprints []TrackerSprint `json:"sprints,omitempty"`
 	// StageColumns assigns each agentic workflow stage to one or several of those
@@ -145,6 +155,9 @@ type TrackerColumn struct {
 // separates the operational horizons: a ticket belongs to NOW when its sprint is
 // active, and to NEXT when its sprint is still in the future.
 type TrackerSprint struct {
+	// ID is the tracker's own sprint id. Moving a work item into a sprint goes
+	// through the Agile API, which addresses sprints by id, never by name.
+	ID    string `json:"id,omitempty"`
 	Name  string `json:"name"`
 	State string `json:"state"` // "active", "future", "closed"
 	// StartDate et EndDate viennent du board. Sans elles, l'ordre chronologique
@@ -186,7 +199,65 @@ type TrackerBoard struct {
 	Type string `json:"type"`
 }
 
+// TrackerTeam is a team of the tracker (an Atlassian team on Jira Cloud) as it
+// appears on the work items of a project, with the people it carries. The team
+// is optional on a work item: a project may well have tickets with no team at
+// all, and those keep working exactly as before.
+type TrackerTeam struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// MemberCount is served even when Members is trimmed from the payload.
+	MemberCount int          `json:"memberCount"`
+	Members     []TeamMember `json:"members,omitempty"`
+	// SyncedAt is when the members were last read from the tracker, empty when
+	// they have never been read.
+	SyncedAt string `json:"syncedAt,omitempty"`
+	// TaskCount is the number of synced work items carrying this team.
+	TaskCount int `json:"taskCount"`
+}
+
+// TeamMember is one person of a tracker team. AccountID is what the tracker
+// assigns work items by; DisplayName is what it shows on the card.
+type TeamMember struct {
+	TeamID      string `json:"teamId"`
+	TeamName    string `json:"teamName,omitempty"`
+	AccountID   string `json:"accountId"`
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email,omitempty"`
+	AvatarURL   string `json:"avatarUrl,omitempty"`
+	Active      bool   `json:"active"`
+}
+
+// TeamMemberLoad is one member of a team with the work items assigned to them,
+// for the workload view.
+type TeamMemberLoad struct {
+	Member TeamMember `json:"member"`
+	// Tasks are the member's work items, most recently updated first.
+	Tasks []Task `json:"tasks"`
+	// ByStatus counts the member's work items per internal status.
+	ByStatus map[string]int `json:"byStatus"`
+	Total    int            `json:"total"`
+}
+
+// TeamWorkload is a team, its members and their load, plus the work items of the
+// team that nobody in it owns.
+type TeamWorkload struct {
+	Team    TrackerTeam      `json:"team"`
+	Members []TeamMemberLoad `json:"members"`
+	// Unassigned are the team's work items with no assignee at all.
+	Unassigned []Task `json:"unassigned"`
+	// Outside are the team's work items assigned to someone who is not a member
+	// of the team, which is worth seeing rather than hiding.
+	Outside []TeamMemberLoad `json:"outside"`
+}
+
 type CreateProjectRequest struct {
+	// IssueTypes names the tracker work item types to import. Empty means the
+	// default list.
+	IssueTypes []string `json:"issueTypes,omitempty"`
+	// MonoRepo defaults to true when absent: a single repository is the common
+	// case, and it is what the tool did before the setting existed.
+	MonoRepo          *bool             `json:"monoRepo,omitempty"`
 	Name              string            `json:"name"`
 	Slug              string            `json:"slug,omitempty"`
 	Description       string            `json:"description,omitempty"`
@@ -223,6 +294,8 @@ type UpdateProjectRequest struct {
 	BoardID           *string              `json:"boardId,omitempty"`
 	TrackerColumns    *[]TrackerColumn     `json:"trackerColumns,omitempty"`
 	Sprints           *[]TrackerSprint     `json:"sprints,omitempty"`
+	IssueTypes        *[]string            `json:"issueTypes,omitempty"`
+	MonoRepo          *bool                `json:"monoRepo,omitempty"`
 	StageColumns      *map[string][]string `json:"stageColumns,omitempty"`
 	GitRemoteUrl      *string              `json:"gitRemoteUrl,omitempty"`
 	LinearTeam        *string              `json:"linearTeam,omitempty"`
@@ -414,8 +487,12 @@ type Task struct {
 	TrackerStatus string `json:"trackerStatus,omitempty"`
 	// Sprint and Team come from the tracker: the Jira Sprint and Team fields,
 	// imported by the REST enrichment pass of the sync.
-	Sprint      string  `json:"sprint,omitempty"`
-	Team        string  `json:"team,omitempty"`
+	Sprint string `json:"sprint,omitempty"`
+	Team   string `json:"team,omitempty"`
+	// TeamID is the Atlassian team id behind Team. The label alone cannot be
+	// used to read a team's members: the members endpoint is keyed by id, and
+	// two teams may carry the same name.
+	TeamID      string  `json:"teamId,omitempty"`
 	Source      string  `json:"source"` // "linear", "github", "jira", "local"
 	ExternalURL *string `json:"externalUrl,omitempty"`
 	// IssueType is the tracker's own work item type. Only "Task" and "Story"
@@ -434,13 +511,25 @@ type Task struct {
 }
 
 type Settings struct {
-	ID                int    `json:"id"`
-	Theme             string `json:"theme"`       // "dark", "light", "system"
-	AccentColor       string `json:"accentColor"` // "indigo", "violet", "emerald", "amber", "rose", "cyan", "blue", "orange"
-	Language          string `json:"language"`    // "fr", "en"
-	Density           string `json:"density"`     // "compact", "standard", "comfortable"
-	DefaultView       string `json:"defaultView"` // "board", "list"
-	DetailMode        string `json:"detailMode"`  // "panel", "modal"
+	ID          int    `json:"id"`
+	Theme       string `json:"theme"`       // "dark", "light", "system"
+	AccentColor string `json:"accentColor"` // "indigo", "violet", "emerald", "amber", "rose", "cyan", "blue", "orange"
+	Language    string `json:"language"`    // "fr", "en"
+	Density     string `json:"density"`     // "compact", "standard", "comfortable"
+	DefaultView string `json:"defaultView"` // "board", "list"
+	// AutoSyncEnabled runs a background loop that reads from the tracker what
+	// changed since the last pass. It is incremental by construction: a full
+	// pass on a 1400 ticket project costs fourteen paginated requests, an
+	// incremental one costs a single request that usually answers nothing.
+	AutoSyncEnabled bool `json:"autoSyncEnabled"`
+	// AutoSyncIntervalSec is that loop's period, in seconds. Floored at 30.
+	AutoSyncIntervalSec int `json:"autoSyncIntervalSec"`
+	// UIScale is the interface zoom in percent (90, 100, 110, 125). Density only
+	// moves the root font size, which leaves every fixed pixel size untouched;
+	// the scale zooms the whole interface, which is what a large or a small
+	// screen actually needs.
+	UIScale           int    `json:"uiScale"`
+	DetailMode        string `json:"detailMode"` // "panel", "modal"
 	UserName          string `json:"userName"`
 	UserEmail         string `json:"userEmail"`
 	UserAvatar        string `json:"userAvatar"`
@@ -459,17 +548,20 @@ type Settings struct {
 	// JiraAPIToken never leaves the server: the API responses carry the two
 	// flags below instead, so the token cannot be read back by anything that
 	// can reach the settings endpoint.
-	JiraAPIToken        string    `json:"jiraApiToken,omitempty"`
-	JiraAPITokenSet     bool      `json:"jiraApiTokenSet"`
-	JiraAPITokenFromEnv bool      `json:"jiraApiTokenFromEnv"` // e.g. "https://acme.atlassian.net"
-	PromptClarify       string    `json:"promptClarify"`
-	PromptSpecify       string    `json:"promptSpecify"`
-	PromptImplement     string    `json:"promptImplement"`
-	PromptCreatePR      string    `json:"promptCreatePr"`
-	PromptPick          string    `json:"promptPick"`
-	EditorCommand       string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
-	SpecFramework       string    `json:"specFramework"` // "speckit", "openspec"
-	UpdatedAt           time.Time `json:"updatedAt"`
+	JiraAPIToken        string `json:"jiraApiToken,omitempty"`
+	JiraAPITokenSet     bool   `json:"jiraApiTokenSet"`
+	JiraAPITokenFromEnv bool   `json:"jiraApiTokenFromEnv"` // e.g. "https://acme.atlassian.net"
+	// PromptDigestAgenda replaces the built-in agenda prompt of the daily digest.
+	// Empty keeps the default. Placeholders: {project}, {date}.
+	PromptDigestAgenda string    `json:"promptDigestAgenda"`
+	PromptClarify      string    `json:"promptClarify"`
+	PromptSpecify      string    `json:"promptSpecify"`
+	PromptImplement    string    `json:"promptImplement"`
+	PromptCreatePR     string    `json:"promptCreatePr"`
+	PromptPick         string    `json:"promptPick"`
+	EditorCommand      string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
+	SpecFramework      string    `json:"specFramework"` // "speckit", "openspec"
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 // SpecFrameworkInstallRequest asks Taskacao to bootstrap a Spec-Driven Design
@@ -547,14 +639,18 @@ type UpdateTaskRequest struct {
 	Labels         *[]string `json:"labels,omitempty"`
 	Assignee       *string   `json:"assignee,omitempty"`
 	AssigneeAvatar *string   `json:"assigneeAvatar,omitempty"`
-	Position       *int      `json:"position,omitempty"`
-	DueDate        *string   `json:"dueDate,omitempty"`
-	BranchName     *string   `json:"branchName,omitempty"`
-	PrURL          *string   `json:"prUrl,omitempty"`
-	RepoPath       *string   `json:"repoPath,omitempty"`
-	TrackerStatus  *string   `json:"trackerStatus,omitempty"`
-	Source         *string   `json:"source,omitempty"`
-	ExternalURL    *string   `json:"externalUrl,omitempty"`
+	// AssigneeAccountID carries the tracker identity behind Assignee, so the
+	// change can be pushed to Jira: its API assigns by accountId, never by
+	// display name. Empty string unassigns the work item.
+	AssigneeAccountID *string `json:"assigneeAccountId,omitempty"`
+	Position          *int    `json:"position,omitempty"`
+	DueDate           *string `json:"dueDate,omitempty"`
+	BranchName        *string `json:"branchName,omitempty"`
+	PrURL             *string `json:"prUrl,omitempty"`
+	RepoPath          *string `json:"repoPath,omitempty"`
+	TrackerStatus     *string `json:"trackerStatus,omitempty"`
+	Source            *string `json:"source,omitempty"`
+	ExternalURL       *string `json:"externalUrl,omitempty"`
 }
 
 type Skill struct {

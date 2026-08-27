@@ -1,7 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { EpicRequiredField, SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest } from '../types'
+import type { EpicRequiredField, SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest, TrackerTeam, TeamMember, TeamWorkload, TaskFacetValue, AutoSyncState } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 import { resolveAccentAttribute } from '../lib/accents'
+import {
+  INTERNAL_STATUS_BY_STAGE,
+  stageForInternalStatus,
+  stageForTrackerStatuses,
+  trackerStatusesForStage,
+} from '../lib/workflow'
 
 interface AppContextType {
   projects: Project[]
@@ -43,7 +49,46 @@ interface AppContextType {
   priorityFilter: Priority | null
   setPriorityFilter: (priority: Priority | null) => void
   labelFilter: string | null
-  taskFacets: { sprints: string[]; teams: string[] }
+  taskFacets: {
+    sprints: string[]
+    teams: string[]
+    assignees: string[]
+    unassignedCount: number
+    trackerStatuses: TaskFacetValue[]
+    statuses: TaskFacetValue[]
+    sources: TaskFacetValue[]
+    labels: TaskFacetValue[]
+    total: number
+  }
+  /** État de la boucle de synchronisation de fond, rafraîchi avec les activités. */
+  autoSync: AutoSyncState | null
+  /**
+   * Statuts du tracker affichés. Vide veut dire « tous » : c'est le choix
+   * explicite de ce qu'on regarde, board comme liste, et il remplace le
+   * masquage des seules tâches terminées.
+   */
+  trackerStatusFilters: string[]
+  setTrackerStatusFilters: (statuses: string[]) => void
+  /** Équipes portées par les tickets du projet, avec leurs membres. */
+  teams: TrackerTeam[]
+  fetchTeams: () => Promise<void>
+  /** Membres d'une équipe, par son nom : ce que porte un ticket. */
+  membersForTeam: (teamName: string) => Promise<TeamMember[]>
+  /** Relit les membres d'une équipe depuis le tracker. */
+  refreshTeamMembers: (teamId: string) => Promise<TrackerTeam | null>
+  fetchTeamWorkload: (teamName: string) => Promise<TeamWorkload | null>
+  /** Recherche d'équipes sur l'instance, pour en choisir une hors de celles du board. */
+  searchTrackerTeams: (query: string) => Promise<TrackerTeam[]>
+  /** Change l'équipe d'un ticket, ou la retire avec un identifiant vide. */
+  setTaskTeam: (taskId: string, teamId: string, teamName?: string) => Promise<Task | null>
+  /** Qui peut recevoir ce ticket : l'équipe du ticket sans frappe, l'instance ensuite. */
+  searchAssignableUsers: (taskId: string, query: string) => Promise<TeamMember[]>
+  /** Déplace un ticket dans un sprint du board, ou au backlog avec un id vide. */
+  setTaskSprint: (taskId: string, sprintId: string, sprintName?: string) => Promise<Task | null>
+  /** Même chose pour un lot : la planification depuis la roadmap. */
+  setTasksSprint: (projectId: string, taskIds: string[], sprintId: string, sprintName?: string) => Promise<boolean>
+  /** Équipe d'un lot de tickets, en une seule activité. */
+  setTasksTeam: (projectId: string, taskIds: string[], teamId: string, teamName?: string) => Promise<boolean>
   /** N'afficher que les tickets épinglés : le retour rapide aux chantiers en cours. */
   pinnedOnly: boolean
   setPinnedOnly: (value: boolean) => void
@@ -112,13 +157,21 @@ interface AppContextType {
   isProfileOpen: boolean
   setIsProfileOpen: (open: boolean) => void
   settings: UserSettings
-  updateSettings: (newSettings: Partial<UserSettings>) => Promise<void>
+  /**
+   * `silent` évite le toast de confirmation : un basculement de thème ou
+   * d'échelle se voit à l'écran, l'annoncer à chaque clic ne fait que du bruit.
+   */
+  updateSettings: (newSettings: Partial<UserSettings>, options?: { silent?: boolean }) => Promise<void>
   t: TranslationSchema
   toasts: ToastMessage[]
   addToast: (toast: Omit<ToastMessage, 'id'>) => void
   removeToast: (id: string) => void
   createTask: (task: { title: string; description?: string; status?: Status; priority?: Priority; labels?: string[]; assignee?: string; dueDate?: string | null; source?: TaskSource; externalUrl?: string; projectId?: string }) => Promise<Task | null>
-  updateTask: (id: string, updates: Partial<Task>) => Promise<Task | null>
+  /**
+   * assigneeAccountId accompagne un changement d'assigné : Jira n'assigne que
+   * par identifiant de compte, jamais par nom affiché.
+   */
+  updateTask: (id: string, updates: Partial<Task> & { assigneeAccountId?: string }) => Promise<Task | null>
   moveTaskToTrackerStatus: (id: string, status: string) => Promise<Task | null>
   getTaskComments: (id: string) => Promise<TaskComment[]>
   listTerminalSessions: () => Promise<TerminalSession[]>
@@ -127,17 +180,26 @@ interface AppContextType {
   listProjectBoards: (projectId: string) => Promise<TrackerBoard[]>
   importProjectBoardColumns: (projectId: string, boardId: string) => Promise<Project | null>
   fetchProjectTrackerStatuses: (projectId: string) => Promise<string[]>
+  /** Types de tickets que le tracker du projet expose, pour le réglage d'import. */
+  fetchProjectIssueTypes: (projectId: string) => Promise<string[]>
   fetchProjectEpics: (projectId: string) => Promise<EpicMeta[]>
   saveEpicMeta: (projectId: string, key: string, patch: { horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[] }) => Promise<EpicMeta | null>
   createStoryFromEpicTodo: (projectId: string, epicKey: string, todoId: string) => Promise<{ epic: EpicMeta | null; storyKey: string } | null>
   pendingHorizonPushes: (projectId: string) => Promise<EpicMeta[]>
-  pushPendingHorizons: (projectId: string) => Promise<number>
+  /** Met la poussée des labels d'horizon en file d'activités. Retourne true si la file a accepté. */
+  pushPendingHorizons: (projectId: string) => Promise<boolean>
+  /**
+   * Met le rattachement à un épic en file d'activités et renvoie le ticket tel
+   * qu'il est déjà en local : l'écriture Jira suit, mais la vue ne doit pas
+   * attendre la file pour montrer le rattachement.
+   */
   setTaskEpic: (taskId: string, epicKey: string) => Promise<Task | null>
   createStoryUnderEpic: (projectId: string, epicKey: string, title: string) => Promise<string>
   createEpic: (projectId: string, title: string, horizon?: EpicHorizon | '', fields?: Record<string, string>) => Promise<EpicMeta | null>
   /** Champs que le tracker impose pour créer un épic sur ce projet. */
   fetchEpicRequiredFields: (projectId: string) => Promise<EpicRequiredField[]>
-  moveTasksToEpic: (projectId: string, taskIds: string[], targetEpicKey: string, newEpicTitle?: string, fields?: Record<string, string>) => Promise<string>
+  /** Met la découpe d'épic en file d'activités. Retourne true si la file a accepté. */
+  moveTasksToEpic: (projectId: string, taskIds: string[], targetEpicKey: string, newEpicTitle?: string, fields?: Record<string, string>) => Promise<boolean>
   advanceTask: (taskId: string, auto?: boolean) => Promise<{ mode: string; skillId?: string; label?: string } | null>
   // Pas interactif en cours : la tâche dont la session TTY attend d'être clôturée.
   pendingInteractive: { taskId: string; taskKey: string; skillId: string; label: string } | null
@@ -169,7 +231,6 @@ interface AppContextType {
   syncJira: (projectKey?: string) => Promise<void>
   syncCurrentProject: () => Promise<void>
   fetchCliStatus: () => Promise<void>
-  reseedDemo: () => Promise<void>
   refreshTasks: () => Promise<void>
   activities: TaskActivity[]
   activityStats: ActivityStats
@@ -184,6 +245,8 @@ interface AppContextType {
   clearCompletedActivities: () => Promise<void>
   availableLabels: string[]
   availableAssignees: string[]
+  /** Valeur sentinelle du filtre « non assigné » : le vide veut dire « pas de filtre ». */
+  unassignedFilterValue: string
   diffTask: Task | null
   setDiffTask: (task: Task | null) => void
   fetchGitDiff: (taskId: string) => Promise<GitDiffResult | null>
@@ -199,6 +262,7 @@ const defaultSettings: UserSettings = {
   accentColor: 'orange',
   language: 'fr',
   density: 'standard',
+  uiScale: 100,
   defaultView: 'board',
   detailMode: 'panel',
   userName: 'Developer',
@@ -225,6 +289,18 @@ const defaultSettings: UserSettings = {
 const AppContext = createContext<AppContextType | undefined>(undefined)
 
 const API_BASE = '/api'
+
+/**
+ * Les quatre niveaux de zoom de l'interface, dans l'ordre du commutateur de la
+ * barre d'état. Quatre crans est ce qu'un réglage rapide peut porter : un nombre
+ * libre demanderait un écran de réglages, ce qui n'est pas ce que demande « c'est
+ * trop petit, tout de suite ». La même liste borne la valeur côté serveur.
+ */
+export const UI_SCALE_OPTIONS = [90, 100, 112, 125]
+
+// Le filtre « non assigné » a besoin d'une valeur : une chaîne vide voudrait dire
+// « aucun filtre ». La même sentinelle est reconnue côté serveur.
+const UNASSIGNED_FILTER_VALUE = '__unassigned__'
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [tasks, setTasks] = useState<Task[]>([])
@@ -275,17 +351,42 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   })
 
-  const setBoardGrouping = useCallback((mode: BoardGroupingMode) => {
+  const persistBoardGrouping = useCallback((mode: BoardGroupingMode) => {
     setBoardGroupingState(mode)
     try {
       localStorage.setItem('taskacao_board_grouping', mode)
-    } catch {}
+    } catch {
+      // stockage indisponible : le mode vaut pour cette session
+    }
   }, [])
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilterState] = useState<Status | null>(null)
   const [priorityFilter, setPriorityFilterState] = useState<Priority | null>(null)
   const [labelFilter, setLabelFilterState] = useState<string | null>(null)
-  const [taskFacets, setTaskFacets] = useState<{ sprints: string[]; teams: string[] }>({ sprints: [], teams: [] })
+  const [taskFacets, setTaskFacets] = useState<{
+    sprints: string[]
+    teams: string[]
+    assignees: string[]
+    unassignedCount: number
+    trackerStatuses: TaskFacetValue[]
+    statuses: TaskFacetValue[]
+    sources: TaskFacetValue[]
+    labels: TaskFacetValue[]
+    total: number
+  }>({
+    sprints: [],
+    teams: [],
+    assignees: [],
+    unassignedCount: 0,
+    trackerStatuses: [],
+    statuses: [],
+    sources: [],
+    labels: [],
+    total: 0,
+  })
+  const [autoSync, setAutoSync] = useState<AutoSyncState | null>(null)
+  const [trackerStatusFilters, setTrackerStatusFiltersState] = useState<string[]>([])
+  const [teams, setTeams] = useState<TrackerTeam[]>([])
   const [sprintFilter, setSprintFilterState] = useState<string | null>(null)
   const [pinnedOnly, setPinnedOnlyState] = useState<boolean>(false)
   const [teamFilter, setTeamFilterState] = useState<string | null>(null)
@@ -437,6 +538,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     persistFilter({ pinnedOnly: value ? '1' : null })
   }, [persistFilter])
 
+  const setTrackerStatusFilters = useCallback((values: string[]) => {
+    setTrackerStatusFiltersState(values)
+    // Mémorisé comme les autres filtres, en JSON puisque c'est une liste.
+    persistFilter({ trackerStatuses: values.length > 0 ? JSON.stringify(values) : null })
+  }, [persistFilter])
+
   const setAssigneeFilter = useCallback((value: string | null) => {
     setAssigneeFilterState(value)
     persistFilter({ assignee: value })
@@ -449,6 +556,46 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (selectedProjectId === 'all') return null
     return projects.find(p => p.id === selectedProjectId || p.slug === selectedProjectId) || null
   }, [projects, selectedProjectId])
+
+  /**
+   * Changer de mode d'affichage convertit le filtre en cours plutôt que de le
+   * laisser en travers : une étape du workflow et une colonne de statuts
+   * désignent le même travail, le mapping du projet dit lequel. Sans conversion,
+   * passer en mode statut avec un filtre d'étape actif laissait un board filtré
+   * par quelque chose que l'écran n'affiche plus.
+   *
+   * Sans mapping (projet sans colonnes affectées), rien à convertir : le filtre
+   * est simplement levé, ce qui vaut mieux qu'une correspondance devinée.
+   */
+  const setBoardGrouping = useCallback((mode: BoardGroupingMode) => {
+    if (mode === boardGrouping) {
+      persistBoardGrouping(mode)
+      return
+    }
+
+    if (mode === 'status') {
+      if (statusFilter) {
+        const stage = stageForInternalStatus(statusFilter)
+        const statuses = trackerStatusesForStage(currentProject, stage)
+        setStatusFilter(null)
+        setTrackerStatusFilters(statuses)
+      }
+    } else if (trackerStatusFilters.length > 0) {
+      const stage = stageForTrackerStatuses(currentProject, trackerStatusFilters)
+      setTrackerStatusFilters([])
+      setStatusFilter(stage ? INTERNAL_STATUS_BY_STAGE[stage] : null)
+    }
+
+    persistBoardGrouping(mode)
+  }, [
+    boardGrouping,
+    persistBoardGrouping,
+    currentProject,
+    statusFilter,
+    trackerStatusFilters,
+    setStatusFilter,
+    setTrackerStatusFilters,
+  ])
 
   // Git Status & Branches State
   const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null)
@@ -509,6 +656,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     root.setAttribute('data-density', density)
     body.setAttribute('data-density', density)
 
+    // Échelle de l'interface : un zoom sur la racine, parce que la moitié des
+    // tailles de cette interface sont en pixels et qu'une taille de police
+    // racine ne les touche pas. Le zoom est appliqué au document entier, donc
+    // les panneaux, la barre latérale et les modales suivent ensemble.
+    const scale = UI_SCALE_OPTIONS.includes(settings.uiScale || 100) ? settings.uiScale || 100 : 100
+    root.style.zoom = scale === 100 ? '' : String(scale / 100)
+    // --ui-zoom accompagne le zoom : les hauteurs d'écran s'en servent pour rester
+    // dans la fenêtre, sinon la barre d'état passe sous le bord bas.
+    root.style.setProperty('--ui-zoom', String(scale / 100))
+
     // Direct root font-size scaling for instantaneous global rem scaling
     if (density === 'compact') {
       root.style.fontSize = '12.5px'
@@ -517,7 +674,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } else {
       root.style.fontSize = '14px'
     }
-  }, [settings.theme, settings.density, currentProject?.color])
+  }, [settings.theme, settings.density, settings.uiScale, currentProject?.color])
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -680,9 +837,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (labelFilter) params.append('label', labelFilter)
     if (sprintFilter) params.append('sprint', sprintFilter)
     if (teamFilter) params.append('team', teamFilter)
+    // L'assigné se filtre côté serveur comme le reste : il n'était appliqué
+    // nulle part, ce qui laissait « Mes tâches » sans effet.
+    if (assigneeFilter) params.append('assignee', assigneeFilter)
+    trackerStatusFilters.forEach(status => params.append('trackerStatus', status))
     if (pinnedOnly) params.append('pinned', '1')
     return params.toString()
-  }, [selectedProjectId, searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, pinnedOnly])
+  }, [selectedProjectId, searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, assigneeFilter, trackerStatusFilters, pinnedOnly])
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -709,6 +870,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setSprintFilterState(stored.sprint ?? null)
     setTeamFilterState(stored.team ?? null)
     setAssigneeFilterState(stored.assignee ?? null)
+    try {
+      const raw = stored.trackerStatuses
+      setTrackerStatusFiltersState(raw ? JSON.parse(raw) : [])
+    } catch {
+      setTrackerStatusFiltersState([])
+    }
     setPinnedOnlyState(stored.pinnedOnly === '1')
   }, [selectedProjectId])
 
@@ -721,7 +888,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const res = await fetch(`${API_BASE}/tasks/facets?${params.toString()}`)
       if (!res.ok) return
       const data = await res.json()
-      setTaskFacets({ sprints: data?.sprints || [], teams: data?.teams || [] })
+      setTaskFacets({
+        sprints: data?.sprints || [],
+        teams: data?.teams || [],
+        assignees: data?.assignees || [],
+        unassignedCount: data?.unassignedCount || 0,
+        trackerStatuses: data?.trackerStatuses || [],
+        statuses: data?.statuses || [],
+        sources: data?.sources || [],
+        labels: data?.labels || [],
+        total: data?.total || 0,
+      })
     } catch {
       // A tracker that feeds neither field simply leaves the filters hidden.
     }
@@ -730,6 +907,125 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     fetchTaskFacets()
   }, [fetchTaskFacets, tasks.length])
+
+  const fetchAutoSyncStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/sync/auto`)
+      if (!res.ok) return
+      setAutoSync(await res.json())
+    } catch {
+      // Serveur injoignable : l'indicateur disparaît, ce qui est déjà le signal.
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchAutoSyncStatus()
+    // La boucle tourne côté serveur : l'interface se contente de regarder, à un
+    // rythme qui n'a pas besoin d'être le sien.
+    const timer = setInterval(fetchAutoSyncStatus, 30000)
+    return () => clearInterval(timer)
+  }, [fetchAutoSyncStatus])
+
+  // Équipes du projet et personnes qu'elles portent. Le champ Équipe n'est pas
+  // obligatoire côté tracker : une liste vide est une réponse normale, et les
+  // vues concernées se contentent alors de ne rien proposer.
+  const fetchTeams = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({ members: '1' })
+      if (selectedProjectId && selectedProjectId !== 'all') {
+        params.append('projectId', selectedProjectId)
+      }
+      const res = await fetch(`${API_BASE}/teams?${params.toString()}`)
+      if (!res.ok) {
+        setTeams([])
+        return
+      }
+      setTeams((await res.json()) || [])
+    } catch {
+      setTeams([])
+    }
+  }, [selectedProjectId])
+
+  useEffect(() => {
+    fetchTeams()
+  }, [fetchTeams, tasks.length])
+
+  const membersForTeam = useCallback(async (teamName: string): Promise<TeamMember[]> => {
+    const name = (teamName || '').trim()
+    if (!name) return []
+    // Déjà chargée avec la liste des équipes : inutile de redemander au serveur.
+    const known = teams.find(t => t.name === name)
+    if (known?.members?.length) return known.members
+    try {
+      const res = await fetch(`${API_BASE}/teams/members?team=${encodeURIComponent(name)}`)
+      if (!res.ok) return []
+      return (await res.json()) || []
+    } catch {
+      return []
+    }
+  }, [teams])
+
+  const refreshTeamMembers = useCallback(async (teamId: string): Promise<TrackerTeam | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/teams/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: selectedProjectId === 'all' ? '' : selectedProjectId, teamId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Lecture des membres refusée')
+      addToast({
+        type: 'success',
+        title: `${data.name || 'Équipe'} rafraîchie`,
+        description: `${data.memberCount || 0} personne(s) dans l'équipe`,
+      })
+      await fetchTeams()
+      return data
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Membres non rafraîchis', description: err.message })
+      return null
+    }
+  }, [selectedProjectId, fetchTeams])
+
+  const searchTrackerTeams = useCallback(async (query: string): Promise<TrackerTeam[]> => {
+    try {
+      const params = new URLSearchParams({ q: query })
+      if (selectedProjectId && selectedProjectId !== 'all') {
+        params.append('projectId', selectedProjectId)
+      }
+      const res = await fetch(`${API_BASE}/teams/search?${params.toString()}`)
+      if (!res.ok) return []
+      return (await res.json()) || []
+    } catch {
+      return []
+    }
+  }, [selectedProjectId])
+
+  const searchAssignableUsers = useCallback(async (taskId: string, query: string): Promise<TeamMember[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/assignable?q=${encodeURIComponent(query)}`)
+      if (!res.ok) return []
+      return (await res.json()) || []
+    } catch {
+      return []
+    }
+  }, [])
+
+  const fetchTeamWorkload = useCallback(async (teamName: string): Promise<TeamWorkload | null> => {
+    const name = (teamName || '').trim()
+    if (!name) return null
+    try {
+      const params = new URLSearchParams({ team: name })
+      if (selectedProjectId && selectedProjectId !== 'all') {
+        params.append('projectId', selectedProjectId)
+      }
+      const res = await fetch(`${API_BASE}/teams/workload?${params.toString()}`)
+      if (!res.ok) return null
+      return await res.json()
+    } catch {
+      return null
+    }
+  }, [selectedProjectId])
 
   // Un filtre mémorisé peut ne plus exister : sprint clos, équipe renommée. Sans
   // ce garde-fou, le tableau paraîtrait vide avec un sélecteur qui n'affiche
@@ -741,7 +1037,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (teamFilter && taskFacets.teams.length > 0 && !taskFacets.teams.includes(teamFilter)) {
       setTeamFilter(null)
     }
-  }, [taskFacets, sprintFilter, teamFilter, setSprintFilter, setTeamFilter])
+    // Le filtre par personne était mémorisé sans être appliqué : une valeur
+    // héritée de cette époque amputerait maintenant toutes les vues, dont la
+    // roadmap qui n'affiche pas de barre de filtres. Un nom que le projet ne
+    // porte plus est donc abandonné plutôt que gardé en silence.
+    if (
+      assigneeFilter &&
+      assigneeFilter !== UNASSIGNED_FILTER_VALUE &&
+      taskFacets.assignees.length > 0 &&
+      !taskFacets.assignees.includes(assigneeFilter)
+    ) {
+      setAssigneeFilter(null)
+    }
+  }, [taskFacets, sprintFilter, teamFilter, assigneeFilter, setSprintFilter, setTeamFilter, setAssigneeFilter])
 
   // Initial load on mount
   useEffect(() => {
@@ -872,7 +1180,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return () => clearInterval(interval)
   }, [activeJobCount, selectedProjectId, buildTaskQuery, t, addToast])
 
-  const updateSettings = async (newSettings: Partial<UserSettings>) => {
+  const updateSettings = async (newSettings: Partial<UserSettings>, options?: { silent?: boolean }) => {
     const merged = { ...settings, ...newSettings }
     setSettings(merged)
     try {
@@ -884,10 +1192,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (res.ok) {
         const saved = await res.json()
         setSettings(saved)
-        addToast({
-          type: 'success',
-          title: t.toasts.settingsSaved,
-        })
+        if (!options?.silent) {
+          addToast({
+            type: 'success',
+            title: t.toasts.settingsSaved,
+          })
+        }
         fetchCliStatus()
       }
     } catch (err) {
@@ -1188,7 +1498,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  const updateTask = async (id: string, updates: Partial<Task>): Promise<Task | null> => {
+  const updateTask = async (id: string, updates: Partial<Task> & { assigneeAccountId?: string }): Promise<Task | null> => {
     try {
       const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}`, {
         method: 'PUT',
@@ -1217,9 +1527,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  // Déplacement par colonne de board : la transition dans le tracker est
-  // synchrone, la carte a déjà bougé côté interface et doit revenir en place si
-  // le tracker refuse.
+  // Déplacement par colonne de board : le statut local est écrit tout de suite,
+  // donc la carte reste où elle a été lâchée, et la transition dans le tracker
+  // part dans la file d'activités. Un refus du tracker apparaît alors comme une
+  // activité en échec, et la synchronisation suivante remet la carte en place.
   const moveTaskToTrackerStatus = async (id: string, status: string): Promise<Task | null> => {
     try {
       const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/tracker-status`, {
@@ -1227,17 +1538,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
       })
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}))
-        throw new Error(errData.error || 'Transition refusée par le tracker')
+        throw new Error(data.error || 'Transition refusée par le tracker')
       }
-      const updated: Task = await res.json()
-      setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+      const updated: Task | null = data.task || null
+      if (updated) {
+        setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+      }
       addToast({
         type: 'success',
-        title: 'Ticket déplacé',
-        description: `${updated.key} est passé en « ${status} »`,
+        title: 'Transition en file',
+        description: `${updated?.key || 'Ticket'} ➔ « ${status} ». Suivi dans les activités.`,
       })
+      fetchActivities()
       return updated
     } catch (err: any) {
       addToast({
@@ -1421,6 +1735,125 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // dont la poussée a échoué, restent invisibles dans Jira jusqu'à ce qu'on les
   // pousse. C'est explicite, une édition de ticket par épic n'est pas anodine.
   // Rattacher un ticket existant à un épic, ou l'en détacher avec une clé vide.
+  // Le changement d'équipe suit le même chemin que le reste des écritures : la
+  // valeur locale part tout de suite, l'écriture Jira dans la file.
+  const setTaskTeam = async (taskId: string, teamId: string, teamName?: string): Promise<Task | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/team`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamId, teamName: teamName || '' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || "Changement d'équipe refusé")
+      const updated: Task | null = data.task || null
+      if (updated) {
+        setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+        if (selectedTask && selectedTask.id === updated.id) setSelectedTask(updated)
+      }
+      addToast({
+        type: 'success',
+        title: teamId ? `Équipe ➔ ${teamName || teamId}` : 'Équipe retirée',
+        description: 'Écriture Jira en file, suivi dans les activités.',
+      })
+      fetchActivities()
+      return updated
+    } catch (err: any) {
+      addToast({ type: 'error', title: "Équipe non changée", description: err.message })
+      return null
+    }
+  }
+
+  // Le sprint appartient à l'API Agile du tracker, pas aux champs du ticket :
+  // l'écriture passe donc par la file comme les autres, et la valeur locale part
+  // tout de suite pour que la carte change de colonne sans attendre.
+  const setTaskSprint = async (taskId: string, sprintId: string, sprintName?: string): Promise<Task | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/sprint`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sprintId, sprintName: sprintName || '' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Changement de sprint refusé')
+      const updated: Task | null = data.task || null
+      if (updated) {
+        setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+        if (selectedTask && selectedTask.id === updated.id) setSelectedTask(updated)
+      }
+      addToast({
+        type: 'success',
+        title: sprintId ? `Sprint ➔ ${sprintName || sprintId}` : 'Renvoyé au backlog',
+        description: 'Écriture Jira en file, suivi dans les activités.',
+      })
+      fetchActivities()
+      return updated
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Sprint non changé', description: err.message })
+      return null
+    }
+  }
+
+  const setTasksSprint = async (
+    projectId: string,
+    taskIds: string[],
+    sprintId: string,
+    sprintName?: string
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/sprint-move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskIds, sprintId, sprintName: sprintName || '' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Changement de sprint refusé')
+      addToast({
+        type: 'success',
+        title: `${data.count || taskIds.length} ticket(s) ➔ ${sprintId ? sprintName || sprintId : 'backlog'}`,
+        description: 'Écriture Jira en file, suivi dans les activités.',
+      })
+      fetchActivities()
+      fetchTasks()
+      return true
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Sprint non changé', description: err.message })
+      return false
+    }
+  }
+
+  const setTasksTeam = async (
+    projectId: string,
+    taskIds: string[],
+    teamId: string,
+    teamName?: string
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/team-move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskIds, teamId, teamName: teamName || '' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || "Changement d'équipe refusé")
+      addToast({
+        type: 'success',
+        title: `${data.count || taskIds.length} ticket(s) ➔ ${teamId ? teamName || teamId : 'aucune équipe'}`,
+        description: 'Écriture Jira en file, suivi dans les activités.',
+      })
+      fetchActivities()
+      fetchTasks()
+      return true
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Équipe non changée', description: err.message })
+      return false
+    }
+  }
+
+  // Le rattachement part dans la file d'activités : l'écriture Jira prend une à
+  // deux secondes par ticket, et son échec doit rester lisible dans les
+  // activités plutôt que disparaître dans une requête expirée. Le tableau se
+  // rafraîchit tout seul quand l'activité se termine.
   const setTaskEpic = async (taskId: string, epicKey: string): Promise<Task | null> => {
     try {
       const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/epic`, {
@@ -1430,12 +1863,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Rattachement refusé')
-      const updated: Task = data
-      setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+      const updated: Task | null = data.task || null
+      if (updated) {
+        setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+        if (selectedTask && selectedTask.id === updated.id) setSelectedTask(updated)
+      }
       addToast({
         type: 'success',
-        title: epicKey ? `${updated.key} rattaché à ${epicKey}` : `${updated.key} détaché de son épic`,
+        title: epicKey ? `Rattachement à ${epicKey} en file` : 'Détachement en file',
+        description: 'Suivi dans les activités.',
       })
+      fetchActivities()
       return updated
     } catch (err: any) {
       addToast({ type: 'error', title: 'Rattachement impossible', description: err.message })
@@ -1515,7 +1953,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     targetEpicKey: string,
     newEpicTitle?: string,
     fields?: Record<string, string>
-  ): Promise<string> => {
+  ): Promise<boolean> => {
     try {
       const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/move`, {
         method: 'POST',
@@ -1524,17 +1962,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Déplacement refusé')
-      const failures: string[] = data.failures || []
+      // Une découpe touche autant de tickets que la sélection : elle s'exécute
+      // en une activité, dont les étapes disent ce qu'est devenu chaque ticket.
       addToast({
-        type: failures.length ? 'error' : 'success',
-        title: `${data.moved} ticket(s) déplacé(s) vers ${data.targetEpicKey}`,
-        description: failures.length ? `${failures.length} échec(s)` : undefined,
+        type: 'success',
+        title: `Découpe de ${data.count || taskIds.length} ticket(s) en file`,
+        description: targetEpicKey
+          ? `Vers ${targetEpicKey}. Suivi dans les activités.`
+          : 'Nouvel épic créé pendant le traitement. Suivi dans les activités.',
       })
-      fetchTasks()
-      return data.targetEpicKey || ''
+      fetchActivities()
+      // Vers un épic existant, les parents sont déjà écrits en base : la liste
+      // doit le montrer sans attendre que la file ait tourné.
+      if (targetEpicKey) fetchTasks()
+      return true
     } catch (err: any) {
       addToast({ type: 'error', title: 'Déplacement impossible', description: err.message })
-      return ''
+      return false
     }
   }
 
@@ -1788,21 +2232,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  const pushPendingHorizons = async (projectId: string): Promise<number> => {
+  const pushPendingHorizons = async (projectId: string): Promise<boolean> => {
     try {
       const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/push-horizons`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Poussée refusée')
-      const failures: string[] = data.failures || []
       addToast({
-        type: failures.length ? 'error' : 'success',
-        title: `${data.pushed || 0} horizons poussés dans Jira`,
-        description: failures.length ? `${failures.length} échec(s) : ${failures.slice(0, 2).join(' ; ')}` : undefined,
+        type: 'success',
+        title: 'Poussée des horizons en file',
+        description: 'Suivi dans les activités.',
       })
-      return data.pushed || 0
+      fetchActivities()
+      return true
     } catch (err: any) {
       addToast({ type: 'error', title: 'Poussée impossible', description: err.message })
-      return 0
+      return false
+    }
+  }
+
+  const fetchProjectIssueTypes = async (projectId: string): Promise<string[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/issue-types`)
+      if (!res.ok) return []
+      return (await res.json()) || []
+    } catch {
+      return []
     }
   }
 
@@ -2074,28 +2528,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  const reseedDemo = async () => {
-    try {
-      setIsLoading(true)
-      const res = await fetch(`${API_BASE}/seed`, { method: 'POST' })
-      if (!res.ok) throw new Error('Reseed failed')
-      const data = await res.json()
-      setTasks(data.tasks || [])
-      addToast({
-        type: 'success',
-        title: t.toasts.demoReseeded,
-      })
-    } catch (err: any) {
-      addToast({
-        type: 'error',
-        title: t.toasts.error,
-        description: err.message,
-      })
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
   // Filter tasks by active source filter (all / linear / github / jira / local)
   // then by the active parent (epic or parent story), when one is selected.
   const filteredTasks = React.useMemo(() => {
@@ -2249,13 +2681,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     )
   }, [tasks])
 
-  const availableLabels = Array.from(
-    new Set(tasks.flatMap(t => t.labels || []).filter(Boolean))
-  )
+  // Les labels viennent des facettes, donc du projet et non de la liste filtrée :
+  // sinon choisir un label faisait disparaître tous les autres, celui-là compris.
+  // Repli sur la liste affichée quand les facettes ne les portent pas encore.
+  const availableLabels = useMemo(() => {
+    if (taskFacets.labels.length > 0) return taskFacets.labels.map(l => l.value)
+    return Array.from(new Set(tasks.flatMap(t => t.labels || []).filter(Boolean)))
+  }, [taskFacets.labels, tasks])
 
-  const availableAssignees = Array.from(
-    new Set(tasks.map(t => t.assignee).filter(Boolean))
-  )
+  // Les personnes proposées viennent de deux sources : celles présentes sur les
+  // tickets du projet, et les membres des équipes portées par ces tickets. La
+  // seconde est ce qui permet de filtrer sur quelqu'un qui n'a encore rien.
+  // Quand une équipe est sélectionnée, seule cette équipe compte.
+  const availableAssignees = useMemo(() => {
+    const names = new Set<string>()
+    const scopedTeams = teamFilter ? teams.filter(tm => tm.name === teamFilter) : teams
+    scopedTeams.forEach(tm => {
+      (tm.members || []).forEach(m => {
+        if (m.displayName) names.add(m.displayName)
+      })
+    })
+    if (!teamFilter) {
+      taskFacets.assignees.forEach(name => names.add(name))
+    } else {
+      tasks.forEach(t => {
+        if (t.team === teamFilter && t.assignee) names.add(t.assignee)
+      })
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b))
+  }, [teams, teamFilter, taskFacets.assignees, tasks])
 
   const fetchGitDiff = useCallback(async (taskId: string): Promise<GitDiffResult | null> => {
     try {
@@ -2595,6 +3049,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setLabelFilter,
         assigneeFilter,
         setAssigneeFilter,
+        trackerStatusFilters,
+        setTrackerStatusFilters,
+        autoSync,
         sourceFilter,
         setSourceFilter,
         parentFilter,
@@ -2651,6 +3108,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         listProjectBoards,
         importProjectBoardColumns,
         fetchProjectTrackerStatuses,
+        fetchProjectIssueTypes,
         fetchProjectEpics,
         saveEpicMeta,
         createStoryFromEpicTodo,
@@ -2686,7 +3144,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         syncJira,
         syncCurrentProject,
         fetchCliStatus,
-        reseedDemo,
         refreshTasks: fetchTasks,
         activities,
         activityStats,
@@ -2701,6 +3158,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         clearCompletedActivities,
         availableLabels,
         availableAssignees,
+        unassignedFilterValue: UNASSIGNED_FILTER_VALUE,
+        teams,
+        fetchTeams,
+        membersForTeam,
+        refreshTeamMembers,
+        fetchTeamWorkload,
+        searchTrackerTeams,
+        setTaskTeam,
+        searchAssignableUsers,
+        setTaskSprint,
+        setTasksSprint,
+        setTasksTeam,
         cleanLocalBranches,
         deleteGitBranch,
         openInEditor,

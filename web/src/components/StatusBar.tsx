@@ -8,8 +8,12 @@ import {
   Copy,
   Check,
   Layers,
+  ZoomIn,
+  Moon,
+  Sun,
+  RefreshCcwDot,
 } from 'lucide-react'
-import { useApp } from '../context/AppContext'
+import { useApp, UI_SCALE_OPTIONS } from '../context/AppContext'
 
 export const StatusBar: React.FC = () => {
   const {
@@ -24,6 +28,8 @@ export const StatusBar: React.FC = () => {
     setIsProfileOpen,
     setIsProjectModalOpen,
     setIsBranchModalOpen,
+    updateSettings,
+    autoSync,
     t,
     addToast,
   } = useApp()
@@ -203,6 +209,86 @@ export const StatusBar: React.FC = () => {
           <Layers size={11} className="text-indigo-400" />
           <span className="font-semibold">{settings.issueTracker.toUpperCase()}</span>
           {settings.linearTeam && <span className="opacity-75">({settings.linearTeam})</span>}
+        </div>
+
+        {/* Synchronisation de fond : discrète tant qu'elle va bien, explicite
+            quand le tracker l'a mise en pause ou qu'une passe a échoué. */}
+        {autoSync?.enabled && (
+          <div
+            onClick={() => setActiveView('sync')}
+            className="hidden md:flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--bg-tertiary)] cursor-pointer transition-colors text-[10px]"
+            title={
+              autoSync.backoffUntil
+                ? `Pause demandée par Jira jusqu'à ${new Date(autoSync.backoffUntil).toLocaleTimeString()}`
+                : autoSync.lastError
+                ? `Dernière passe en échec : ${autoSync.lastError}`
+                : `Synchronisation toutes les ${Math.round(autoSync.intervalSec / 60) || 1} min. ${autoSync.passes} passe(s), ${autoSync.imported} ticket(s) mis à jour${
+                    autoSync.lastRunAt ? `, dernière à ${new Date(autoSync.lastRunAt).toLocaleTimeString()}` : ''
+                  }`
+            }
+          >
+            <RefreshCcwDot
+              size={11}
+              className={
+                autoSync.backoffUntil || autoSync.lastError
+                  ? 'text-amber-400'
+                  : autoSync.running
+                  ? 'text-cyan-400 animate-spin'
+                  : 'text-emerald-400'
+              }
+            />
+            <span className="font-semibold">
+              {autoSync.backoffUntil ? 'pause' : autoSync.lastImported > 0 ? `+${autoSync.lastImported}` : 'auto'}
+            </span>
+          </div>
+        )}
+
+        {/* Thème : le basculement clair / sombre est un geste de tous les jours
+            (une salle éclairée, une démo au vidéoprojecteur), il n'a rien à faire
+            au fond d'un écran de réglages. La valeur est enregistrée comme dans
+            le profil, donc les deux endroits disent la même chose. */}
+        <button
+          type="button"
+          onClick={() => updateSettings({ theme: settings.theme === 'light' ? 'dark' : 'light' }, { silent: true })}
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors text-[10px]"
+          title={settings.theme === 'light' ? 'Passer en thème sombre' : 'Passer en thème clair'}
+        >
+          {settings.theme === 'light' ? (
+            <Sun size={11} className="text-amber-400" />
+          ) : (
+            <Moon size={11} className="text-indigo-300" />
+          )}
+          <span className="hidden lg:inline font-semibold">
+            {settings.theme === 'light' ? 'Clair' : 'Sombre'}
+          </span>
+        </button>
+
+        {/* Échelle de l'interface : quatre crans, changés d'un clic et enregistrés
+            dans les réglages, parce que c'est un besoin qui arrive en travaillant
+            (un écran externe, une démo) et pas au moment de configurer l'outil. */}
+        <div
+          className="hidden sm:flex items-center gap-0.5 px-1 py-0.5 rounded border border-[var(--border-color)] text-[10px]"
+          title="Échelle de l'interface"
+        >
+          <ZoomIn size={11} className="text-[var(--text-muted)] mr-0.5" />
+          {UI_SCALE_OPTIONS.map(option => {
+            const isActive = (settings.uiScale || 100) === option
+            return (
+              <button
+                key={option}
+                type="button"
+                onClick={() => updateSettings({ uiScale: option }, { silent: true })}
+                className={`px-1 rounded font-bold cursor-pointer transition-colors ${
+                  isActive
+                    ? 'text-[var(--accent-color)] bg-[var(--accent-light)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
+                }`}
+                title={`Afficher l'interface à ${option} %`}
+              >
+                {option}
+              </button>
+            )
+          })}
         </div>
 
         {/* AI Provider pill */}

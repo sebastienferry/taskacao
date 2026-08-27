@@ -400,7 +400,7 @@ func SkillDirsFor(root, dirName string) []string {
 // .claude/skills/<nom>/SKILL.md est choisie par le modèle quand il la juge
 // pertinente, alors qu'une commande sous .claude/commands/<nom>.md est
 // invocable par « /<nom> ». Taskacao appelle ses étapes par leur commande, donc
-// il faut écrire les deux, sinon « claude -p "/clarify-issue SFE-331" » se
+// il faut écrire les deux, sinon « claude -p "/clarify-issue PROJ-123" » se
 // contente de recopier le texte.
 func SkillCommandPath(root, dirName string) string {
 	return filepath.Join(root, ".claude", "commands", dirName+".md")

@@ -409,8 +409,9 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
       {/* Ligne 3 : Métadonnées / Liens : Branche Git + Icône PR + Labels */}
       <div className="flex items-center justify-between gap-1.5 mb-2.5 flex-wrap">
         <div className="flex items-center gap-1.5 flex-wrap min-w-0" onClick={e => e.stopPropagation()}>
-          {/* Lien Branche Git */}
-          {task.branchName && (
+          {/* Lien Branche Git, sur un projet mono-dépôt seulement : ailleurs la
+              branche d'un ticket ne dit pas dans quel dépôt elle vit. */}
+          {task.branchName && taskProject?.monoRepo !== false && (
             <button
               type="button"
               onClick={() => setDiffTask(task)}

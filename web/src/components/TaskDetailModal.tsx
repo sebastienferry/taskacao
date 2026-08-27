@@ -2,6 +2,10 @@ import React, { useState, useEffect } from 'react'
 import {
   X,
   Trash2,
+  Pin,
+  PinOff,
+  Users,
+  CalendarRange,
   Calendar,
   User,
   Sparkles,
@@ -31,10 +35,13 @@ import {
   Minimize2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { Status, Priority, DetailMode, SpecFramework, WorkflowStage } from '../types'
+import type { TeamMember, Status, Priority, DetailMode, SpecFramework, WorkflowStage } from '../types'
 import { WORKFLOW_ORDER } from '../lib/workflow'
 import { InteractiveTerminal } from './InteractiveTerminal'
 import { TaskComments } from './TaskComments'
+import { LookupField, type LookupOption } from './LookupField'
+import { MarkdownEditor } from './Markdown'
+import { sprintLookup } from '../lib/lookups'
 
 export const TaskDetailModal: React.FC = () => {
   const {
@@ -59,6 +66,13 @@ export const TaskDetailModal: React.FC = () => {
     addToast,
     skillLabel,
     skillCommand,
+    membersForTeam,
+    searchAssignableUsers,
+    searchTrackerTeams,
+    setTaskTeam,
+    setTaskSprint,
+    togglePin,
+    isPinned,
     t,
   } = useApp()
 
@@ -95,9 +109,14 @@ export const TaskDetailModal: React.FC = () => {
   const [labels, setLabels] = useState<string[]>([])
   const [newLabelInput, setNewLabelInput] = useState('')
   const [assignee, setAssignee] = useState('')
+  // Personnes de l'équipe du ticket. L'équipe est facultative : sans elle, le
+  // champ reste une saisie libre, comme avant.
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+  // Identifiant de compte du choix courant : Jira n'assigne que par accountId.
+  const [assigneeAccountId, setAssigneeAccountId] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'details' | 'cadrage' | 'skills' | 'comments' | 'history'>('details')
+  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'skills' | 'git' | 'cadrage' | 'history'>('details')
   const [customPrompt, setCustomPrompt] = useState('')
   const [copiedBranch, setCopiedBranch] = useState(false)
   const [specFramework, setSpecFramework] = useState<SpecFramework>(settings.specFramework || 'speckit')
@@ -186,10 +205,85 @@ export const TaskDetailModal: React.FC = () => {
       setTrackerStatus(selectedTask.trackerStatus || '')
       setLabels(selectedTask.labels || [])
       setAssignee(selectedTask.assignee || '')
+      setAssigneeAccountId('')
       setDueDate(selectedTask.dueDate || '')
       setSpecFramework(settings.specFramework || 'speckit')
     }
   }, [selectedTask, projects, settings.specFramework])
+
+  // Les membres de l'équipe du ticket alimentent le choix de l'assigné. Le
+  // rapprochement avec l'assigné courant se fait sur le nom affiché : c'est ce
+  // que le tracker écrit sur le ticket.
+  useEffect(() => {
+    const team = (selectedTask?.team || '').trim()
+    if (!team) {
+      setTeamMembers([])
+      return
+    }
+    let alive = true
+    membersForTeam(team).then(list => {
+      if (alive) setTeamMembers(list)
+    })
+    return () => {
+      alive = false
+    }
+  }, [selectedTask?.id, selectedTask?.team, membersForTeam])
+
+  useEffect(() => {
+    if (!assignee) {
+      setAssigneeAccountId('')
+      return
+    }
+    const match = teamMembers.find(m => m.displayName === assignee)
+    setAssigneeAccountId(match?.accountId || '')
+  }, [assignee, teamMembers])
+
+  // Recherche des personnes assignables : sans frappe, le serveur répond par
+  // l'équipe du ticket, ce qui couvre l'essentiel des cas sans appel au tracker.
+  const searchAssignee = React.useCallback(
+    async (query: string): Promise<LookupOption[]> => {
+      if (!selectedTask) return []
+      const people = await searchAssignableUsers(selectedTask.id, query)
+      const options: LookupOption[] = people.map(m => ({
+        id: m.accountId,
+        label: m.displayName,
+        sublabel: m.email || (m.teamName ? `Équipe ${m.teamName}` : undefined),
+        avatarUrl: m.avatarUrl,
+        muted: !m.active,
+      }))
+      // L'assigné courant reste proposé même s'il ne ressort pas de la
+      // recherche : sinon le champ paraîtrait vide de toute valeur valable.
+      if (!query && assignee && !options.some(o => o.label === assignee)) {
+        options.unshift({ id: assigneeAccountId, label: assignee, sublabel: 'assigné actuel' })
+      }
+      return options
+    },
+    [selectedTask, searchAssignableUsers, assignee, assigneeAccountId]
+  )
+
+  // Sprints du board du projet du ticket : cherchés au clavier plutôt que
+  // déroulés, comme les épics et les équipes, pour que tous ces champs se
+  // manipulent de la même façon.
+  const taskSprints = React.useMemo(() => {
+    const proj = projects.find(p => p.id === (selectedTask?.projectId || taskProjectId))
+    return (proj?.sprints || []).filter(sp => sp.id && sp.state !== 'closed')
+  }, [projects, selectedTask?.projectId, taskProjectId])
+  const sprintOptions = taskSprints
+  const searchSprint = React.useMemo(() => sprintLookup(taskSprints), [taskSprints])
+
+  const searchTeam = React.useCallback(
+    async (query: string): Promise<LookupOption[]> => {
+      const found = await searchTrackerTeams(query)
+      return found
+        .filter(team => team.id)
+        .map(team => ({
+          id: team.id,
+          label: team.name,
+          sublabel: team.taskCount ? `${team.taskCount} ticket(s) sur ce board` : undefined,
+        }))
+    },
+    [searchTrackerTeams]
+  )
 
   const currentTaskProject = projects.find(p => p.id === (selectedTask?.projectId || taskProjectId))
   const targetGithubRepo = (currentTaskProject?.githubRepo || settings.githubRepo || '').replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
@@ -224,6 +318,7 @@ export const TaskDetailModal: React.FC = () => {
           projectId: taskProjectId,
           labels,
           assignee: assignee.trim(),
+          assigneeAccountId,
           dueDate: dueDate || null,
           branchName: branchName.trim() || undefined,
           prUrl: prUrl.trim() || undefined,
@@ -353,6 +448,7 @@ export const TaskDetailModal: React.FC = () => {
       projectId: taskProjectId,
       labels,
       assignee: assignee.trim(),
+      assigneeAccountId,
       dueDate: dueDate || null,
       branchName: branchName.trim() || undefined,
       prUrl: prUrl.trim() || undefined,
@@ -562,6 +658,221 @@ export const TaskDetailModal: React.FC = () => {
     )
   }
 
+
+  // -------------------------------------------------------------
+  // DEDICATED TAB: Git, branche et revue
+  // -------------------------------------------------------------
+  // Séparé de la Story : ces champs ne servent qu'au moment de coder, et ils
+  // occupaient un tiers de l'onglet pour tous les autres moments.
+  const renderGitSection = () => (
+    <div className="space-y-6">
+
+      {/* Git Branch & Pull Request / Merge Request Section */}
+      <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
+            <GitBranch size={13} className="text-indigo-400" />
+            Contrôle de Version Git & Revue (PR / MR)
+          </span>
+          <button
+            type="button"
+            onClick={() => setDiffTask(selectedTask)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold text-indigo-300 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-all shadow-2xs hover:scale-105 active:scale-95"
+            title="Inspecter le diff Git et les fichiers modifiés pour cette tâche"
+          >
+            <Code2 size={11} className="text-indigo-400" />
+            <span>👁️ Voir le Diff Git</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Git Branch Field */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] font-medium text-[var(--text-secondary)] flex items-center gap-1.5">
+                <span>Branche Git</span>
+                {branchName && gitStatus?.branch === branchName && (
+                  <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.2 rounded">
+                    Active
+                  </span>
+                )}
+              </label>
+              <div className="flex items-center gap-2">
+                {branchName && (
+                  <button
+                    type="button"
+                    disabled={isSwitchingBranch}
+                    onClick={async () => {
+                      setIsSwitchingBranch(true)
+                      try {
+                        if (selectedTask?.id) {
+                          await checkoutTaskBranch(selectedTask.id)
+                        } else if (branchName) {
+                          await switchGitBranch(branchName)
+                        }
+                      } finally {
+                        setIsSwitchingBranch(false)
+                      }
+                    }}
+                    className={`text-[9px] font-mono font-bold flex items-center gap-1 px-1.5 py-0.5 rounded cursor-pointer transition-colors ${
+                      gitStatus?.branch === branchName
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                        : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30'
+                    }`}
+                    title="Basculer le projet sur cette branche"
+                  >
+                    <GitBranch size={10} className={isSwitchingBranch ? 'animate-spin text-cyan-400' : ''} />
+                    <span>{gitStatus?.branch === branchName ? '✓ Active' : isSwitchingBranch ? 'Bascule...' : 'Basculer'}</span>
+                  </button>
+                )}
+                {branchName && (
+                  <button
+                    type="button"
+                    onClick={() => copyBranchCommand(branchName)}
+                    className="text-[9px] font-mono font-bold text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    title="Copier la commande git checkout"
+                  >
+                    {copiedBranch ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+                    <span>{copiedBranch ? 'Copié !' : 'Copier'}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => selectedTask && openInEditor({ taskId: selectedTask.id })}
+                  className="text-[9px] font-mono font-bold text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  title={`Ouvrir le dossier / worktree dans ${settings.editorCommand || 'VS Code'}`}
+                >
+                  <Code2 size={10} className="text-cyan-400" />
+                  <span>Code</span>
+                </button>
+              </div>
+            </div>
+            <div className="relative">
+              <input
+                type="text"
+                value={branchName}
+                onChange={e => setBranchName(e.target.value)}
+                placeholder={selectedTask.key ? `${selectedTask.key}-feature-name` : 'main'}
+                className="w-full pl-7 pr-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-[11px] focus:outline-none focus:border-[var(--accent-color)]"
+              />
+              <GitBranch size={12} className="absolute left-2.5 top-2.5 text-indigo-400" />
+            </div>
+          </div>
+
+          {/* Merge Request / Pull Request Field */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
+                Merge Request / Pull Request
+              </label>
+              {prUrl && (
+                <a
+                  href={prUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`text-[9px] font-bold flex items-center gap-1 hover:underline ${
+                    prUrl.includes('gitlab') ? 'text-orange-400' : 'text-purple-400'
+                  }`}
+                  title="Ouvrir la Pull/Merge Request dans le navigateur"
+                >
+                  <span>{prUrl.includes('gitlab') ? 'Ouvrir GitLab MR' : 'Ouvrir GitHub PR'}</span>
+                  <ExternalLink size={9} />
+                </a>
+              )}
+            </div>
+            <div className="relative">
+              <input
+                type="url"
+                value={prUrl}
+                onChange={e => setPrUrl(e.target.value)}
+                placeholder="https://github.com/.../pull/123 ou GitLab MR"
+                className="w-full pl-7 pr-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-[11px] focus:outline-none focus:border-[var(--accent-color)]"
+              />
+              <GitPullRequest size={12} className={`absolute left-2.5 top-2.5 ${prUrl.includes('gitlab') ? 'text-orange-400' : 'text-purple-400'}`} />
+            </div>
+          </div>
+        </div>
+
+        {/* Per-task working directory: an epic spanning several repositories
+            cannot rely on the project's single repoPath. */}
+        <div className="mt-3">
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[10px] font-medium text-[var(--text-secondary)] flex items-center gap-1.5">
+              <span>Répertoire de travail (CWD)</span>
+            </label>
+            {repoPath.trim() ? (
+              <button
+                type="button"
+                onClick={() => setRepoPath('')}
+                className="text-[9px] font-mono font-bold text-rose-400 hover:underline flex items-center gap-1 cursor-pointer"
+                title="Revenir au répertoire du projet"
+              >
+                <X size={10} />
+                <span>Hériter du projet</span>
+              </button>
+            ) : (
+              <span className="text-[9px] font-mono text-[var(--text-muted)]">
+                Hérité : {inheritedRepoPath || 'non configuré'}
+              </span>
+            )}
+          </div>
+          <div className="relative">
+            <input
+              type="text"
+              list="task-cwd-options"
+              value={repoPath}
+              onChange={e => setRepoPath(e.target.value)}
+              placeholder={inheritedRepoPath || '/chemin/vers/le/depot'}
+              className="w-full pl-7 pr-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-[11px] focus:outline-none focus:border-[var(--accent-color)]"
+            />
+            <FolderGit2 size={12} className={`absolute left-2.5 top-2.5 ${repoPath.trim() ? 'text-amber-400' : 'text-[var(--text-muted)]'}`} />
+            <datalist id="task-cwd-options">
+              {knownRepoPaths.map(path => (
+                <option key={path} value={path} />
+              ))}
+            </datalist>
+          </div>
+
+          {/* Choix rapides : le dépôt du projet et ceux déjà utilisés par
+              d'autres tickets. Saisir un chemin inédit l'ajoute à cette liste. */}
+          {knownRepoPaths.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+              <button
+                type="button"
+                onClick={() => setRepoPath('')}
+                className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono border transition-colors cursor-pointer ${
+                  repoPath.trim() === ''
+                    ? 'bg-[var(--accent-light)] accent-text border-[var(--accent-color)]/40 font-bold'
+                    : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+                }`}
+                title={inheritedRepoPath ? `Hériter du projet : ${inheritedRepoPath}` : 'Hériter du projet'}
+              >
+                Hériter du projet
+              </button>
+              {knownRepoPaths.map(path => (
+                <button
+                  key={path}
+                  type="button"
+                  onClick={() => setRepoPath(path)}
+                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono border transition-colors cursor-pointer max-w-[220px] truncate ${
+                    repoPath.trim() === path
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold'
+                      : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+                  }`}
+                  title={path}
+                >
+                  {path.split('/').pop() || path}
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="mt-1 text-[9px] text-[var(--text-muted)] font-mono truncate" title={effectiveRepoPath}>
+            Worktree, terminal TTY, skills et diff Git s'exécutent dans {effectiveRepoPath || 'le dossier courant du serveur'}
+          </p>
+        </div>
+      </div>
+    </div>
+  )
   // -------------------------------------------------------------
   // DEDICATED TAB: Cadrage & Spécifications
   // -------------------------------------------------------------
@@ -903,8 +1214,8 @@ export const TaskDetailModal: React.FC = () => {
 
         {/* Fullscreen Expanded Interactive Terminal Modal Overlay */}
         {isTtyOpen && isTtyExpanded && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
-            <div className="relative w-full h-[92vh] rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/40 bg-[#070b14] flex flex-col">
+          <div className="fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+            <div className="relative w-full h-[calc(var(--app-h)*0.92)] rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/40 bg-[#070b14] flex flex-col">
               <InteractiveTerminal
                 task={selectedTask}
                 isExpanded={true}
@@ -972,8 +1283,11 @@ export const TaskDetailModal: React.FC = () => {
         />
       </div>
 
-      {/* Metadata Grid: Status, Priority, Project, Assignee, Due Date */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      {/* Deux lignes de quatre champs. Première ligne : ce qui pilote le workflow
+          (statut, étape, priorité, projet). Seconde ligne, ci-dessous : qui porte
+          le ticket, pour quand et pour quelle équipe. Les six colonnes d'avant
+          écrasaient chaque champ sur un écran ordinaire. */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {/* Status */}
         <div>
           <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
@@ -1047,22 +1361,9 @@ export const TaskDetailModal: React.FC = () => {
 
         {/* Project */}
         <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-              Projet
-            </label>
-            {projects.find(p => p.id === taskProjectId) && (
-              <span className="text-[10px] text-[var(--text-muted)] font-mono">
-                Tracker : <span className="font-semibold text-[var(--accent-color)]">
-                  {projects.find(p => p.id === taskProjectId)?.issueTracker === 'linear'
-                    ? `Linear (${projects.find(p => p.id === taskProjectId)?.linearTeam || 'FRE'})`
-                    : projects.find(p => p.id === taskProjectId)?.issueTracker === 'github'
-                    ? 'GitHub'
-                    : 'Local'}
-                </span>
-              </span>
-            )}
-          </div>
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+            Projet
+          </label>
           <select
             value={taskProjectId}
             onChange={async (e) => {
@@ -1082,22 +1383,93 @@ export const TaskDetailModal: React.FC = () => {
           </select>
         </div>
 
-        {/* Assignee */}
+      </div>
+
+      {/* Ligne dédiée : assigné, sprint, équipe, échéance. Ces quatre champs sont
+          ceux qu'on change en planifiant, et trois d'entre eux sont des écritures
+          tracker à part entière. */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Assignee : les membres de l'équipe du ticket sans frappe, puis toute
+            l'instance dès qu'on tape. Un assigné hors équipe reste proposé pour
+            ne pas effacer silencieusement ce que porte le ticket. */}
         <div>
           <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
             {t.taskModal.assignee}
+            {selectedTask.team && (
+              <span className="ml-1 font-normal normal-case tracking-normal text-[var(--text-muted)]">
+                · {selectedTask.team}
+              </span>
+            )}
           </label>
-          <div className="relative">
-            <input
-              type="text"
+          {selectedTask.source === 'jira' ? (
+            <LookupField
               value={assignee}
-              onChange={e => setAssignee(e.target.value)}
-              placeholder="Assigné à..."
-              className="w-full pl-7 pr-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+              icon={<User size={12} />}
+              placeholder="Chercher une personne…"
+              clearLabel="Non assigné"
+              emptyHint="Personne trouvée. Tapez un nom ou un e-mail."
+              onSearch={searchAssignee}
+              onPick={option => {
+                setAssignee(option?.label || '')
+                setAssigneeAccountId(option?.id || '')
+              }}
             />
-            <User size={12} className="absolute left-2.5 top-2.5 text-[var(--text-muted)]" />
-          </div>
+          ) : (
+            <div className="relative">
+              <input
+                type="text"
+                value={assignee}
+                onChange={e => setAssignee(e.target.value)}
+                placeholder="Assigné à..."
+                className="w-full pl-7 pr-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+              />
+              <User size={12} className="absolute left-2.5 top-2.5 text-[var(--text-muted)]" />
+            </div>
+          )}
+
         </div>
+
+        {/* Sprint : les sprints du board du projet, importés par la synchro. Seuls
+            ceux qui portent un identifiant sont proposés, l'API Agile ne déplaçant
+            que par identifiant. */}
+        {selectedTask.source === 'jira' && sprintOptions.length > 0 && (
+          <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                Sprint
+              </label>
+              <LookupField
+                value={selectedTask.sprint || ''}
+                icon={<CalendarRange size={12} />}
+                placeholder="Chercher un sprint…"
+                clearLabel="Backlog (aucun sprint)"
+                emptyHint="Aucun sprint ne correspond."
+                onSearch={searchSprint}
+                onPick={option => setTaskSprint(selectedTask.id, option?.id || '', option?.label)}
+              />
+            </div>
+          )}
+
+        {/* Équipe : le champ Team du tracker, modifiable. L'écriture part tout de
+            suite dans la file, contrairement aux champs texte qui attendent
+            l'enregistrement de la fiche : c'est une opération à part côté Jira. */}
+        {selectedTask.source === 'jira' && (
+          <div>
+            <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+              Équipe
+            </label>
+              <LookupField
+                value={selectedTask.team || ''}
+                icon={<Users size={12} />}
+                placeholder="Chercher une équipe…"
+                clearLabel="Aucune équipe"
+                emptyHint="Aucune équipe trouvée pour cette recherche."
+                onSearch={searchTeam}
+                onPick={option => {
+                  setTaskTeam(selectedTask.id, option?.id || '', option?.label)
+                }}
+              />
+          </div>
+        )}
 
         {/* Due Date */}
         <div>
@@ -1116,222 +1488,17 @@ export const TaskDetailModal: React.FC = () => {
         </div>
       </div>
 
-      {/* Git Branch & Pull Request / Merge Request Section */}
-      <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
-            <GitBranch size={13} className="text-indigo-400" />
-            Contrôle de Version Git & Revue (PR / MR)
-          </span>
-          <button
-            type="button"
-            onClick={() => setDiffTask(selectedTask)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold text-indigo-300 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-all shadow-2xs hover:scale-105 active:scale-95"
-            title="Inspecter le diff Git et les fichiers modifiés pour cette tâche"
-          >
-            <Code2 size={11} className="text-indigo-400" />
-            <span>👁️ Voir le Diff Git</span>
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {/* Git Branch Field */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-[10px] font-medium text-[var(--text-secondary)] flex items-center gap-1.5">
-                <span>Branche Git</span>
-                {branchName && gitStatus?.branch === branchName && (
-                  <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.2 rounded">
-                    Active
-                  </span>
-                )}
-              </label>
-              <div className="flex items-center gap-2">
-                {branchName && (
-                  <button
-                    type="button"
-                    disabled={isSwitchingBranch}
-                    onClick={async () => {
-                      setIsSwitchingBranch(true)
-                      try {
-                        if (selectedTask?.id) {
-                          await checkoutTaskBranch(selectedTask.id)
-                        } else if (branchName) {
-                          await switchGitBranch(branchName)
-                        }
-                      } finally {
-                        setIsSwitchingBranch(false)
-                      }
-                    }}
-                    className={`text-[9px] font-mono font-bold flex items-center gap-1 px-1.5 py-0.5 rounded cursor-pointer transition-colors ${
-                      gitStatus?.branch === branchName
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                        : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30'
-                    }`}
-                    title="Basculer le projet sur cette branche"
-                  >
-                    <GitBranch size={10} className={isSwitchingBranch ? 'animate-spin text-cyan-400' : ''} />
-                    <span>{gitStatus?.branch === branchName ? '✓ Active' : isSwitchingBranch ? 'Bascule...' : 'Basculer'}</span>
-                  </button>
-                )}
-                {branchName && (
-                  <button
-                    type="button"
-                    onClick={() => copyBranchCommand(branchName)}
-                    className="text-[9px] font-mono font-bold text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
-                    title="Copier la commande git checkout"
-                  >
-                    {copiedBranch ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
-                    <span>{copiedBranch ? 'Copié !' : 'Copier'}</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => selectedTask && openInEditor({ taskId: selectedTask.id })}
-                  className="text-[9px] font-mono font-bold text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
-                  title={`Ouvrir le dossier / worktree dans ${settings.editorCommand || 'VS Code'}`}
-                >
-                  <Code2 size={10} className="text-cyan-400" />
-                  <span>Code</span>
-                </button>
-              </div>
-            </div>
-            <div className="relative">
-              <input
-                type="text"
-                value={branchName}
-                onChange={e => setBranchName(e.target.value)}
-                placeholder={selectedTask.key ? `${selectedTask.key}-feature-name` : 'main'}
-                className="w-full pl-7 pr-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-[11px] focus:outline-none focus:border-[var(--accent-color)]"
-              />
-              <GitBranch size={12} className="absolute left-2.5 top-2.5 text-indigo-400" />
-            </div>
-          </div>
-
-          {/* Merge Request / Pull Request Field */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
-                Merge Request / Pull Request
-              </label>
-              {prUrl && (
-                <a
-                  href={prUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={`text-[9px] font-bold flex items-center gap-1 hover:underline ${
-                    prUrl.includes('gitlab') ? 'text-orange-400' : 'text-purple-400'
-                  }`}
-                  title="Ouvrir la Pull/Merge Request dans le navigateur"
-                >
-                  <span>{prUrl.includes('gitlab') ? 'Ouvrir GitLab MR' : 'Ouvrir GitHub PR'}</span>
-                  <ExternalLink size={9} />
-                </a>
-              )}
-            </div>
-            <div className="relative">
-              <input
-                type="url"
-                value={prUrl}
-                onChange={e => setPrUrl(e.target.value)}
-                placeholder="https://github.com/.../pull/123 ou GitLab MR"
-                className="w-full pl-7 pr-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-[11px] focus:outline-none focus:border-[var(--accent-color)]"
-              />
-              <GitPullRequest size={12} className={`absolute left-2.5 top-2.5 ${prUrl.includes('gitlab') ? 'text-orange-400' : 'text-purple-400'}`} />
-            </div>
-          </div>
-        </div>
-
-        {/* Per-task working directory: an epic spanning several repositories
-            cannot rely on the project's single repoPath. */}
-        <div className="mt-3">
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-[10px] font-medium text-[var(--text-secondary)] flex items-center gap-1.5">
-              <span>Répertoire de travail (CWD)</span>
-            </label>
-            {repoPath.trim() ? (
-              <button
-                type="button"
-                onClick={() => setRepoPath('')}
-                className="text-[9px] font-mono font-bold text-rose-400 hover:underline flex items-center gap-1 cursor-pointer"
-                title="Revenir au répertoire du projet"
-              >
-                <X size={10} />
-                <span>Hériter du projet</span>
-              </button>
-            ) : (
-              <span className="text-[9px] font-mono text-[var(--text-muted)]">
-                Hérité : {inheritedRepoPath || 'non configuré'}
-              </span>
-            )}
-          </div>
-          <div className="relative">
-            <input
-              type="text"
-              list="task-cwd-options"
-              value={repoPath}
-              onChange={e => setRepoPath(e.target.value)}
-              placeholder={inheritedRepoPath || '/chemin/vers/le/depot'}
-              className="w-full pl-7 pr-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-[11px] focus:outline-none focus:border-[var(--accent-color)]"
-            />
-            <FolderGit2 size={12} className={`absolute left-2.5 top-2.5 ${repoPath.trim() ? 'text-amber-400' : 'text-[var(--text-muted)]'}`} />
-            <datalist id="task-cwd-options">
-              {knownRepoPaths.map(path => (
-                <option key={path} value={path} />
-              ))}
-            </datalist>
-          </div>
-
-          {/* Choix rapides : le dépôt du projet et ceux déjà utilisés par
-              d'autres tickets. Saisir un chemin inédit l'ajoute à cette liste. */}
-          {knownRepoPaths.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-              <button
-                type="button"
-                onClick={() => setRepoPath('')}
-                className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono border transition-colors cursor-pointer ${
-                  repoPath.trim() === ''
-                    ? 'bg-[var(--accent-light)] accent-text border-[var(--accent-color)]/40 font-bold'
-                    : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
-                }`}
-                title={inheritedRepoPath ? `Hériter du projet : ${inheritedRepoPath}` : 'Hériter du projet'}
-              >
-                Hériter du projet
-              </button>
-              {knownRepoPaths.map(path => (
-                <button
-                  key={path}
-                  type="button"
-                  onClick={() => setRepoPath(path)}
-                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono border transition-colors cursor-pointer max-w-[220px] truncate ${
-                    repoPath.trim() === path
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold'
-                      : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
-                  }`}
-                  title={path}
-                >
-                  {path.split('/').pop() || path}
-                </button>
-              ))}
-            </div>
-          )}
-          <p className="mt-1 text-[9px] text-[var(--text-muted)] font-mono truncate" title={effectiveRepoPath}>
-            Worktree, terminal TTY, skills et diff Git s'exécutent dans {effectiveRepoPath || 'le dossier courant du serveur'}
-          </p>
-        </div>
-      </div>
-
       {/* Description / Acceptance criteria */}
       <div>
         <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
           Description & Contexte Technique
         </label>
-        <textarea
-          rows={16}
+        <MarkdownEditor
           value={description}
-          onChange={e => setDescription(e.target.value)}
+          onChange={setDescription}
           placeholder={t.taskModal.descPlaceholder}
-          className="w-full px-3.5 py-2.5 text-[13px] rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] leading-relaxed resize-y min-h-[320px] max-h-[60vh]"
+          minHeight={320}
+          maxHeight={window.innerHeight * 0.6}
         />
       </div>
 
@@ -1580,7 +1747,7 @@ export const TaskDetailModal: React.FC = () => {
   // -------------------------------------------------------------
   if (detailMode === 'panel') {
     return (
-      <div className="fixed inset-0 z-50 overflow-hidden select-none">
+      <div className="fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-50 overflow-hidden select-none">
         {/* Backdrop overlay */}
         <div
           onClick={handleClose}
@@ -1589,7 +1756,7 @@ export const TaskDetailModal: React.FC = () => {
 
         {/* Sliding Panel */}
         <div className="absolute inset-y-0 right-0 max-w-full flex pl-2 sm:pl-6">
-          <div className="w-screen max-w-5xl 2xl:max-w-[1500px] bg-[var(--bg-secondary)] border-l border-[var(--border-color)] shadow-2xl flex flex-col h-full animate-in slide-in-from-right duration-200">
+          <div className="w-[var(--app-w)] max-w-5xl 2xl:max-w-[1500px] bg-[var(--bg-secondary)] border-l border-[var(--border-color)] shadow-2xl flex flex-col h-full animate-in slide-in-from-right duration-200">
             {/* Panel Header */}
             <div className="flex items-center justify-between px-6 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 shrink-0">
               {/* Left: Référence ParentKey / TaskKey (chacune ouvre le tracker) */}
@@ -1656,6 +1823,18 @@ export const TaskDetailModal: React.FC = () => {
                 )}
 
                 <button
+                  onClick={() => togglePin(selectedTask.id)}
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                    isPinned(selectedTask.id)
+                      ? 'text-amber-300 bg-amber-400/10 hover:bg-amber-400/20'
+                      : 'text-[var(--text-muted)] hover:text-amber-300 hover:bg-[var(--bg-tertiary)]'
+                  }`}
+                  title={isPinned(selectedTask.id) ? 'Désépingler ce ticket' : 'Épingler ce ticket'}
+                >
+                  {isPinned(selectedTask.id) ? <PinOff size={15} /> : <Pin size={15} />}
+                </button>
+
+                <button
                   onClick={handleDelete}
                   className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10 transition-colors"
                   title={t.taskModal.delete}
@@ -1689,18 +1868,15 @@ export const TaskDetailModal: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => setActiveTab('cadrage')}
+                onClick={() => setActiveTab('comments')}
                 className={`pb-2 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
-                  activeTab === 'cadrage'
-                    ? 'border-amber-400 text-amber-400 font-bold'
+                  activeTab === 'comments'
+                    ? 'border-cyan-400 text-cyan-400 font-bold'
                     : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                 }`}
               >
-                <HelpCircle size={13} className="text-amber-400" />
-                <span>Cadrage & Specs</span>
-                {Boolean(clarifyActivity || specifyActivity) && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                )}
+                <MessageSquare size={13} className="text-cyan-400" />
+                <span>Commentaires</span>
               </button>
 
               <button
@@ -1715,26 +1891,44 @@ export const TaskDetailModal: React.FC = () => {
                 <Sparkles size={13} className="text-purple-400" />
                 <span>Skills & Copilot</span>
               </button>
+
               <button
                 type="button"
-                onClick={() => setActiveTab('comments')}
+                onClick={() => setActiveTab('git')}
                 className={`pb-2 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
-                  activeTab === 'comments'
-                    ? 'border-cyan-400 text-cyan-400 font-bold'
+                  activeTab === 'git'
+                    ? 'border-indigo-400 text-indigo-400 font-bold'
                     : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                 }`}
               >
-                <MessageSquare size={13} className="text-cyan-400" />
-                <span>Commentaires</span>
+                <GitBranch size={13} className="text-indigo-400" />
+                <span>Git</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('cadrage')}
+                className={`pb-2 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'cadrage'
+                    ? 'border-amber-400 text-amber-400 font-bold'
+                    : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <HelpCircle size={13} className="text-amber-400" />
+                <span>Cadrage & Specs</span>
+                {Boolean(clarifyActivity || specifyActivity) && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                )}
               </button>
             </div>
 
             {/* Panel Scrollable Content Body */}
             <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
               {activeTab === 'details' && renderStoryInfoSection()}
-              {activeTab === 'cadrage' && renderCadrageSection()}
-              {activeTab === 'skills' && renderSkillsCopilotSection()}
               {activeTab === 'comments' && <TaskComments task={selectedTask} />}
+              {activeTab === 'skills' && renderSkillsCopilotSection()}
+              {activeTab === 'git' && renderGitSection()}
+              {activeTab === 'cadrage' && renderCadrageSection()}
             </div>
 
             {/* Panel Sticky Footer */}
@@ -1772,12 +1966,12 @@ export const TaskDetailModal: React.FC = () => {
   // With tab navigation & switcher back to right panel
   // -------------------------------------------------------------
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200 select-none">
+    <div className="fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200 select-none">
       <div
         className={`relative w-full transition-all duration-200 bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col ${
           isMaximized
             ? 'w-full h-full max-w-none max-h-none rounded-2xl'
-            : 'max-w-[95vw] xl:max-w-[1400px] 2xl:max-w-[1700px] h-[94vh] max-h-[94vh] rounded-2xl'
+            : 'max-w-[calc(var(--app-w)*0.95)] xl:max-w-[1400px] 2xl:max-w-[1700px] h-[calc(var(--app-h)*0.94)] max-h-[calc(var(--app-h)*0.94)] rounded-2xl'
         }`}
       >
         {/* Modal Header */}
@@ -1845,6 +2039,18 @@ export const TaskDetailModal: React.FC = () => {
             )}
 
             <button
+              onClick={() => togglePin(selectedTask.id)}
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                isPinned(selectedTask.id)
+                  ? 'text-amber-300 bg-amber-400/10 hover:bg-amber-400/20'
+                  : 'text-[var(--text-muted)] hover:text-amber-300 hover:bg-[var(--bg-tertiary)]'
+              }`}
+              title={isPinned(selectedTask.id) ? 'Désépingler ce ticket' : 'Épingler ce ticket'}
+            >
+              {isPinned(selectedTask.id) ? <PinOff size={16} /> : <Pin size={16} />}
+            </button>
+
+            <button
               onClick={handleDelete}
               className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
               title={t.taskModal.delete}
@@ -1889,18 +2095,15 @@ export const TaskDetailModal: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => setActiveTab('cadrage')}
+              onClick={() => setActiveTab('comments')}
               className={`pb-2.5 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
-                activeTab === 'cadrage'
-                  ? 'border-amber-400 text-amber-400 font-bold'
+                activeTab === 'comments'
+                  ? 'border-cyan-400 text-cyan-400 font-bold'
                   : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
               }`}
             >
-              <HelpCircle size={14} className="text-amber-400" />
-              <span>Cadrage & Spécifications</span>
-              {Boolean(clarifyActivity || specifyActivity) && (
-                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse ml-0.5" />
-              )}
+              <MessageSquare size={14} className="text-cyan-400" />
+              <span>Commentaires</span>
             </button>
 
             <button
@@ -1918,15 +2121,31 @@ export const TaskDetailModal: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => setActiveTab('comments')}
+              onClick={() => setActiveTab('git')}
               className={`pb-2.5 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
-                activeTab === 'comments'
-                  ? 'border-cyan-400 text-cyan-400 font-bold'
+                activeTab === 'git'
+                  ? 'border-indigo-400 text-indigo-400 font-bold'
                   : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
               }`}
             >
-              <MessageSquare size={14} className="text-cyan-400" />
-              <span>Commentaires</span>
+              <GitBranch size={14} className="text-indigo-400" />
+              <span>Git & Revue</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('cadrage')}
+              className={`pb-2.5 flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+                activeTab === 'cadrage'
+                  ? 'border-amber-400 text-amber-400 font-bold'
+                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <HelpCircle size={14} className="text-amber-400" />
+              <span>Cadrage & Spécifications</span>
+              {Boolean(clarifyActivity || specifyActivity) && (
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse ml-0.5" />
+              )}
             </button>
           </div>
         </div>
@@ -1934,9 +2153,10 @@ export const TaskDetailModal: React.FC = () => {
         {/* Modal Scrollable Body */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
           {activeTab === 'details' && renderStoryInfoSection()}
-          {activeTab === 'cadrage' && renderCadrageSection()}
-          {activeTab === 'skills' && renderSkillsCopilotSection()}
           {activeTab === 'comments' && <TaskComments task={selectedTask} />}
+          {activeTab === 'skills' && renderSkillsCopilotSection()}
+          {activeTab === 'git' && renderGitSection()}
+          {activeTab === 'cadrage' && renderCadrageSection()}
         </div>
 
         {/* Modal Footer */}
@@ -1969,8 +2189,8 @@ export const TaskDetailModal: React.FC = () => {
 
       {/* Fullscreen Expanded Specification Reader Modal */}
       {isExpandedSpec && specifyActivity?.output && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="relative w-full max-w-5xl h-[88vh] rounded-2xl bg-[var(--bg-secondary)] border border-blue-500/40 shadow-2xl flex flex-col overflow-hidden">
+        <div className="fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-60 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="relative w-full max-w-5xl h-[calc(var(--app-h)*0.88)] rounded-2xl bg-[var(--bg-secondary)] border border-blue-500/40 shadow-2xl flex flex-col overflow-hidden">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/70 shrink-0">
               <div className="flex items-center gap-2.5">

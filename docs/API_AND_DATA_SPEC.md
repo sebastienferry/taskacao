@@ -121,16 +121,40 @@ CREATE TABLE IF NOT EXISTS settings (
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/tasks` | Returns array of all tasks (supports `?projectId=...`). |
+| `GET` | `/api/tasks` | Returns array of all tasks. Filters: `projectId`, `q`, `status`, `priority`, `label`, `sprint`, `team`, `assignee` (`__unassigned__` for the work items nobody owns), `pinned=1`. |
 | `POST` | `/api/tasks` | Creates a new task bound strictly to `projectId`. |
 | `GET` | `/api/tasks/{id}` | Fetches task detail with its activities. |
 | `PUT` | `/api/tasks/{id}` | Updates task fields (status, title, description, priority, etc.). |
 | `DELETE` | `/api/tasks/{id}` | Deletes task and prunes associated Git worktree. |
 | `POST` | `/api/tasks/{id}/skills/{skillId}` | Enqueues or immediately executes an AI skill on the task. |
 | `POST` | `/api/tasks/{id}/comment` | Publishes a comment to Linear or GitHub issue tracker. |
+| `POST` | `/api/tasks/{id}/epic` | Queues the attachment to an epic (`202`, returns the activity to follow). |
 | `GET` | `/api/tasks/{id}/diff` | Computes and returns the Git diff of the task branch vs `main`. |
 
+### 2.1.1 Teams API
+
+A work item may carry a team, and it is never mandatory: a project can hold
+tickets with no team at all. On Jira the team is the `atlassian-team` custom
+field, which carries both a label and an id; only the id gives access to the
+people, through `/gateway/api/v4/teams/{teamId}/members?siteId={cloudId}`, whose
+account ids are then resolved by `/rest/api/3/user/bulk`. Every Jira sync stores
+the teams it met on the work items and refreshes their members.
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/teams` | Teams carried by the project's work items (`?projectId=...&members=1`). |
+| `GET` | `/api/teams/members` | People of one team, by its label (`?team=<name>`). |
+| `GET` | `/api/teams/workload` | The team's work items grouped per person, plus the unassigned ones and the ones owned outside the team (`?projectId=...&team=<name>`). |
+| `POST` | `/api/teams/refresh` | `{projectId, teamId}` re-reads one team's members from the tracker. |
+
 ### 2.2 Activities API
+
+Every write on an existing work item goes through this queue: field sync,
+assignment, epic attachment, epic split, roadmap horizon labels. A tracker call
+takes seconds and a batch of them far longer, so the HTTP endpoints answer `202`
+with the activity to follow, and the activity's steps carry what was attempted
+and the tracker's own refusal when it fails.
+
 
 | Method | Path | Description |
 | :--- | :--- | :--- |

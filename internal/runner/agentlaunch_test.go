@@ -48,9 +48,9 @@ func TestInteractiveAgentLaunchCustomUsesTemplateBinary(t *testing.T) {
 }
 
 func TestSkillCallLineFollowsProjectCommand(t *testing.T) {
-	task := &models.Task{Key: "SFE-238", Title: "Titre\navec saut", Source: "jira"}
+	task := &models.Task{Key: "PROJ-238", Title: "Titre\navec saut", Source: "jira"}
 	got := SkillCallLineWithCommand("clarify-workitem", task, "jira")
-	want := "/clarify-workitem SFE-238 (Titre avec saut) suivi dans jira"
+	want := "/clarify-workitem PROJ-238 (Titre avec saut) suivi dans jira"
 	if got != want {
 		t.Fatalf("ligne inattendue:\n obtenu %q\n attendu %q", got, want)
 	}

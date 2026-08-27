@@ -14,8 +14,13 @@ export interface AccentDefinition {
   rgb: string
 }
 
-/** Accent applied when no project is selected: the Equativ brand orange. */
-export const BRAND_ACCENT = 'equativ'
+/**
+ * Accent used when no project is selected. It names the theme's own default
+ * rather than a colour: the palette lives in index.css, under
+ * `[data-accent="default"]`, and can be repainted there without touching the
+ * code.
+ */
+export const BRAND_ACCENT = 'default'
 
 /** Accent used when a project carries no color of its own. */
 export const DEFAULT_PROJECT_ACCENT: AccentColor = 'indigo'
@@ -68,7 +73,7 @@ export function normalizeAccentColor(color?: string | null): AccentColor | null 
 
 /**
  * The `data-accent` value to put on <html>/<body> for a given project color.
- * With no project color at all (the "all projects" view), the Equativ brand
+ * With no project color at all (the "all projects" view), the theme's own
  * accent defined on :root is kept.
  */
 export function resolveAccentAttribute(color?: string | null): string {
@@ -84,7 +89,7 @@ export function accentDefinition(color?: string | null): AccentDefinition {
  * Inline style for a project badge (icon chip). Inline styles are used instead
  * of `bg-${color}-500/20` classes because Tailwind cannot generate classes it
  * never sees in the source, and because index.css remaps the raw Tailwind
- * families onto the Equativ palette with `!important`.
+ * families onto the theme palette with `!important`.
  */
 export function accentBadgeStyle(color?: string | null): CSSProperties {
   const def = accentDefinition(color)

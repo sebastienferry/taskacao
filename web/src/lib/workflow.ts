@@ -1,4 +1,4 @@
-import type { Project, Task, WorkflowStage } from '../types'
+import type { Project, Status, Task, WorkflowStage } from '../types'
 
 /**
  * Étape du workflow agentique d'une tâche, et skill qui en découle.
@@ -86,4 +86,69 @@ export const skillForStage = (stage: WorkflowStage): string | null => {
     default:
       return null
   }
+}
+
+/**
+ * Étape du workflow et statut interne se répondent un pour un : c'est le même
+ * découpage, nommé par le label côté tracker et par le statut côté application.
+ * Le serveur tient la même table (internal/db/board.go).
+ */
+export const INTERNAL_STATUS_BY_STAGE: Record<WorkflowStage, Status> = {
+  new: 'to_clarify',
+  clarified: 'to_specify',
+  specified: 'to_implement',
+  implemented: 'to_test',
+  reviewed: 'to_close',
+  finished: 'finished',
+}
+
+/** Étape correspondant à un statut interne, alias historiques compris. */
+export const stageForInternalStatus = (status: Status): WorkflowStage => {
+  if (status === 'finished' || status === 'done') return 'finished'
+  if (status === 'to_close') return 'reviewed'
+  if (status === 'to_test' || status === 'to_validate') return 'implemented'
+  if (status === 'to_implement' || status === 'in_progress') return 'specified'
+  if (status === 'to_specify' || status === 'specified') return 'clarified'
+  return 'new'
+}
+
+/**
+ * Statuts du tracker qu'une étape recouvre, en passant par les colonnes que le
+ * projet lui a affectées. Vide quand le projet n'a pas de mapping : il n'y a
+ * alors rien à convertir, et forcer une correspondance approximative vaudrait
+ * moins que de ne pas filtrer.
+ */
+export const trackerStatusesForStage = (project: Project | null | undefined, stage: WorkflowStage): string[] => {
+  const columns = project?.stageColumns?.[stage] || []
+  if (columns.length === 0 || !project?.trackerColumns?.length) return []
+  const out: string[] = []
+  columns.forEach(name => {
+    const column = project.trackerColumns?.find(col => col.name === name)
+    ;(column?.statuses || []).forEach(status => {
+      if (!out.includes(status)) out.push(status)
+    })
+  })
+  return out
+}
+
+/**
+ * Étape que recouvre une sélection de statuts du tracker. La moins avancée
+ * gagne, comme pour la colonne d'une tâche : c'est l'étape qui reste à faire.
+ */
+export const stageForTrackerStatuses = (
+  project: Project | null | undefined,
+  statuses: string[]
+): WorkflowStage | null => {
+  if (statuses.length === 0 || !project?.trackerColumns?.length) return null
+  const lowered = statuses.map(st => st.toLowerCase())
+  const columns = project.trackerColumns
+    .filter(col => (col.statuses || []).some(st => lowered.includes(st.toLowerCase())))
+    .map(col => col.name)
+  if (columns.length === 0) return null
+
+  const mapping = project.stageColumns || {}
+  for (const stage of WORKFLOW_ORDER) {
+    if ((mapping[stage] || []).some(name => columns.includes(name))) return stage
+  }
+  return null
 }

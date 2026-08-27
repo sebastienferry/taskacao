@@ -9,7 +9,6 @@ import {
   Moon,
   Globe,
   Settings,
-  RotateCcw,
   RefreshCw,
   Code2,
   ArrowRight,
@@ -44,7 +43,6 @@ export const CommandPalette: React.FC = () => {
     setChatTask,
     settings,
     updateSettings,
-    reseedDemo,
     skills,
     runSkill,
     openInEditor,
@@ -339,17 +337,6 @@ export const CommandPalette: React.FC = () => {
         setIsProfileOpen(true)
       },
     },
-    {
-      id: 'reseed_demo',
-      title: t.commandPalette.reseed,
-      icon: <RotateCcw size={16} className="text-rose-400" />,
-      shortcut: 'R',
-      keywords: ['reseed', 'demo', 'reinitialiser', 'reset', 'donnees'],
-      action: () => {
-        reseedDemo()
-        setIsCommandPaletteOpen(false)
-      },
-    },
   ]
 
   // Dynamic Skill Actions
@@ -435,8 +422,8 @@ export const CommandPalette: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="relative w-full max-w-xl rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col max-h-[70vh]">
+    <div className="fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-50 flex items-start justify-center pt-20 p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+      <div className="relative w-full max-w-xl rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col max-h-[calc(var(--app-h)*0.7)]">
         {/* Search Header */}
         <div className="flex items-center gap-3 px-4 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30">
           <Search size={18} className="text-[var(--text-muted)] shrink-0" />

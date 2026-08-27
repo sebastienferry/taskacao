@@ -8,7 +8,6 @@ import {
   Moon,
   Globe,
   Check,
-  RotateCcw,
   Sliders,
   PanelRight,
   Square,
@@ -17,6 +16,7 @@ import {
   Terminal,
   FileCode,
   HelpCircle,
+  CalendarDays,
   Flame,
   GitPullRequest,
   Info,
@@ -42,7 +42,6 @@ export const ProfileModal: React.FC = () => {
     setIsProfileOpen,
     settings,
     updateSettings,
-    reseedDemo,
     t,
   } = useApp()
 
@@ -68,8 +67,13 @@ export const ProfileModal: React.FC = () => {
   const [jiraUrl, setJiraUrl] = useState(settings.jiraUrl || '')
   const [jiraEmail, setJiraEmail] = useState(settings.jiraEmail || '')
   const [jiraApiToken, setJiraApiToken] = useState('')
+  // Boucle de synchronisation de fond : éteinte par défaut, c'est un appel
+  // périodique au tracker et il se règle ici.
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(false)
+  const [autoSyncIntervalSec, setAutoSyncIntervalSec] = useState(60)
 
   // Skill Prompts
+  const [promptDigestAgenda, setPromptDigestAgenda] = useState(settings.promptDigestAgenda || '')
   const [promptClarify, setPromptClarify] = useState(settings.promptClarify || '')
   const [promptSpecify, setPromptSpecify] = useState(settings.promptSpecify || '')
   const [promptImplement, setPromptImplement] = useState(settings.promptImplement || '')
@@ -91,6 +95,9 @@ export const ProfileModal: React.FC = () => {
       setJiraUrl(settings.jiraUrl || '')
       setJiraEmail(settings.jiraEmail || '')
       setJiraApiToken('')
+      setAutoSyncEnabled(Boolean(settings.autoSyncEnabled))
+      setAutoSyncIntervalSec(settings.autoSyncIntervalSec || 60)
+      setPromptDigestAgenda(settings.promptDigestAgenda || '')
       setPromptClarify(settings.promptClarify || '')
       setPromptSpecify(settings.promptSpecify || '')
       setPromptImplement(settings.promptImplement || '')
@@ -142,6 +149,9 @@ export const ProfileModal: React.FC = () => {
       jiraEmail: jiraEmail.trim(),
       // Vide = conserver le jeton stocké, la sentinelle l'efface.
       jiraApiToken: jiraApiToken.trim(),
+      autoSyncEnabled,
+      autoSyncIntervalSec,
+      promptDigestAgenda: promptDigestAgenda.trim(),
       promptClarify: promptClarify.trim(),
       promptSpecify: promptSpecify.trim(),
       promptImplement: promptImplement.trim(),
@@ -151,8 +161,8 @@ export const ProfileModal: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="relative w-full max-w-2xl rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="relative w-full max-w-2xl rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col max-h-[calc(var(--app-h)*0.92)]">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30 shrink-0">
           <div className="flex items-center gap-2.5">
@@ -463,7 +473,7 @@ export const ProfileModal: React.FC = () => {
                     type="text"
                     value={jiraUrl}
                     onChange={e => setJiraUrl(e.target.value)}
-                    placeholder="equativ.atlassian.net"
+                    placeholder="mon-org.atlassian.net"
                     className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
                   />
                   <input
@@ -505,25 +515,63 @@ export const ProfileModal: React.FC = () => {
                     Le jeton sera effacé à l'enregistrement. Sprint et Team retomberont sur le repli acli, qui ne couvre que le sprint.
                   </span>
                 )}
+                {/* Boucle de fond : elle ne relit que ce qui a bougé, ce qui la
+                    rend possible sans peser sur le tracker. */}
+                <div className="p-3 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold text-[var(--text-primary)] block">
+                        Synchronisation en arrière-plan
+                      </span>
+                      <span className="text-[10px] text-[var(--text-muted)] block mt-0.5">
+                        {autoSyncEnabled
+                          ? "La boucle relit périodiquement ce qui a changé dans Jira depuis sa passe précédente. Une passe complète d'un projet de mille quatre cents tickets coûte quatorze requêtes ; une passe incrémentale, une seule, qui ne répond le plus souvent aucun ticket."
+                          : 'Rien ne part vers le tracker tant que vous ne synchronisez pas vous-même. Nécessite un jeton d\'API : le CLI acli ne sait pas lire par date de mise à jour.'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAutoSyncEnabled(v => !v)}
+                      role="switch"
+                      aria-checked={autoSyncEnabled}
+                      className={`relative w-10 h-5 rounded-full transition-colors shrink-0 cursor-pointer ${
+                        autoSyncEnabled ? 'bg-[var(--accent-color)]' : 'bg-[var(--border-color)]'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
+                          autoSyncEnabled ? 'left-[22px]' : 'left-0.5'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {autoSyncEnabled && (
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-[var(--text-muted)]">Toutes les</label>
+                      <select
+                        value={autoSyncIntervalSec}
+                        onChange={e => setAutoSyncIntervalSec(Number(e.target.value))}
+                        className="px-2 py-1 text-[11px] rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                      >
+                        <option value={60}>minute</option>
+                        <option value={120}>2 minutes</option>
+                        <option value={300}>5 minutes</option>
+                        <option value={900}>15 minutes</option>
+                      </select>
+                      <span className="text-[10px] text-[var(--text-muted)]">
+                        Une passe complète est refaite toutes les 30 minutes : elle seule voit les
+                        tickets sortis du périmètre.
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 <span className="text-[10px] text-[var(--text-muted)] block">
                   Sprint et Team sont des champs personnalisés que le CLI acli refuse de renvoyer. Avec un jeton, la synchro Jira lit tout par l'API en une passe, parent inclus. Sans jeton, elle repasse sur acli : le sprint est reconstruit depuis les boards scrum et Team reste vide. Jeton à créer sur id.atlassian.com, section jetons d'API, ou à fournir par la variable d'environnement TASKACAO_JIRA_API_TOKEN pour qu'il ne soit pas stocké en base.
                 </span>
               </div>
 
-              {/* Demo Reset */}
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    reseedDemo()
-                    setIsProfileOpen(false)
-                  }}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-semibold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-colors cursor-pointer"
-                >
-                  <RotateCcw size={14} />
-                  <span>{t.profileModal.reseedBtn}</span>
-                </button>
-              </div>
             </div>
           )}
 
@@ -689,6 +737,33 @@ export const ProfileModal: React.FC = () => {
             <div className="space-y-5 animate-in fade-in duration-150">
               <div className="text-[11px] text-[var(--text-muted)] leading-relaxed">
                 Personnalisez les invites (prompts) envoyées au CLI Agentic pour chaque étape du workflow. Si laissé vide, les invites par défaut sont utilisées.
+              </div>
+
+              {/* Digest Agenda Prompt : la seule partie du digest qui passe par
+                  l'agent, les autres sections étant calculées sur les tickets. */}
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-bold text-[var(--text-primary)] flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-emerald-400">
+                    <CalendarDays size={13} />
+                    <span>Prompt de l'agenda du Daily Digest</span>
+                  </span>
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                    Marqueurs : {'{project}'} {'{date}'}
+                  </span>
+                </label>
+                <textarea
+                  value={promptDigestAgenda}
+                  onChange={e => setPromptDigestAgenda(e.target.value)}
+                  rows={3}
+                  placeholder="/daily-brief {date}"
+                  className="w-full p-2.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-emerald-500 transition-all resize-y"
+                />
+                <span className="text-[10px] text-[var(--text-muted)] block">
+                  Vide garde le prompt d'origine, qui demande un tableau des réunions et interdit
+                  d'inventer un agenda. Une commande de votre agent fait aussi l'affaire, par exemple
+                  <code className="text-cyan-400"> /daily-brief {'{date}'}</code> : c'est ce texte,
+                  marqueurs substitués, qui lui est envoyé tel quel.
+                </span>
               </div>
 
               {/* Clarify Prompt */}
