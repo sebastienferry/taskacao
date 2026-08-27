@@ -62,6 +62,9 @@ interface AppContextType {
   }
   /** État de la boucle de synchronisation de fond, rafraîchi avec les activités. */
   autoSync: AutoSyncState | null
+  /** Écran de connexion au tracker, ouvert à la demande et jamais au démarrage. */
+  isTrackerSetupOpen: boolean
+  setIsTrackerSetupOpen: (open: boolean) => void
   /** Vérifie des accès tracker sans rien enregistrer. */
   checkTrackerCredentials: (siteUrl: string, email: string, token: string) => Promise<TrackerCheck>
   /** Enregistre des accès déjà vérifiés, jeton en base ou dans un fichier à part. */
@@ -394,6 +397,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     total: 0,
   })
   const [autoSync, setAutoSync] = useState<AutoSyncState | null>(null)
+  const [isTrackerSetupOpen, setIsTrackerSetupOpen] = useState(false)
   const [trackerStatusFilters, setTrackerStatusFiltersState] = useState<string[]>([])
   const [teams, setTeams] = useState<TrackerTeam[]>([])
   const [sprintFilter, setSprintFilterState] = useState<string | null>(null)
@@ -3108,6 +3112,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         trackerStatusFilters,
         setTrackerStatusFilters,
         autoSync,
+        isTrackerSetupOpen,
+        setIsTrackerSetupOpen,
         checkTrackerCredentials,
         saveTrackerCredentials,
         sourceFilter,

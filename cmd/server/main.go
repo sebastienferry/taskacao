@@ -82,21 +82,21 @@ func appDataDir() string {
 // the program from a checkout must not silently start from an empty board. Only
 // otherwise does the database go to the user's data directory, which is what a
 // distributed binary needs, since it may be launched from anywhere.
-func resolveDBPath(explicit string) string {
+func resolveDBPath(explicit string) (path string, origin string) {
 	if strings.TrimSpace(explicit) != "" {
-		return explicit
+		return explicit, "DB_PATH"
 	}
 	if _, err := os.Stat("tasks.db"); err == nil {
-		return "tasks.db"
+		return "tasks.db", "base trouvée dans le répertoire courant"
 	}
 
 	appDir := appDataDir()
 	if appDir == "" {
 		// Pas de dossier utilisateur lisible : le répertoire courant reste un
 		// endroit valable, et vaut mieux qu'un démarrage refusé.
-		return "tasks.db"
+		return "tasks.db", "répertoire courant, dossier de données indisponible"
 	}
-	return filepath.Join(appDir, "tasks.db")
+	return filepath.Join(appDir, "tasks.db"), "dossier de données"
 }
 
 // openBrowser opens the interface once the server listens. It is best effort by
@@ -134,7 +134,7 @@ func main() {
 		port = "8090"
 	}
 
-	dbPath := resolveDBPath(os.Getenv("DB_PATH"))
+	dbPath, dbOrigin := resolveDBPath(os.Getenv("DB_PATH"))
 
 	database, err := db.NewDB(dbPath)
 	if err != nil {
@@ -273,7 +273,8 @@ func main() {
 
 	addr := ":" + port
 	url := fmt.Sprintf("http://localhost%s", addr)
-	log.Printf("🚀 Taskacao Server listening on %s (DB: %s)", url, dbPath)
+	log.Printf("🚀 Taskacao Server listening on %s", url)
+	log.Printf("   base : %s (%s)", dbPath, dbOrigin)
 
 	// Ouverture du navigateur : ce que fait une application quand on la lance.
 	// TASKACAO_NO_BROWSER=1 l'en empêche, pour un serveur ou un lancement par un

@@ -25,18 +25,7 @@ import { ToastContainer } from './components/ToastContainer'
 import { Loader2 } from 'lucide-react'
 
 const MainContent: React.FC = () => {
-  const { activeView, isLoading, error, tasks, settings, projects } = useApp()
-
-  /**
-   * Premier démarrage : rien ne fonctionne tant que le tracker n'est pas
-   * connecté, et on ne l'apprenait qu'en synchronisant pour rien. L'écran ne
-   * s'ouvre que si aucun site n'est configuré alors qu'un projet attend un
-   * tracker distant, et il se referme définitivement dès qu'on le passe.
-   */
-  const needsTracker =
-    !settings.jiraUrl?.trim() &&
-    projects.some(p => p.issueTracker && p.issueTracker !== 'local')
-  const [setupDismissed, setSetupDismissed] = React.useState(false)
+  const { activeView, isLoading, error, tasks, isTrackerSetupOpen, setIsTrackerSetupOpen } = useApp()
 
   return (
     <>
@@ -102,7 +91,10 @@ const MainContent: React.FC = () => {
       <ToastContainer />
     </div>
 
-    {needsTracker && !setupDismissed && <TrackerSetup onClose={() => setSetupDismissed(true)} />}
+    {/* Connexion au tracker : jamais au démarrage, seulement quand un projet
+        vient d'être posé sur un tracker distant sans accès configurés, ou à la
+        demande depuis les réglages. Elle se ferme sans rien remplir. */}
+    {isTrackerSetupOpen && <TrackerSetup onClose={() => setIsTrackerSetupOpen(false)} />}
     </>
   )
 }

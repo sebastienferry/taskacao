@@ -1,4 +1,4 @@
-.PHONY: dev dev-server dev-web build run test clean release
+.PHONY: dev dev-server dev-web build run test clean release reset-db
 
 # Développement : le serveur Go d'un côté, Vite de l'autre, avec son proxy vers
 # l'API. L'interface n'est pas embarquée dans ce mode, elle est rechargée à chaud.
@@ -45,6 +45,16 @@ release:
 	done
 	@echo "Binaries in dist/:"
 	@ls -lh dist/ | tail -n +2 | awk '{print "  " $$9 " (" $$5 ")"}'
+
+# Repartir d'une base vide. Les trois fichiers comptent : supprimer tasks.db en
+# laissant tasks.db-wal fait revenir les données au démarrage suivant, SQLite
+# rejouant son journal.
+reset-db:
+	rm -f tasks.db tasks.db-wal tasks.db-shm
+	rm -f "$${HOME}/Library/Application Support/taskacao/tasks.db" \
+	      "$${HOME}/Library/Application Support/taskacao/tasks.db-wal" \
+	      "$${HOME}/Library/Application Support/taskacao/tasks.db-shm"
+	@echo "Bases supprimées : répertoire courant et dossier de données."
 
 clean:
 	rm -rf bin/ dist/ web/dist
