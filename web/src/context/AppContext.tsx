@@ -272,6 +272,12 @@ interface AppContextType {
   openInEditor: (options?: { taskId?: string; projectId?: string; path?: string; editorCommand?: string }) => Promise<boolean>
 }
 
+/**
+ * Vues connues. Ce qui sort du stockage local n'est pas fiable : une vue retirée
+ * d'une version à l'autre laisserait un écran vide au démarrage.
+ */
+const VIEW_MODES: ViewMode[] = ['board', 'list', 'roadmap', 'activities', 'sync', 'digest', 'skills', 'team']
+
 const defaultSettings: UserSettings = {
   id: 1,
   theme: 'dark',
@@ -327,7 +333,48 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isSyncing, setIsSyncing] = useState(false)
   const [runningSkillId, setRunningSkillId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [activeView, setActiveView] = useState<ViewMode>('board')
+  /**
+   * L'écran affiché survit au rechargement.
+   *
+   * Recharger est un geste courant : un F5, une reprise après remplacement du
+   * binaire, un onglet restauré. Repartir de force sur le board fait perdre sa
+   * place, et il fallait revenir à la main dans la roadmap ou le triage à chaque
+   * fois.
+   *
+   * Au tout premier lancement il n'y a rien à restaurer : la vue par défaut des
+   * réglages prend alors le relais, ce qui est son rôle et n'était appliqué
+   * nulle part jusqu'ici. Ensuite c'est la dernière vue visitée qui gagne, sinon
+   * la mémorisation ne servirait à rien.
+   */
+  const [activeView, setActiveViewState] = useState<ViewMode>(() => {
+    try {
+      const stored = localStorage.getItem('taskacao_active_view')
+      return stored && VIEW_MODES.includes(stored as ViewMode) ? (stored as ViewMode) : 'board'
+    } catch {
+      return 'board'
+    }
+  })
+  // Vrai tant qu'aucune vue n'a été mémorisée : la vue par défaut des réglages
+  // ne s'applique qu'à cet instant, jamais par-dessus un choix en cours.
+  const defaultViewPending = useRef<boolean>(
+    (() => {
+      try {
+        return !localStorage.getItem('taskacao_active_view')
+      } catch {
+        return false
+      }
+    })()
+  )
+
+  const setActiveView = useCallback((view: ViewMode) => {
+    setActiveViewState(view)
+    defaultViewPending.current = false
+    try {
+      localStorage.setItem('taskacao_active_view', view)
+    } catch {
+      // stockage indisponible : la vue vaut pour cette session
+    }
+  }, [])
 
   // The docked terminal keeps its open state and width across reloads: it is a
   // workspace tool, not a transient modal.
@@ -716,11 +763,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (res.ok) {
         const data: UserSettings = await res.json()
         setSettings(data)
+        // Premier lancement : aucune vue mémorisée, la vue par défaut des
+        // réglages s'applique ici et nulle part ailleurs. C'est le seul moment
+        // où l'on tient la valeur du serveur plutôt que celle de repli.
+        if (defaultViewPending.current) {
+          defaultViewPending.current = false
+          if (data.defaultView && VIEW_MODES.includes(data.defaultView)) {
+            setActiveView(data.defaultView)
+          }
+        }
       }
     } catch (err) {
       console.warn('Failed to load settings from server', err)
     }
-  }, [])
+  }, [setActiveView])
 
   const fetchSkills = useCallback(async () => {
     try {
@@ -865,7 +921,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (selectedProjectId && selectedProjectId !== 'all') {
       params.append('projectId', selectedProjectId)
     }
-    if (searchQuery) params.append('q', searchQuery)
+    // La roadmap se cherche par épic, pas par ticket. Envoyer la recherche au
+    // serveur y amputerait les enfants de chaque épic : les compteurs de sprint
+    // et le détail se videraient, et un épic dont aucun ticket ne correspond
+    // disparaîtrait au lieu d'être trouvé. La vue filtre donc ses lignes
+    // elle-même, sur des données complètes.
+    if (searchQuery && activeView !== 'roadmap') params.append('q', searchQuery)
     if (statusFilter) params.append('status', statusFilter)
     if (priorityFilter) params.append('priority', priorityFilter)
     if (labelFilter) params.append('label', labelFilter)
@@ -878,7 +939,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     issueTypeFilters.forEach(type => params.append('issueType', type))
     if (pinnedOnly) params.append('pinned', '1')
     return params.toString()
-  }, [selectedProjectId, searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, assigneeFilter, trackerStatusFilters, issueTypeFilters, pinnedOnly])
+  }, [selectedProjectId, searchQuery, activeView, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, assigneeFilter, trackerStatusFilters, issueTypeFilters, pinnedOnly])
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -2635,7 +2696,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (activeView === 'digest' && !isDigestAvailable) {
       setActiveView('board')
     }
-  }, [activeView, isDigestAvailable])
+  }, [activeView, isDigestAvailable, setActiveView])
 
   const fetchDailyDigest = useCallback(async (date?: string, assignee?: string): Promise<DailyDigest | null> => {
     const pid = digestProjectId()
@@ -3074,7 +3135,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isCommandPaletteOpen, isQuickAddOpen, selectedTask, selectedActivity, isProfileOpen, searchQuery, diffTask, toggleTerminalPanel])
+  }, [isCommandPaletteOpen, isQuickAddOpen, selectedTask, selectedActivity, isProfileOpen, searchQuery, diffTask, toggleTerminalPanel, setActiveView, openInEditor])
 
   return (
     <AppContext.Provider

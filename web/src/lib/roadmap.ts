@@ -251,6 +251,32 @@ export const buildEpicRows = (
  * Anomalies de placement pour un horizon opérationnel : dans NOW on attend un
  * sprint actif, dans NEXT un sprint futur. Tout le reste doit se voir.
  */
+/**
+ * Recherche d'épic, pour la barre de recherche en vue roadmap.
+ *
+ * Ici on cherche un épic, pas un ticket. La clé, le titre et l'équipe portante
+ * répondent à « où est passé cet épic ». Les clés et les titres des enfants
+ * répondent à « dans quel épic se trouve ce ticket », qui est la question qu'on
+ * se pose réellement devant une liste d'épics, et à laquelle rien ne répondait.
+ *
+ * Chaque mot doit se retrouver quelque part, dans n'importe quel ordre : taper
+ * « paiement latence » trouve l'épic dont le titre porte les deux, sans exiger
+ * qu'ils soient collés.
+ */
+export const matchesEpicSearch = (row: EpicRow, query: string): boolean => {
+  const terms = (query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return true
+  const haystack = [
+    row.key,
+    row.title,
+    row.squad,
+    ...row.tasks.map(t => `${t.key} ${t.title}`),
+  ]
+    .join(' ')
+    .toLowerCase()
+  return terms.every(term => haystack.includes(term))
+}
+
 export const placementIssues = (row: EpicRow, horizon: Horizon): Task[] => {
   if (horizon === 'now') {
     return [...row.unscheduled, ...row.inStaleSprint, ...row.inFutureSprint]
