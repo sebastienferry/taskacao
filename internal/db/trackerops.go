@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"tasks/internal/models"
-	"tasks/internal/runner"
+	"tasks/internal/tracker"
 )
 
 // Every write on an existing work item goes through the activity queue, like the
@@ -294,13 +294,15 @@ func (d *DB) runAssignOp(ctx context.Context, op TrackerOp, steps *[]string) (st
 	if err != nil || task == nil {
 		return "", fmt.Errorf("tâche introuvable")
 	}
-	if task.Source != "jira" {
-		return "Tâche non Jira : l'assignation reste locale", nil
-	}
 
-	client, err := d.jiraRESTClientForTask(task)
+	writer, err := d.writerForTask(task)
 	if err != nil {
-		return "", err
+		// Aucun tracker distant : la valeur locale est déjà écrite, et c'est
+		// tout ce que cette tâche attendait.
+		return fmt.Sprintf("%s : assignation gardée en local", task.Key), nil
+	}
+	if !writer.Supports(tracker.CapAssign) {
+		return "", tracker.Unsupported(writer.Name(), tracker.CapAssign)
 	}
 
 	who := strings.TrimSpace(op.AssigneeName)
@@ -317,16 +319,16 @@ func (d *DB) runAssignOp(ctx context.Context, op TrackerOp, steps *[]string) (st
 
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := client.AssignIssue(callCtx, task.Key, accountID); err != nil {
+	if err := writer.Assign(callCtx, task.Key, accountID); err != nil {
 		return "", err
 	}
 
 	if accountID == "" {
-		*steps = append(*steps, fmt.Sprintf("✅ %s désassigné sur Jira", task.Key))
-		return fmt.Sprintf("%s n'a plus d'assigné sur Jira", task.Key), nil
+		*steps = append(*steps, fmt.Sprintf("✅ %s désassigné sur %s", task.Key, writer.Name()))
+		return fmt.Sprintf("%s n'a plus d'assigné", task.Key), nil
 	}
-	*steps = append(*steps, fmt.Sprintf("✅ %s assigné à %s sur Jira", task.Key, who))
-	return fmt.Sprintf("%s assigné à %s sur Jira", task.Key, who), nil
+	*steps = append(*steps, fmt.Sprintf("✅ %s assigné à %s sur %s", task.Key, who, writer.Name()))
+	return fmt.Sprintf("%s assigné à %s", task.Key, who), nil
 }
 
 func (d *DB) runSetParentOp(op TrackerOp, steps *[]string) (string, error) {
@@ -388,7 +390,7 @@ func (d *DB) runSetSprintOp(op TrackerOp, steps *[]string) (string, error) {
 		return "", fmt.Errorf("aucun ticket sélectionné")
 	}
 
-	var client *runner.JiraRESTClient
+	var writer tracker.Writer
 	keys := make([]string, 0, len(ids))
 	for _, id := range ids {
 		task, err := d.GetTaskByID(id)
@@ -396,25 +398,25 @@ func (d *DB) runSetSprintOp(op TrackerOp, steps *[]string) (string, error) {
 			*steps = append(*steps, fmt.Sprintf("❌ %s : ticket introuvable", id))
 			continue
 		}
-		if task.Source != "jira" {
-			*steps = append(*steps, fmt.Sprintf("ℹ️ %s : ticket non Jira, sprint gardé en local", task.Key))
-			continue
-		}
-		if client == nil {
-			client, err = d.jiraRESTClientForTask(task)
+		if writer == nil {
+			writer, err = d.writerForTask(task)
 			if err != nil {
-				return "", err
+				*steps = append(*steps, fmt.Sprintf("ℹ️ %s : %v, sprint gardé en local", task.Key, err))
+				continue
+			}
+			if !writer.Supports(tracker.CapSprint) {
+				return "", tracker.Unsupported(writer.Name(), tracker.CapSprint)
 			}
 		}
 		keys = append(keys, task.Key)
 	}
-	if len(keys) == 0 || client == nil {
-		return "", fmt.Errorf("aucun ticket Jira à déplacer")
+	if len(keys) == 0 || writer == nil {
+		return "", fmt.Errorf("aucun ticket à déplacer sur un tracker qui gère les sprints")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if err := client.MoveIssuesToSprint(ctx, op.SprintID, keys); err != nil {
+	if err := writer.SetSprint(ctx, op.SprintID, keys); err != nil {
 		return "", err
 	}
 
@@ -459,15 +461,15 @@ func (d *DB) runSetTeamOp(op TrackerOp, steps *[]string) (string, error) {
 			failures = append(failures, fmt.Sprintf("%s: ticket introuvable", id))
 			continue
 		}
-		if task.Source != "jira" {
-			*steps = append(*steps, fmt.Sprintf("ℹ️ %s : ticket non Jira, équipe gardée en local", task.Key))
+		writer, err := d.writerForTask(task)
+		if err != nil {
+			*steps = append(*steps, fmt.Sprintf("ℹ️ %s : %v, équipe gardée en local", task.Key, err))
 			continue
 		}
-		client, err := d.jiraRESTClientForTask(task)
-		if err != nil {
-			return "", err
+		if !writer.Supports(tracker.CapTeam) {
+			return "", tracker.Unsupported(writer.Name(), tracker.CapTeam)
 		}
-		if err := client.SetIssueTeam(ctx, task.Key, op.TeamID); err != nil {
+		if err := writer.SetTeam(ctx, task.Key, op.TeamID); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", task.Key, err))
 			*steps = append(*steps, fmt.Sprintf("❌ %s : %v", task.Key, err))
 			continue
@@ -492,14 +494,17 @@ func (d *DB) runTransitionOp(op TrackerOp, steps *[]string) (string, error) {
 		return "", fmt.Errorf("tâche introuvable")
 	}
 
-	settings, _ := d.GetSettings()
-	trackerURL := ""
-	if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
-		trackerURL = proj.TrackerUrl
+	writer, err := d.writerForTask(task)
+	if err != nil {
+		return "", err
 	}
-	repoPath := d.ResolveTaskRepoPath(task)
+	if !writer.Supports(tracker.CapTransition) {
+		return "", tracker.Unsupported(writer.Name(), tracker.CapTransition)
+	}
 
-	if err := d.runner.TransitionJiraIssueToStatus(settings, trackerURL, task.Key, op.TargetStatus, repoPath); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := writer.Transition(ctx, task.Key, op.TargetStatus); err != nil {
 		return "", err
 	}
 	*steps = append(*steps, fmt.Sprintf("✅ %s transitionné vers « %s »", task.Key, op.TargetStatus))

@@ -581,7 +581,7 @@ export const Sidebar: React.FC = () => {
               </div>
             </button>
             )}
-            {/* Roadmap : les épics par horizon, d'après le design Equativ */}
+            {/* Roadmap : les épics par horizon */}
             <button
               onClick={() => setActiveView('roadmap')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${

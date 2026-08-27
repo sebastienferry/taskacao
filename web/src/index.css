@@ -1,10 +1,13 @@
 @import "tailwindcss";
 
 /* =========================================================================
-   EQUATIV THEME LAYER
-   Palette: Equativ Orange #FE5000 · Ink #0E1C28 · Equativ Blue #005EDA
+   THEME LAYER
+   Palette: Orange #FE5000 · Ink #0E1C28 · Blue #005EDA
             Amber #FF9B00 · Soft orange #FFA047 · Neutrals #F0F3F5 → #43454C
    Type:    Mona Sans (display) · Inter (UI/body) · JetBrains Mono (code)
+
+   Everything below derives from --accent-rgb, so repainting the product is a
+   matter of changing these few values, here, once.
    ========================================================================= */
 
 @layer base {
@@ -18,7 +21,7 @@
   --app-h: calc(100vh / var(--ui-zoom));
   --app-w: calc(100vw / var(--ui-zoom));
 
-    /* --- Accent: Equativ Orange by default, overridden per project ---
+    /* --- Accent: the product's own colour by default, overridden per project ---
        Only --accent-rgb / --accent-color / --accent-hover / --accent-ring are
        redefined by the [data-accent="…"] blocks below; every tint here derives
        from --accent-rgb, so one attribute switch repaints the whole UI. --- */
@@ -26,7 +29,7 @@
     --accent-color: #fe5000;
     --accent-hover: #f05423;
     --accent-active: #d9450b;
-    --accent-ring: rgba(0, 94, 218, 0.45); /* brand default focus = Equativ Blue */
+    --accent-ring: rgba(0, 94, 218, 0.45); /* the theme's focus blue */
     --accent-light: rgb(var(--accent-rgb) / 0.14);
     --accent-glow: rgb(var(--accent-rgb) / 0.22);
     --sidebar-accent-tint: rgb(var(--accent-rgb) / 0.12);
@@ -91,7 +94,7 @@
   /* =======================================================================
      PER-PROJECT ACCENTS
      AppContext writes data-accent on <html> and <body> from the selected
-     project's `color`. No attribute (or data-accent="equativ") keeps the
+     project's `color`. No attribute (or data-accent="default") keeps the
      brand orange defined on :root above.
      ======================================================================= */
   [data-accent="indigo"] {
@@ -382,8 +385,8 @@
 /* =========================================================================
    TAILWIND PALETTE REMAP
    The app paints status/stage chips with raw Tailwind families. These rules
-   fold those families onto the Equativ palette so no component file has to
-   change. Blue family → Equativ Blue, warm families → orange/amber,
+   fold those families onto the theme palette so no component file has to
+   change. Blue family to the theme blue, warm families to orange/amber,
    purple/indigo → blue (no purple in the brand), rose → brand red.
    ========================================================================= */
 .text-cyan-400, .text-cyan-300, .text-blue-400, .text-blue-300,

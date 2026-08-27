@@ -10,6 +10,7 @@ import (
 
 	"tasks/internal/models"
 	"tasks/internal/runner"
+	"tasks/internal/tracker"
 )
 
 // A work item may carry a team, and it is never mandatory: a project can hold
@@ -707,6 +708,49 @@ func (d *DB) SetTaskSprint(taskIDOrKey string, sprintID string, sprintName strin
 }
 
 // jiraRESTClientForTask builds a client for the tracker the ticket belongs to.
+// writerForTask returns the tracker writer of the ticket's own tracker. Every
+// queued write goes through it, which is what keeps the operations from naming
+// Jira: they ask the writer whether the operation exists, and the writer answers
+// for its own tracker.
+func (d *DB) writerForTask(task *models.Task) (tracker.Writer, error) {
+	if task == nil {
+		return nil, fmt.Errorf("tâche manquante")
+	}
+
+	proj, _ := d.GetProjectByID(task.ProjectID)
+	source := task.Source
+	if source == "" && proj != nil {
+		source = proj.IssueTracker
+	}
+
+	switch source {
+	case "linear":
+		return tracker.NewLinearWriter(), nil
+	case "github":
+		return tracker.NewGithubWriter(), nil
+	case "jira":
+		client, err := d.jiraRESTClientForTask(task)
+		if err != nil {
+			return nil, err
+		}
+		settings, _ := d.GetSettings()
+		trackerURL := ""
+		repoPath := d.ResolveTaskRepoPath(task)
+		if proj != nil {
+			trackerURL = proj.TrackerUrl
+		}
+		// La transition passe par le runner : elle doit trouver la transition du
+		// workflow qui mène au statut voulu, ce que le runner sait faire, repli
+		// acli compris.
+		transition := func(ctx context.Context, key string, status string) error {
+			return d.runner.TransitionJiraIssueToStatus(settings, trackerURL, key, status, repoPath)
+		}
+		return tracker.NewJiraWriter(client, transition), nil
+	}
+
+	return nil, fmt.Errorf("aucun tracker distant configuré pour %s", task.Key)
+}
+
 func (d *DB) jiraRESTClientForTask(task *models.Task) (*runner.JiraRESTClient, error) {
 	if task == nil {
 		return nil, fmt.Errorf("tâche manquante")
