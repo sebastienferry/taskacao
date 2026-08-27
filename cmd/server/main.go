@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"io"
 	"io/fs"
+	"net"
 	"os/exec"
 	"runtime"
 	"time"
@@ -97,6 +99,27 @@ func resolveDBPath(explicit string) (path string, origin string) {
 		return "tasks.db", "répertoire courant, dossier de données indisponible"
 	}
 	return filepath.Join(appDir, "tasks.db"), "dossier de données"
+}
+
+// alreadyServing reports whether the port is held by another Taskacao rather than
+// by an unrelated program. The health endpoint is the only honest way to know,
+// and it decides between "your window is already open" and "something else is on
+// this port".
+func alreadyServing(baseURL string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(baseURL + "/api/health")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(body), "taskacao")
 }
 
 // openBrowser opens the interface once the server listens. It is best effort by
@@ -273,22 +296,38 @@ func main() {
 
 	addr := ":" + port
 	url := fmt.Sprintf("http://localhost%s", addr)
+
+	// Le port est réservé avant toute autre chose. Ouvrir le navigateur d'abord,
+	// comme le faisait la version précédente, ouvrait un onglet même quand
+	// l'écoute échouait ensuite : lancer l'application une seconde fois
+	// rechargeait l'onglet de la première, puis mourait sur « address already in
+	// use ».
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		// Une instance qui tourne déjà n'est pas une erreur : c'est la fenêtre
+		// que l'utilisateur cherchait. On la lui ouvre et on s'efface.
+		if alreadyServing(url) {
+			log.Printf("Taskacao tourne déjà sur %s : ouverture de la fenêtre existante.", url)
+			if os.Getenv("TASKACAO_NO_BROWSER") == "" {
+				openBrowser(url)
+			}
+			return
+		}
+		log.Fatalf("Port %s indisponible et occupé par autre chose que Taskacao: %v", addr, err)
+	}
+
 	log.Printf("🚀 Taskacao Server listening on %s", url)
 	log.Printf("   base : %s (%s)", dbPath, dbOrigin)
 
 	// Ouverture du navigateur : ce que fait une application quand on la lance.
 	// TASKACAO_NO_BROWSER=1 l'en empêche, pour un serveur ou un lancement par un
-	// gestionnaire de services.
+	// gestionnaire de services. Le port est déjà pris à ce stade, donc la page
+	// répondra.
 	if os.Getenv("TASKACAO_NO_BROWSER") == "" && uiEmbedded {
-		go func() {
-			// Laisser le port s'ouvrir : un navigateur plus rapide que le
-			// serveur afficherait une erreur de connexion.
-			time.Sleep(400 * time.Millisecond)
-			openBrowser(url)
-		}()
+		go openBrowser(url)
 	}
 
-	if err := http.ListenAndServe(addr, handlerWithCORS); err != nil {
+	if err := http.Serve(listener, handlerWithCORS); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
