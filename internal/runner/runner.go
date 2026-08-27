@@ -1140,6 +1140,10 @@ type JiraIssueField struct {
 	Labels  []string `json:"labels"`
 	Created string   `json:"created"`
 	Updated string   `json:"updated"`
+	// StatusCategoryChangeDate is when the work item entered its current status
+	// category. Not the precise status: moving from "Dev Test" to "To Merge"
+	// inside the same category leaves it untouched.
+	StatusCategoryChangeDate string `json:"statuscategorychangedate"`
 }
 
 type JiraIssueItem struct {
@@ -1415,6 +1419,10 @@ func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string, issu
 		if parsed, ok := parseJiraTime(item.Fields.Updated); ok {
 			trackerUpdated = &parsed
 		}
+		var statusChanged *time.Time
+		if parsed, ok := parseJiraTime(item.Fields.StatusCategoryChangeDate); ok {
+			statusChanged = &parsed
+		}
 
 		avatar := ""
 		if item.Fields.Assignee.AvatarUrls != nil {
@@ -1435,6 +1443,7 @@ func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string, issu
 			Assignee:         item.Fields.Assignee.DisplayName,
 			TrackerCreatedAt: trackerCreated,
 			TrackerUpdatedAt: trackerUpdated,
+			StatusChangedAt:  statusChanged,
 			AssigneeAvatar:   avatar,
 			Position:         i + 1,
 			Source:           "jira",

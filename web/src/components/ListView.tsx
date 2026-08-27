@@ -29,6 +29,9 @@ import {
 import { useApp } from '../context/AppContext'
 import { TaskFilters } from './TaskFilters'
 import { CurationTable } from './CurationTable'
+import { issueTypeStyle } from '../lib/issueTypes'
+import { Avatar } from './Avatar'
+import { shortElapsed, isElapsedStale } from '../lib/elapsed'
 import type { Task, Status, Priority } from '../types'
 
 export const ListView: React.FC = () => {
@@ -237,15 +240,19 @@ export const ListView: React.FC = () => {
         {/* Title & Activity */}
         <td className="py-2.5 px-3 max-w-[560px]">
           <div className="flex items-center gap-1.5">
-            {/* Le type, sauf Story et Task : ils sont le cas courant et
-                n'apprennent rien, alors qu'un Bug ou une Corrective action
-                changent la façon de lire la ligne. */}
-            {task.issueType && !['story', 'task'].includes(task.issueType.toLowerCase()) && (
+            {/* Le type, avec sa couleur : la ligne d'une corrective action ne se
+                lit pas comme celle d'une story. */}
+            {task.issueType && (
               <span
-                className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide text-[var(--text-secondary)] bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
+                className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide"
+                style={{
+                  color: issueTypeStyle(task.issueType).color,
+                  background: issueTypeStyle(task.issueType).background,
+                  border: `1px solid ${issueTypeStyle(task.issueType).border}`,
+                }}
                 title={`Type de ticket : ${task.issueType}`}
               >
-                {task.issueType}
+                {issueTypeStyle(task.issueType).short}
               </span>
             )}
             <span className="text-xs font-semibold text-[var(--text-primary)] truncate group-hover:text-[var(--accent-color)] transition-colors">
@@ -319,6 +326,18 @@ export const ListView: React.FC = () => {
               </option>
             ))}
           </select>
+          {/* Depuis quand le ticket est dans cette catégorie de statut : sur une
+              liste, c'est la durée qui trie, pas la date. */}
+          {task.statusChangedAt && shortElapsed(task.statusChangedAt) && (
+            <div
+              className="flex items-center gap-0.5 mt-1 text-[9.5px] font-medium"
+              style={{ color: isElapsedStale(task.statusChangedAt) ? 'var(--status-warn)' : 'var(--text-muted)' }}
+              title={`Dans cette catégorie de statut depuis le ${new Date(task.statusChangedAt).toLocaleDateString()}`}
+            >
+              <Clock size={9} />
+              <span>{shortElapsed(task.statusChangedAt)}</span>
+            </div>
+          )}
         </td>
 
         {/* Quick Skill Runner & Agent Chat */}
@@ -403,9 +422,7 @@ export const ListView: React.FC = () => {
         <td className="py-2.5 px-3 whitespace-nowrap text-xs text-[var(--text-secondary)]">
           {task.assignee ? (
             <div className="flex items-center gap-1.5">
-              <div className="w-5 h-5 rounded-full accent-bg text-white flex items-center justify-center text-[9px] font-bold">
-                {task.assignee.substring(0, 2).toUpperCase()}
-              </div>
+              <Avatar name={task.assignee} url={task.assigneeAvatar} size={20} />
               <span className="truncate max-w-[90px]">{task.assignee}</span>
             </div>
           ) : (

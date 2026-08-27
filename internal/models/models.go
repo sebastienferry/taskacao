@@ -509,12 +509,17 @@ type Task struct {
 	// hold the import time, which is why they cannot answer "open for how long".
 	// Nil means the tracker did not provide them, and the digest then says so
 	// rather than counting days from an import.
-	TrackerCreatedAt *time.Time     `json:"trackerCreatedAt,omitempty"`
-	TrackerUpdatedAt *time.Time     `json:"trackerUpdatedAt,omitempty"`
-	Activities       []TaskActivity `json:"activities,omitempty"`
-	Pinned           bool           `json:"pinned,omitempty"`
-	CreatedAt        time.Time      `json:"createdAt"`
-	UpdatedAt        time.Time      `json:"updatedAt"`
+	TrackerCreatedAt *time.Time `json:"trackerCreatedAt,omitempty"`
+	TrackerUpdatedAt *time.Time `json:"trackerUpdatedAt,omitempty"`
+	// StatusChangedAt is when the work item entered its current status category,
+	// which is what "in progress for four days" counts from. It is the category
+	// and not the precise status: two statuses of the same category, such as a
+	// review column and a merge column, do not move it.
+	StatusChangedAt *time.Time     `json:"statusChangedAt,omitempty"`
+	Activities      []TaskActivity `json:"activities,omitempty"`
+	Pinned          bool           `json:"pinned,omitempty"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
 }
 
 type Settings struct {

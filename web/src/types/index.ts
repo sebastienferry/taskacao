@@ -269,6 +269,15 @@ export interface Task {
   team?: string
   /** Identifiant de l'équipe Atlassian : c'est lui qui donne accès à ses membres. */
   teamId?: string
+  /** Dates du tracker, distinctes de createdAt / updatedAt qui datent l'import. */
+  trackerCreatedAt?: string
+  trackerUpdatedAt?: string
+  /**
+   * Entrée dans la catégorie de statut courante : c'est de là que se compte le
+   * temps passé. La catégorie, pas le statut précis : deux colonnes d'une même
+   * catégorie ne la font pas bouger.
+   */
+  statusChangedAt?: string
   source?: TaskSource
   externalUrl?: string
   /** Tracker work item type. Only "Task" and "Story" are imported. */

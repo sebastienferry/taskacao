@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, Users, User, CircleSlash, ExternalLink } from 'lucide-react'
+import { RefreshCw, Users, CircleSlash, ExternalLink } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { Avatar } from './Avatar'
 import type { Task, TeamMemberLoad, TeamWorkload } from '../types'
 
 /**
@@ -184,10 +185,8 @@ const MemberColumn: React.FC<{
     <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--border-color)]">
       {unassigned ? (
         <CircleSlash size={13} className="text-[var(--text-muted)] shrink-0" />
-      ) : load.member.avatarUrl ? (
-        <img src={load.member.avatarUrl} alt="" className="w-5 h-5 rounded-full shrink-0" />
       ) : (
-        <User size={13} className="text-[var(--text-muted)] shrink-0" />
+        <Avatar name={load.member.displayName} url={load.member.avatarUrl} size={20} title={load.member.email || load.member.displayName} />
       )}
       <span className="text-xs font-bold text-[var(--text-primary)] truncate flex-1" title={load.member.email || undefined}>
         {load.member.displayName}

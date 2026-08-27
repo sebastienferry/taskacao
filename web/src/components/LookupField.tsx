@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Loader2, Search, X } from 'lucide-react'
+import { Avatar } from './Avatar'
 
 export interface LookupOption {
   id: string
@@ -196,7 +197,7 @@ export const LookupField: React.FC<{
                 }`}
               >
                 {option?.avatarUrl ? (
-                  <img src={option.avatarUrl} alt="" className="w-4 h-4 rounded-full shrink-0" />
+                  <Avatar name={option.label} url={option.avatarUrl} size={16} title={option.label} />
                 ) : (
                   <span className="w-4 h-4 shrink-0" />
                 )}
