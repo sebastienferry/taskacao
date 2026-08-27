@@ -1,5 +1,5 @@
 import React from 'react'
-import { Flame, Calendar, Layers, Pin, User, SlidersHorizontal, Check, Shapes } from 'lucide-react'
+import { Flame, Calendar, Layers, Pin, User, SlidersHorizontal, Check, Shapes, Settings2 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField } from './LookupField'
 import { valueLookup } from '../lib/lookups'
@@ -34,6 +34,9 @@ export const TaskFilters: React.FC = () => {
     setTrackerStatusFilters,
     issueTypeFilters,
     setIssueTypeFilters,
+    currentProject,
+    setEditingProject,
+    setIsProjectModalOpen,
     availableAssignees,
     unassignedFilterValue,
     pinnedOnly,
@@ -269,6 +272,26 @@ export const TaskFilters: React.FC = () => {
                   </button>
                 )}
               </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTypeMenuOpen(false)
+                  setEditingProject(currentProject || null)
+                  setIsProjectModalOpen(true)
+                }}
+                disabled={!currentProject}
+                title={
+                  currentProject
+                    ? `Choisir les types importés depuis le tracker pour ${currentProject.name}`
+                    : 'Sélectionnez un projet pour régler ses types importés'
+                }
+                className="w-full flex items-center gap-1.5 px-1.5 py-1 mb-1 rounded-lg text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] cursor-pointer disabled:opacity-40 border-b border-[var(--border-color)] rounded-b-none"
+              >
+                <Settings2 size={10} />
+                <span className="text-left leading-snug">
+                  Cette liste ne contient que les types importés. En ajouter dans le projet.
+                </span>
+              </button>
               {taskFacets.issueTypes.map(type => {
                 const isActive = issueTypeFilters.includes(type.value)
                 // Un conteneur n'est pas montré tant qu'il n'est pas demandé :
