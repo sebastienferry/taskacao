@@ -524,6 +524,15 @@ export interface TaskFacetValue {
   count: number
 }
 
+/** Réponse de la vérification des accès au tracker. */
+export interface TrackerCheck {
+  ok: boolean
+  error?: string
+  identity?: { accountId: string; displayName: string; email?: string; siteUrl: string }
+  /** Projets que ces accès peuvent lire, ce qui rend une erreur de site évidente. */
+  projects?: { id: string; name: string }[]
+}
+
 /** État de la boucle de synchronisation de fond. */
 export interface AutoSyncState {
   enabled: boolean

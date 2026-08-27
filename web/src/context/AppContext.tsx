@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { EpicRequiredField, SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest, TrackerTeam, TeamMember, TeamWorkload, TaskFacetValue, AutoSyncState } from '../types'
+import type { EpicRequiredField, SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest, TrackerTeam, TeamMember, TeamWorkload, TaskFacetValue, AutoSyncState, TrackerCheck } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 import { resolveAccentAttribute } from '../lib/accents'
 import {
@@ -62,6 +62,15 @@ interface AppContextType {
   }
   /** État de la boucle de synchronisation de fond, rafraîchi avec les activités. */
   autoSync: AutoSyncState | null
+  /** Vérifie des accès tracker sans rien enregistrer. */
+  checkTrackerCredentials: (siteUrl: string, email: string, token: string) => Promise<TrackerCheck>
+  /** Enregistre des accès déjà vérifiés, jeton en base ou dans un fichier à part. */
+  saveTrackerCredentials: (
+    siteUrl: string,
+    email: string,
+    token: string,
+    storeTokenInFile: boolean
+  ) => Promise<boolean>
   /**
    * Statuts du tracker affichés. Vide veut dire « tous » : c'est le choix
    * explicite de ce qu'on regarde, board comme liste, et il remplace le
@@ -916,6 +925,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     fetchTaskFacets()
   }, [fetchTaskFacets, tasks.length])
+
+  const checkTrackerCredentials = useCallback(
+    async (siteUrl: string, email: string, token: string): Promise<TrackerCheck> => {
+      try {
+        const res = await fetch(`${API_BASE}/setup/tracker/check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ siteUrl, email, token }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) return { ok: false, error: data.error || 'Vérification impossible' }
+        return data
+      } catch (err: any) {
+        return { ok: false, error: err.message || 'Serveur injoignable' }
+      }
+    },
+    []
+  )
+
+  const saveTrackerCredentials = useCallback(
+    async (siteUrl: string, email: string, token: string, storeTokenInFile: boolean): Promise<boolean> => {
+      try {
+        const res = await fetch(`${API_BASE}/setup/tracker`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ siteUrl, email, token, storeTokenInFile }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Enregistrement refusé')
+        setSettings(data)
+        return true
+      } catch (err: any) {
+        addToast({ type: 'error', title: 'Accès non enregistrés', description: err.message })
+        return false
+      }
+    },
+    []
+  )
 
   const fetchAutoSyncStatus = useCallback(async () => {
     try {
@@ -3061,6 +3108,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         trackerStatusFilters,
         setTrackerStatusFilters,
         autoSync,
+        checkTrackerCredentials,
+        saveTrackerCredentials,
         sourceFilter,
         setSourceFilter,
         parentFilter,

@@ -515,3 +515,77 @@ func (c *JiraRESTClient) ListProjectIssueTypes(ctx context.Context, projectKey s
 	sort.Strings(out)
 	return out, nil
 }
+
+// JiraIdentity is who the credentials belong to, as the instance sees them.
+type JiraIdentity struct {
+	AccountID   string `json:"accountId"`
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email,omitempty"`
+	SiteURL     string `json:"siteUrl"`
+}
+
+// WhoAmI checks the credentials and says who they belong to. This is what turns
+// "it does not work" into a sentence: wrong token, wrong site, or a token that
+// belongs to someone else than expected.
+func (c *JiraRESTClient) WhoAmI(ctx context.Context) (*JiraIdentity, error) {
+	body, err := c.get(ctx, "/rest/api/3/myself", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload struct {
+		AccountID    string `json:"accountId"`
+		DisplayName  string `json:"displayName"`
+		EmailAddress string `json:"emailAddress"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("réponse d'identité illisible: %w", err)
+	}
+	if strings.TrimSpace(payload.AccountID) == "" {
+		return nil, fmt.Errorf("le site a répondu sans identifier le compte")
+	}
+
+	return &JiraIdentity{
+		AccountID:   payload.AccountID,
+		DisplayName: strings.TrimSpace(payload.DisplayName),
+		Email:       strings.TrimSpace(payload.EmailAddress),
+		SiteURL:     c.baseURL,
+	}, nil
+}
+
+// ListVisibleProjects returns the projects the credentials can read, most
+// recently used first. It answers the question that follows "is my token
+// valid": which keys can I actually configure here.
+func (c *JiraRESTClient) ListVisibleProjects(ctx context.Context, limit int) ([]models.TrackerBoard, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := url.Values{}
+	query.Set("maxResults", fmt.Sprintf("%d", limit))
+	query.Set("orderBy", "lastIssueUpdatedTime")
+
+	body, err := c.get(ctx, "/rest/api/3/project/search", query)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload struct {
+		Values []struct {
+			ID   string `json:"id"`
+			Key  string `json:"key"`
+			Name string `json:"name"`
+		} `json:"values"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("liste des projets illisible: %w", err)
+	}
+
+	// TrackerBoard porte déjà le triplet identifiant, nom, type : le réutiliser
+	// évite un modèle de plus pour la même forme.
+	out := make([]models.TrackerBoard, 0, len(payload.Values))
+	for _, p := range payload.Values {
+		out = append(out, models.TrackerBoard{ID: p.Key, Name: p.Name, Type: "project"})
+	}
+	return out, nil
+}

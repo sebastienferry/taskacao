@@ -57,6 +57,24 @@ func loadDotEnv(paths ...string) {
 	}
 }
 
+// appDataDir is where the application keeps what belongs to it: the database,
+// and the environment file holding the tracker token when the user would rather
+// not store it in the database.
+//
+// It returns an empty string when the user's data directory cannot be resolved
+// or created, which callers treat as "use the working directory instead".
+func appDataDir() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	appDir := filepath.Join(dir, "taskacao")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		return ""
+	}
+	return appDir
+}
+
 // resolveDBPath decides where the database lives.
 //
 // Three cases, in this order. An explicit DB_PATH wins, always. Then a database
@@ -72,14 +90,10 @@ func resolveDBPath(explicit string) string {
 		return "tasks.db"
 	}
 
-	dir, err := os.UserConfigDir()
-	if err != nil || strings.TrimSpace(dir) == "" {
+	appDir := appDataDir()
+	if appDir == "" {
 		// Pas de dossier utilisateur lisible : le répertoire courant reste un
 		// endroit valable, et vaut mieux qu'un démarrage refusé.
-		return "tasks.db"
-	}
-	appDir := filepath.Join(dir, "taskacao")
-	if err := os.MkdirAll(appDir, 0o755); err != nil {
 		return "tasks.db"
 	}
 	return filepath.Join(appDir, "tasks.db")
@@ -109,7 +123,11 @@ func openBrowser(url string) {
 func main() {
 	// .env.local last: it overrides nothing already exported, but is the usual
 	// place for a machine-specific secret.
-	loadDotEnv(".env", ".env.local")
+	// Le répertoire courant d'abord, pour la boucle de développement, puis le
+	// dossier de données : une application lancée depuis n'importe où n'a pas de
+	// répertoire courant qui lui appartienne. La première valeur trouvée gagne,
+	// donc un développeur garde la main depuis son dépôt.
+	loadDotEnv(".env", ".env.local", filepath.Join(appDataDir(), ".env"))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -125,6 +143,7 @@ func main() {
 	defer database.Close()
 
 	h := handlers.NewHandler(database)
+	h.SetDataDir(appDataDir())
 
 	// Boucle de synchronisation de fond. Elle ne fait rien tant que le réglage
 	// est éteint, et ne lit ensuite que ce qui a changé depuis sa passe
@@ -153,6 +172,8 @@ func main() {
 	mux.HandleFunc("/api/sync/github", h.HandleSyncGithub)
 	mux.HandleFunc("/api/sync/jira", h.HandleSyncJira)
 	mux.HandleFunc("/api/sync/auto", h.HandleAutoSyncStatus)
+	mux.HandleFunc("/api/setup/tracker", h.HandleTrackerSetup)
+	mux.HandleFunc("/api/setup/tracker/check", h.HandleTrackerSetup)
 	mux.HandleFunc("/api/skills", h.HandleSkills)
 	mux.HandleFunc("/api/spec-framework/status", h.HandleSpecFrameworkStatus)
 	mux.HandleFunc("/api/spec-framework/install", h.HandleSpecFrameworkInstall)

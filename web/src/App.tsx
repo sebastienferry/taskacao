@@ -6,6 +6,7 @@ import { BoardView } from './components/BoardView'
 import { ListView } from './components/ListView'
 import { RoadmapView } from './components/RoadmapView'
 import { TeamView } from './components/TeamView'
+import { TrackerSetup } from './components/TrackerSetup'
 import { ActivitiesView } from './components/ActivitiesView'
 import { SyncView } from './components/SyncView'
 import { DigestView } from './components/DigestView'
@@ -24,9 +25,21 @@ import { ToastContainer } from './components/ToastContainer'
 import { Loader2 } from 'lucide-react'
 
 const MainContent: React.FC = () => {
-  const { activeView, isLoading, error, tasks } = useApp()
+  const { activeView, isLoading, error, tasks, settings, projects } = useApp()
+
+  /**
+   * Premier démarrage : rien ne fonctionne tant que le tracker n'est pas
+   * connecté, et on ne l'apprenait qu'en synchronisant pour rien. L'écran ne
+   * s'ouvre que si aucun site n'est configuré alors qu'un projet attend un
+   * tracker distant, et il se referme définitivement dès qu'on le passe.
+   */
+  const needsTracker =
+    !settings.jiraUrl?.trim() &&
+    projects.some(p => p.issueTracker && p.issueTracker !== 'local')
+  const [setupDismissed, setSetupDismissed] = React.useState(false)
 
   return (
+    <>
     <div className="flex flex-col h-[var(--app-h)] w-[var(--app-w)] overflow-hidden bg-[var(--bg-primary)]">
       <div className="flex flex-1 overflow-hidden">
         {/* Navigation Sidebar */}
@@ -88,6 +101,9 @@ const MainContent: React.FC = () => {
       <ProfileModal />
       <ToastContainer />
     </div>
+
+    {needsTracker && !setupDismissed && <TrackerSetup onClose={() => setSetupDismissed(true)} />}
+    </>
   )
 }
 
