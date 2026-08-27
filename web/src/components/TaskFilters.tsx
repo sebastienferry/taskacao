@@ -271,6 +271,10 @@ export const TaskFilters: React.FC = () => {
               </div>
               {taskFacets.issueTypes.map(type => {
                 const isActive = issueTypeFilters.includes(type.value)
+                // Un conteneur n'est pas montré tant qu'il n'est pas demandé :
+                // sans cette mention, son compteur face à une liste qui n'en
+                // affiche aucun serait incompréhensible.
+                const isContainer = ['epic', 'initiative'].includes(type.value.toLowerCase())
                 return (
                   <button
                     key={type.value}
@@ -295,6 +299,9 @@ export const TaskFilters: React.FC = () => {
                     </span>
                     <span className="text-[11px] text-[var(--text-primary)] truncate flex-1 text-left">
                       {type.value}
+                      {isContainer && !isActive && (
+                        <span className="ml-1 text-[9px] text-[var(--text-muted)]">masqué</span>
+                      )}
                     </span>
                     <span className="text-[9.5px] font-mono text-[var(--text-muted)]">{type.count}</span>
                   </button>

@@ -570,6 +570,16 @@ func (d *DB) computeExternalURLUnsafe(t *models.Task) *string {
 // TaskFacets lists the distinct tracker values present in the board, so the UI
 // can offer a filter only when the tracker actually feeds the field. A GitHub or
 // local project simply returns empty lists.
+// containerIssueTypes are work item types that hold other work items rather than
+// being work of their own. They stay out of the board and the list unless asked
+// for by name: an epic is a container, shown as such by the roadmap, and a
+// hundred and fifty of them among the cards is a hundred and fifty rows of
+// something nobody works on.
+//
+// They remain in the database: the tickets under them carry their key, and the
+// roadmap reads that.
+var containerIssueTypes = []string{"Epic", "Initiative"}
+
 // unassignedFilterValue is the sentinel the assignee filter uses to ask for the
 // work items nobody owns. An empty parameter cannot say it: it means "no filter".
 const unassignedFilterValue = "__unassigned__"
@@ -840,6 +850,17 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, a
 	if team != "" {
 		conditions = append(conditions, "team = ?")
 		args = append(args, team)
+	}
+
+	// Les conteneurs sont écartés par défaut, et seulement par défaut : les
+	// demander nommément les ramène, ce qui est le sens du sélecteur de types.
+	if len(issueTypes) == 0 {
+		placeholders := make([]string, 0, len(containerIssueTypes))
+		for _, ct := range containerIssueTypes {
+			placeholders = append(placeholders, "?")
+			args = append(args, ct)
+		}
+		conditions = append(conditions, fmt.Sprintf("(issue_type IS NULL OR issue_type NOT IN (%s))", strings.Join(placeholders, ", ")))
 	}
 
 	// Types de tickets retenus. Un board qui porte douze types n'est lisible qu'en
