@@ -29,6 +29,9 @@ const (
 	staleAfterDays = 7
 	// dueSoonWindowDays bounds the "due soon" section.
 	dueSoonWindowDays = 7
+	// watchWindowDays is how recently open work must have moved to stay on the
+	// watch list. Beyond that it is backlog, and belongs to a counter.
+	watchWindowDays = 14
 	// recentlyDoneWindowDays bounds the "closed recently" section.
 	recentlyDoneWindowDays = 7
 	// digestSectionCap keeps a section readable. Whatever is dropped is
@@ -36,13 +39,45 @@ const (
 	digestSectionCap = 15
 )
 
-// hasReliableDates reports whether a task's CreatedAt / UpdatedAt reflect the
-// real tracker dates. They do not for Jira: acli's 'workitem search --fields'
-// allow-list rejects 'created' and 'updated', so the sync stamps the import
-// time instead. Deriving "open for N days" or "closed recently" from that would
-// be fabricated, so those sections skip such tasks and the digest says so.
+// hasReliableDates reports whether the dates below reflect what happened on the
+// work item rather than when it was imported.
+//
+// A locally created task carries its own dates and is trustworthy. A synced one
+// only is when the tracker gave them, which the REST read does and acli cannot:
+// its 'workitem search --fields' allow-list rejects created and updated. Counting
+// days from an import time would be a fabricated number, so a ticket without
+// tracker dates stays out of the day-based sections and the digest says how many.
 func hasReliableDates(t models.Task) bool {
-	return strings.ToLower(t.Source) != "jira"
+	if strings.ToLower(t.Source) == "local" || t.Source == "" {
+		return true
+	}
+	return t.TrackerCreatedAt != nil || t.TrackerUpdatedAt != nil
+}
+
+// touchedWithin reports whether a work item moved inside the window. A ticket
+// without tracker dates counts as touched: excluding it would hide it entirely,
+// which is worse than showing it one day too long.
+func touchedWithin(t models.Task, days int, ref time.Time) bool {
+	if !hasReliableDates(t) {
+		return true
+	}
+	return int(ref.Sub(updatedAtOf(t)).Hours()/24) <= days
+}
+
+// createdAtOf and updatedAtOf prefer the tracker's dates, falling back on the
+// local ones for a task that never came from a tracker.
+func createdAtOf(t models.Task) time.Time {
+	if t.TrackerCreatedAt != nil {
+		return *t.TrackerCreatedAt
+	}
+	return t.CreatedAt
+}
+
+func updatedAtOf(t models.Task) time.Time {
+	if t.TrackerUpdatedAt != nil {
+		return *t.TrackerUpdatedAt
+	}
+	return t.UpdatedAt
 }
 
 // isOpenStatus reports whether a task still represents work to do.
@@ -93,7 +128,7 @@ func parseDigestDate(raw string) (time.Time, error) {
 // toDigestRef projects a task into its digest representation, relative to the
 // digest's reference day.
 func toDigestRef(t models.Task, ref time.Time) models.DigestTaskRef {
-	age := int(ref.Sub(t.CreatedAt).Hours() / 24)
+	age := int(ref.Sub(createdAtOf(t)).Hours() / 24)
 	if age < 0 {
 		age = 0
 	}
@@ -182,7 +217,7 @@ func (d *DB) ComputeDailyDigest(projectID string, dateRaw string, assignee strin
 		return nil, fmt.Errorf("le digest quotidien est réservé aux projets de type personnel (projet %s)", proj.Name)
 	}
 
-	tasks, err := d.GetTasks("", "", "", "", proj.ID, "", "", "", nil, false)
+	tasks, err := d.GetTasks("", "", "", "", proj.ID, "", "", "", nil, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +277,8 @@ func (d *DB) ComputeDailyDigest(projectID string, dateRaw string, assignee strin
 				digest.Stats.ClosedDateUnknown++
 				continue
 			}
-			if int(ref.Sub(t.UpdatedAt).Hours()/24) <= recentlyDoneWindowDays && !t.UpdatedAt.After(ref.AddDate(0, 0, 1)) {
+			closedAt := updatedAtOf(t)
+			if int(ref.Sub(closedAt).Hours()/24) <= recentlyDoneWindowDays && !closedAt.After(ref.AddDate(0, 0, 1)) {
 				digest.RecentlyDone = append(digest.RecentlyDone, r)
 				digest.Stats.DoneLast7Days++
 			}
@@ -280,11 +316,20 @@ func (d *DB) ComputeDailyDigest(projectID string, dateRaw string, assignee strin
 			continue
 		}
 
-		switch t.Priority {
-		case models.PriorityUrgent, models.PriorityHigh:
+		// Trois destinations, dans cet ordre. Ce qui presse ou ce qui est déjà
+		// entamé va au focus : c'est le travail du jour. Ce qui a bougé dans la
+		// fenêtre de veille y reste visible. Le reste est du backlog dormant, et
+		// il est compté plutôt que listé : la veille ramassait trente-six tickets
+		// sur trente-sept ouverts, ce qui ne trie rien.
+		isPressing := t.Priority == models.PriorityUrgent || t.Priority == models.PriorityHigh
+		isStarted := t.Status == models.StatusToImplement || t.Status == models.StatusInProgress
+		switch {
+		case isPressing || isStarted:
 			digest.Focus = append(digest.Focus, r)
-		default:
+		case touchedWithin(t, watchWindowDays, ref):
 			digest.Watch = append(digest.Watch, r)
+		default:
+			digest.Stats.Dormant++
 		}
 	}
 
@@ -428,10 +473,17 @@ func renderDigestMarkdown(dg *models.DailyDigest) string {
 		dg.Stats.TotalOpen, dg.Stats.Urgent, dg.Stats.High, dg.Stats.Stale,
 		dg.Stats.Overdue, dg.Stats.AwaitingReview, dg.Stats.DoneLast7Days))
 
-	b.WriteString("\n## 📅 Agenda du jour\n\n")
+	// L'agent rend souvent son propre titre : on ne pose le nôtre que s'il n'en a
+	// pas, sinon le brief affiche deux fois « Agenda du jour ».
+	agenda := strings.TrimSpace(dg.Agenda)
+	if !strings.HasPrefix(agenda, "#") {
+		b.WriteString("\n## 📅 Agenda du jour\n\n")
+	} else {
+		b.WriteString("\n")
+	}
 	switch {
-	case strings.TrimSpace(dg.Agenda) != "":
-		b.WriteString(strings.TrimSpace(dg.Agenda))
+	case agenda != "":
+		b.WriteString(agenda)
 		b.WriteString("\n")
 	case dg.AIStatus == "queued" || dg.AIStatus == "running":
 		b.WriteString("*Récupération de l'agenda par l'agent en cours…*\n")
@@ -441,12 +493,12 @@ func renderDigestMarkdown(dg *models.DailyDigest) string {
 		b.WriteString("*Agenda non récupéré. Taskacao ne voit pas votre calendrier : lancez l'enrichissement pour que l'agent du projet le remonte.*\n")
 	}
 
-	renderSection(&b, "🔥 À traiter aujourd'hui (urgent / haute)", dg.Focus,
-		"Rien d'urgent ou de haute priorité en attente.")
+	renderSection(&b, "🔥 À traiter aujourd'hui", dg.Focus,
+		"Rien d'urgent, de haute priorité, ni déjà entamé.")
 	staleEmpty := fmt.Sprintf("Aucune tâche prioritaire ouverte depuis plus de %d jours.", staleAfterDays)
 	if dg.Stats.OpenDateUnknown > 0 {
 		staleEmpty = fmt.Sprintf(
-			"Ancienneté indisponible pour %d tâches ouvertes : la CLI Atlassian ne renvoie pas les champs `created` / `updated`, la synchro ne peut donc pas connaître la date réelle du ticket.",
+			"Ancienneté indisponible pour %d tâches ouvertes : elles ont été importées avant que les dates du tracker soient lues. Une synchronisation les ramènera.",
 			dg.Stats.OpenDateUnknown)
 	}
 	renderSection(&b, "⏳ Trop longtemps ouvertes", dg.Stale, staleEmpty)
@@ -454,12 +506,20 @@ func renderDigestMarkdown(dg *models.DailyDigest) string {
 		"Aucune échéance dans les 7 prochains jours.")
 	renderSection(&b, "👀 En attente de revue", dg.AwaitingReview,
 		"Rien en attente de revue.")
-	renderSection(&b, "🟡 À ne pas oublier cette semaine", dg.Watch,
-		"Rien d'autre en cours.")
+	watchEmpty := "Rien d'autre en cours."
+	if dg.Stats.Dormant > 0 {
+		watchEmpty = fmt.Sprintf("Rien d'autre touché depuis %d jours. %d ticket(s) ouverts dorment dans le backlog.",
+			watchWindowDays, dg.Stats.Dormant)
+	}
+	renderSection(&b, "🟡 À ne pas oublier cette semaine", dg.Watch, watchEmpty)
+	if len(dg.Watch) > 0 && dg.Stats.Dormant > 0 {
+		fmt.Fprintf(&b, "\n_%d autre(s) ticket(s) ouverts n'ont pas bougé depuis %d jours et ne sont pas listés ici._\n",
+			dg.Stats.Dormant, watchWindowDays)
+	}
 	doneEmpty := "Aucune tâche terminée sur les 7 derniers jours."
 	if dg.Stats.ClosedDateUnknown > 0 {
 		doneEmpty = fmt.Sprintf(
-			"%d tâches terminées, mais la date de clôture est indisponible (champ `updated` non exposé par la CLI Atlassian), donc aucune fenêtre de 7 jours ne peut être calculée.",
+			"%d tâches terminées, mais sans date de clôture connue : ces tickets ont été importés avant que les dates du tracker soient lues. Une synchronisation les ramènera.",
 			dg.Stats.ClosedDateUnknown)
 	}
 	renderSection(&b, "✅ Terminées récemment", dg.RecentlyDone, doneEmpty)
@@ -668,15 +728,23 @@ func (d *DB) EnqueueDigestAgenda(projectID string, dateRaw string, assignee stri
 	dg.Markdown = renderDigestMarkdown(dg)
 	_ = d.SaveDailyDigest(dg)
 
-	// The agent may need to reach a calendar over the network; give it room but
-	// never let it hang the request forever.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// L'agent peut avoir à interroger un calendrier, une messagerie, un espace de
+	// fichiers : un brief complet prend des minutes, pas des secondes. Le délai
+	// est donc large, et un dépassement est nommé comme tel plutôt que rapporté
+	// en « signal: killed », qui ne dit rien à qui vient de cliquer.
+	const agendaTimeout = 12 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), agendaTimeout)
 	defer cancel()
 
+	started := time.Now()
 	output, steps, runErr := d.runner.RunAgentPrompt(ctx, &runnerSettings, prompt)
 	completed := time.Now()
 
-	if runErr != nil {
+	if runErr != nil && ctx.Err() != nil {
+		dg.AIStatus = "failed"
+		dg.AIError = fmt.Sprintf("l'agent n'a pas répondu en %s (arrêté après %s). Un brief qui interroge plusieurs sources peut demander plus de temps : réduisez son périmètre, ou lancez la commande à la main pour voir où elle bloque.",
+			agendaTimeout, completed.Sub(started).Round(time.Second))
+	} else if runErr != nil {
 		dg.AIStatus = "failed"
 		dg.AIError = runErr.Error()
 	} else if strings.TrimSpace(output) == "" {
@@ -686,6 +754,12 @@ func (d *DB) EnqueueDigestAgenda(projectID string, dateRaw string, assignee stri
 		dg.AIStatus = "completed"
 		dg.AIError = ""
 		dg.Agenda = strings.TrimSpace(output)
+	}
+
+	// Un agenda hérité d'une tentative précédente afficherait les réunions d'hier
+	// comme celles du jour : en cas d'échec, il vaut mieux ne rien montrer.
+	if dg.AIStatus == "failed" {
+		dg.Agenda = ""
 	}
 	dg.AIUpdatedAt = &completed
 	dg.Markdown = renderDigestMarkdown(dg)

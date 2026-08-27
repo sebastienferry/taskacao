@@ -1140,6 +1140,10 @@ type JiraIssueField struct {
 	Labels  []string `json:"labels"`
 	Created string   `json:"created"`
 	Updated string   `json:"updated"`
+	// StatusCategoryChangeDate is when the work item entered its current status
+	// category. Not the precise status: moving from "Dev Test" to "To Merge"
+	// inside the same category leaves it untouched.
+	StatusCategoryChangeDate string `json:"statuscategorychangedate"`
 }
 
 type JiraIssueItem struct {
@@ -1306,6 +1310,22 @@ func findJiraItem(items []JiraIssueItem, key string) *JiraIssueItem {
 	return nil
 }
 
+// parseJiraTime reads a Jira timestamp. Jira Cloud writes offsets without the
+// colon RFC 3339 requires ("+0200" rather than "+02:00"), so the strict layout is
+// tried first and the Jira one second.
+func parseJiraTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05.999-0700"} {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // jiraStatusIsClosed reports whether a Jira status name means the work item has
 // left the board. Abandoned statuses count as closed just like "Done": WONTDO,
 // Cancelled or Rejected tickets are not work waiting to be done. Recognising
@@ -1389,6 +1409,21 @@ func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string, issu
 			extURL = &u
 		}
 
+		// Dates du tracker : elles n'arrivent que par le chemin REST, et Jira les
+		// écrit dans un format qui n'est pas tout à fait RFC 3339 (fuseau sans
+		// deux points), d'où les deux tentatives.
+		var trackerCreated, trackerUpdated *time.Time
+		if parsed, ok := parseJiraTime(item.Fields.Created); ok {
+			trackerCreated = &parsed
+		}
+		if parsed, ok := parseJiraTime(item.Fields.Updated); ok {
+			trackerUpdated = &parsed
+		}
+		var statusChanged *time.Time
+		if parsed, ok := parseJiraTime(item.Fields.StatusCategoryChangeDate); ok {
+			statusChanged = &parsed
+		}
+
 		avatar := ""
 		if item.Fields.Assignee.AvatarUrls != nil {
 			avatar = item.Fields.Assignee.AvatarUrls["48x48"]
@@ -1398,22 +1433,25 @@ func (r *Runner) jiraItemsToTasks(items []JiraIssueItem, trackerUrl string, issu
 		}
 
 		tasks = append(tasks, models.Task{
-			ID:             "jira-" + item.Key,
-			Key:            item.Key,
-			Title:          item.Fields.Summary,
-			Description:    jiraDescriptionToText(item.Fields.Description),
-			Status:         status,
-			Priority:       priority,
-			Labels:         item.Fields.Labels,
-			Assignee:       item.Fields.Assignee.DisplayName,
-			AssigneeAvatar: avatar,
-			Position:       i + 1,
-			Source:         "jira",
-			TrackerStatus:  strings.TrimSpace(item.Fields.Status.Name),
-			ExternalURL:    extURL,
-			IssueType:      itemType,
-			CreatedAt:      time.Now(),
-			UpdatedAt:      time.Now(),
+			ID:               "jira-" + item.Key,
+			Key:              item.Key,
+			Title:            item.Fields.Summary,
+			Description:      jiraDescriptionToText(item.Fields.Description),
+			Status:           status,
+			Priority:         priority,
+			Labels:           item.Fields.Labels,
+			Assignee:         item.Fields.Assignee.DisplayName,
+			TrackerCreatedAt: trackerCreated,
+			TrackerUpdatedAt: trackerUpdated,
+			StatusChangedAt:  statusChanged,
+			AssigneeAvatar:   avatar,
+			Position:         i + 1,
+			Source:           "jira",
+			TrackerStatus:    strings.TrimSpace(item.Fields.Status.Name),
+			ExternalURL:      extURL,
+			IssueType:        itemType,
+			CreatedAt:        time.Now(),
+			UpdatedAt:        time.Now(),
 		})
 	}
 

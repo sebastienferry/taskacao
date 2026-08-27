@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -108,7 +109,7 @@ func (d *DB) StartAutoSync() {
 				continue
 			}
 
-			d.runAutoSyncPass(settings)
+			d.runAutoSyncPassGuarded(settings)
 		}
 	}()
 }
@@ -123,6 +124,25 @@ func (d *DB) autoSyncInterval() time.Duration {
 		return autoSyncMinInterval
 	}
 	return interval
+}
+
+// runAutoSyncPassGuarded isolates one pass from the loop. A panic in a background
+// pass used to take the whole process down, and a process that dies is a window
+// that reopens: the interface is served by this binary, and starting it again
+// reloads the tab. The jobs queue has had this guard from the start; the loop
+// deserved the same.
+func (d *DB) runAutoSyncPassGuarded(settings *models.Settings) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[autosync] panique pendant une passe: %v\n%s", rec, debug.Stack())
+			d.recordAutoSyncError(fmt.Errorf("panique pendant une passe: %v", rec))
+
+			d.auto.mu.Lock()
+			d.auto.running = false
+			d.auto.mu.Unlock()
+		}
+	}()
+	d.runAutoSyncPass(settings)
 }
 
 // runAutoSyncPass reads what changed on every Jira project that can be read over

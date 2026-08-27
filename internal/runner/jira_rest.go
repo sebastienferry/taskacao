@@ -699,7 +699,14 @@ func (c *JiraRESTClient) SearchProjectIssues(ctx context.Context, projectKey str
 	}
 	jql += " ORDER BY updated DESC"
 
-	fields := []string{"key", "summary", "description", "status", "priority", "assignee", "labels", "issuetype", "parent"}
+	// created et updated sont demandés ici et nulle part ailleurs : acli refuse ces
+	// deux champs, et sans eux le digest ne peut dire ni « ouvert depuis N jours »
+	// ni « fermé récemment », faute de savoir quand quoi que ce soit s'est passé.
+	// statuscategorychangedate dit depuis quand le ticket est dans sa catégorie de
+	// statut. C'est ce qui répond à « en cours depuis combien de temps », et cela
+	// voyage dans la même requête : le changelog, lui, coûterait un appel par
+	// ticket, donc quinze cents pour un projet comme celui-ci.
+	fields := []string{"key", "summary", "description", "status", "priority", "assignee", "labels", "issuetype", "parent", "created", "updated", "statuscategorychangedate"}
 	if c.sprintFieldID != "" {
 		fields = append(fields, c.sprintFieldID)
 	}

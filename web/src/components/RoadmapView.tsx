@@ -18,6 +18,7 @@ import {
   X,
   Filter,
   Scissors,
+  Search,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField } from './LookupField'
@@ -27,6 +28,7 @@ import {
   buildEpicRows,
   placementIssues,
   placementOf,
+  matchesEpicSearch,
   belongsToProjectKey,
   HORIZON_META,
   MATURITY_META,
@@ -249,8 +251,25 @@ export const RoadmapView: React.FC = () => {
     let list = allRows
     if (!showClosed) list = list.filter(r => !r.closed)
     if (onlyProjectKey && projectKey) list = list.filter(r => belongsToProjectKey(r, projectKey))
+    // La recherche s'applique en dernier, et sur les épics : les compteurs des
+    // onglets ci-dessous suivent donc, ce qui montre dans quel horizon se
+    // trouve ce qu'on cherche.
+    if (searchQuery.trim()) list = list.filter(r => matchesEpicSearch(r, searchQuery))
     return list
-  }, [allRows, showClosed, onlyProjectKey, projectKey])
+  }, [allRows, showClosed, onlyProjectKey, projectKey, searchQuery])
+
+  // Des correspondances écartées par les deux filtres d'affichage, à signaler :
+  // chercher un épic clos et ne rien voir, sans savoir pourquoi, est trompeur.
+  const hiddenMatches = useMemo(() => {
+    const q = searchQuery.trim()
+    if (!q) return 0
+    return allRows.filter(r => {
+      if (!matchesEpicSearch(r, q)) return false
+      if (!showClosed && r.closed) return true
+      if (onlyProjectKey && projectKey && !belongsToProjectKey(r, projectKey)) return true
+      return false
+    }).length
+  }, [allRows, searchQuery, showClosed, onlyProjectKey, projectKey])
 
   const closedCount = allRows.filter(r => r.closed).length
   const foreignCount = projectKey ? allRows.filter(r => !belongsToProjectKey(r, projectKey)).length : 0
@@ -279,6 +298,19 @@ export const RoadmapView: React.FC = () => {
     }
     return list
   }, [rows, tab, operational, onlyIssues, horizonOfTab])
+
+  // Chercher un épic et rester devant un onglet vide n'aide personne : quand la
+  // recherche ne trouve rien ici mais trouve ailleurs, on va là où c'est. Sans
+  // recherche active, l'onglet reste celui que l'utilisateur a choisi.
+  useEffect(() => {
+    if (!searchQuery.trim() || visibleRows.length > 0) return
+    const target = TABS.find(candidate =>
+      candidate.id === 'unclassified'
+        ? rows.some(r => !r.horizon)
+        : rows.some(r => r.horizon === candidate.id)
+    )
+    if (target && target.id !== tab) setTab(target.id)
+  }, [searchQuery, visibleRows.length, rows, tab])
 
   useEffect(() => {
     if (!currentProject?.id) {
@@ -631,11 +663,35 @@ export const RoadmapView: React.FC = () => {
                 borderColor: onlyIssues ? 'rgb(var(--status-danger-rgb) / 0.4)' : 'var(--border-color)',
                 color: onlyIssues ? 'var(--status-danger)' : 'var(--text-secondary)',
               }}
-              title="Ne garder que les épics dont une story n'est pas dans le bon sprint"
+              title="Ne garder que les épics ayant un ticket non terminé sans sprint, ou resté dans un sprint passé"
             >
               <AlertTriangle size={12} />
               À corriger
             </button>
+          )}
+
+          {/* La barre de recherche est dans l'en-tête, loin de la liste : sans
+              ce rappel, on ne comprend pas pourquoi la roadmap est réduite. */}
+          {searchQuery.trim() && (
+            <span
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-semibold border"
+              style={{
+                background: 'var(--accent-light)',
+                borderColor: 'rgb(var(--accent-rgb) / 0.4)',
+                color: 'var(--accent-color)',
+              }}
+            >
+              <Search size={11} />
+              {rows.length} épic{rows.length > 1 ? 's' : ''} sur « {searchQuery.trim()} »
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="cursor-pointer opacity-70 hover:opacity-100"
+                title="Effacer la recherche"
+              >
+                <X size={11} />
+              </button>
+            </span>
           )}
         </div>
 
@@ -660,9 +716,15 @@ export const RoadmapView: React.FC = () => {
           {visibleRows.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center gap-2 text-center px-6">
               <Compass size={26} className="text-[var(--text-muted)]" />
-              <p className="text-sm font-semibold">Aucun épic ici</p>
+              <p className="text-sm font-semibold">
+                {searchQuery.trim() ? `Aucun épic ne correspond à « ${searchQuery.trim()} »` : 'Aucun épic ici'}
+              </p>
               <p className="text-[11px] text-[var(--text-muted)] max-w-sm">
-                {tab === 'hidden'
+                {searchQuery.trim()
+                  ? hiddenMatches > 0
+                    ? `${hiddenMatches} épic(s) correspondent mais sont écartés par les filtres d'affichage : affiche les épics clos ou ceux d'un autre projet pour les voir.`
+                    : 'La recherche porte sur la clé, le titre et l’équipe de l’épic, ainsi que sur les clés et titres de ses tickets.'
+                  : tab === 'hidden'
                   ? 'Aucun épic masqué. Classe en HIDDEN le tout-venant qui n’a pas vocation à apparaître dans la roadmap.'
                   : tab === 'unclassified'
                   ? 'Tous les épics sont classés. Les nouveaux apparaîtront ici après une synchro.'

@@ -136,6 +136,7 @@ export const ProjectModal: React.FC = () => {
     updateProject,
     deleteProject,
     fetchProjectIssueTypes,
+    setIsTrackerSetupOpen,
     settings,
     addToast,
     t,
@@ -614,6 +615,16 @@ export const ProjectModal: React.FC = () => {
       }
       setIsProjectModalOpen(false)
       setEditingProject(null)
+
+      // Un projet posé sur un tracker distant sans accès configurés ne ramènera
+      // rien : autant le dire maintenant, plutôt qu'après une synchronisation
+      // vide. L'écran se ferme sans rien remplir, la configuration pouvant venir
+      // plus tard depuis les réglages.
+      const needsCredentials =
+        issueTracker === 'jira' && !settings.jiraUrl?.trim() && !settings.jiraApiTokenSet
+      if (needsCredentials) {
+        setIsTrackerSetupOpen(true)
+      }
     } finally {
       setIsSubmitting(false)
     }

@@ -17,6 +17,7 @@ import {
   FileCode,
   HelpCircle,
   CalendarDays,
+  ShieldCheck,
   Flame,
   GitPullRequest,
   Info,
@@ -40,6 +41,7 @@ export const ProfileModal: React.FC = () => {
   const {
     isProfileOpen,
     setIsProfileOpen,
+    setIsTrackerSetupOpen,
     settings,
     updateSettings,
     t,
@@ -515,6 +517,19 @@ export const ProfileModal: React.FC = () => {
                     Le jeton sera effacé à l'enregistrement. Sprint et Team retomberont sur le repli acli, qui ne couvre que le sprint.
                   </span>
                 )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsProfileOpen(false)
+                    setIsTrackerSetupOpen(true)
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-semibold text-[var(--accent-color)] bg-[var(--accent-light)] hover:opacity-90 border border-[var(--accent-color)]/30 transition-colors cursor-pointer"
+                  title="Saisir site, e-mail et jeton, et vérifier qu'ils fonctionnent avant de les enregistrer"
+                >
+                  <ShieldCheck size={14} />
+                  <span>Vérifier et enregistrer les accès au tracker</span>
+                </button>
+
                 {/* Boucle de fond : elle ne relit que ce qui a bougé, ce qui la
                     rend possible sans peser sur le tracker. */}
                 <div className="p-3 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-2">

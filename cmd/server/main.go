@@ -9,8 +9,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"io"
+	"io/fs"
+	"net"
+	"os/exec"
+	"runtime"
+	"time"
+
 	"tasks/internal/db"
 	"tasks/internal/handlers"
+	"tasks/internal/webui"
 )
 
 // loadDotEnv reads KEY=VALUE lines from a .env file next to the binary's working
@@ -51,20 +59,105 @@ func loadDotEnv(paths ...string) {
 	}
 }
 
+// appDataDir is where the application keeps what belongs to it: the database,
+// and the environment file holding the tracker token when the user would rather
+// not store it in the database.
+//
+// It returns an empty string when the user's data directory cannot be resolved
+// or created, which callers treat as "use the working directory instead".
+func appDataDir() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	appDir := filepath.Join(dir, "taskacao")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		return ""
+	}
+	return appDir
+}
+
+// resolveDBPath decides where the database lives.
+//
+// Three cases, in this order. An explicit DB_PATH wins, always. Then a database
+// already sitting in the working directory is kept: someone who has been running
+// the program from a checkout must not silently start from an empty board. Only
+// otherwise does the database go to the user's data directory, which is what a
+// distributed binary needs, since it may be launched from anywhere.
+func resolveDBPath(explicit string) (path string, origin string) {
+	if strings.TrimSpace(explicit) != "" {
+		return explicit, "DB_PATH"
+	}
+	if _, err := os.Stat("tasks.db"); err == nil {
+		return "tasks.db", "base trouvée dans le répertoire courant"
+	}
+
+	appDir := appDataDir()
+	if appDir == "" {
+		// Pas de dossier utilisateur lisible : le répertoire courant reste un
+		// endroit valable, et vaut mieux qu'un démarrage refusé.
+		return "tasks.db", "répertoire courant, dossier de données indisponible"
+	}
+	return filepath.Join(appDir, "tasks.db"), "dossier de données"
+}
+
+// alreadyServing reports whether the port is held by another Taskacao rather than
+// by an unrelated program. The health endpoint is the only honest way to know,
+// and it decides between "your window is already open" and "something else is on
+// this port".
+func alreadyServing(baseURL string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(baseURL + "/api/health")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(body), "taskacao")
+}
+
+// openBrowser opens the interface once the server listens. It is best effort by
+// design: a machine without a browser, or a headless run, must not turn a
+// cosmetic step into a failure to start.
+func openBrowser(url string) {
+	var cmd string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = "open"
+	case "windows":
+		cmd = "cmd"
+		args = []string{"/c", "start", ""}
+	default:
+		cmd = "xdg-open"
+	}
+	args = append(args, url)
+	if err := exec.Command(cmd, args...).Start(); err != nil {
+		log.Printf("Navigateur non ouvert (%v). Ouvrez %s à la main.", err, url)
+	}
+}
+
 func main() {
 	// .env.local last: it overrides nothing already exported, but is the usual
 	// place for a machine-specific secret.
-	loadDotEnv(".env", ".env.local")
+	// Le répertoire courant d'abord, pour la boucle de développement, puis le
+	// dossier de données : une application lancée depuis n'importe où n'a pas de
+	// répertoire courant qui lui appartienne. La première valeur trouvée gagne,
+	// donc un développeur garde la main depuis son dépôt.
+	loadDotEnv(".env", ".env.local", filepath.Join(appDataDir(), ".env"))
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8090"
 	}
 
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "tasks.db"
-	}
+	dbPath, dbOrigin := resolveDBPath(os.Getenv("DB_PATH"))
 
 	database, err := db.NewDB(dbPath)
 	if err != nil {
@@ -73,6 +166,7 @@ func main() {
 	defer database.Close()
 
 	h := handlers.NewHandler(database)
+	h.SetDataDir(appDataDir())
 
 	// Boucle de synchronisation de fond. Elle ne fait rien tant que le réglage
 	// est éteint, et ne lit ensuite que ce qui a changé depuis sa passe
@@ -101,6 +195,8 @@ func main() {
 	mux.HandleFunc("/api/sync/github", h.HandleSyncGithub)
 	mux.HandleFunc("/api/sync/jira", h.HandleSyncJira)
 	mux.HandleFunc("/api/sync/auto", h.HandleAutoSyncStatus)
+	mux.HandleFunc("/api/setup/tracker", h.HandleTrackerSetup)
+	mux.HandleFunc("/api/setup/tracker/check", h.HandleTrackerSetup)
 	mux.HandleFunc("/api/skills", h.HandleSkills)
 	mux.HandleFunc("/api/spec-framework/status", h.HandleSpecFrameworkStatus)
 	mux.HandleFunc("/api/spec-framework/install", h.HandleSpecFrameworkInstall)
@@ -124,10 +220,23 @@ func main() {
 	mux.HandleFunc("/api/terminal/send", h.HandleTerminalSend)
 	mux.HandleFunc("/api/terminal/reset", h.HandleTerminalReset)
 
-	// Static Web Assets / SPA fallback
-	webDistDir := "./web/dist"
-	if _, err := os.Stat(webDistDir); err == nil {
-		fs := http.FileServer(http.Dir(webDistDir))
+	// Interface : la copie embarquée d'abord, le dossier de build ensuite.
+	//
+	// L'embarqué est ce qui fait tenir l'application dans un fichier. Le repli
+	// disque sert la boucle de développement, où l'on rebuild le front sans
+	// recompiler le serveur.
+	uiFS, uiEmbedded := webui.FS()
+	webDistDir := "./internal/webui/dist"
+	if !uiEmbedded {
+		if _, err := os.Stat(webDistDir); err == nil {
+			uiFS = os.DirFS(webDistDir)
+			uiEmbedded = true
+			log.Printf("Interface servie depuis %s", webDistDir)
+		}
+	}
+
+	if uiEmbedded {
+		fileServer := http.FileServer(http.FS(uiFS))
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -139,17 +248,27 @@ func main() {
 			// hashed bundle, so a stale copy keeps serving the previous build and
 			// the app looks unchanged after a rebuild. The assets themselves are
 			// content-hashed, so they can be cached hard.
-			path := filepath.Join(webDistDir, r.URL.Path)
 			if strings.HasPrefix(r.URL.Path, "/assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			} else {
 				w.Header().Set("Cache-Control", "no-store, must-revalidate")
 			}
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				http.ServeFile(w, r, filepath.Join(webDistDir, "index.html"))
+			name := strings.TrimPrefix(r.URL.Path, "/")
+			if name == "" {
+				name = "index.html"
+			}
+			if _, err := fs.Stat(uiFS, name); err != nil {
+				// Route de l'application : c'est index.html qui la résout.
+				index, err := fs.ReadFile(uiFS, "index.html")
+				if err != nil {
+					http.Error(w, "interface indisponible", http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = w.Write(index)
 				return
 			}
-			fs.ServeHTTP(w, r)
+			fileServer.ServeHTTP(w, r)
 		})
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +285,7 @@ func main() {
 <body style="font-family: system-ui; padding: 2rem; background: #0f172a; color: #f8fafc;">
   <h2>Taskacao Go API is running!</h2>
   <p>To run the frontend with hot-reloading, run <code>cd web && npm run dev</code></p>
-  <p>Or build static bundle via <code>cd web && npm run build</code> and restart this Go server.</p>
+  <p>Or build the bundle via <code>make build</code>, which compiles the interface into the binary.</p>
   <p>API endpoints available at <a href="/api/tasks" style="color: #818cf8;">/api/tasks</a>, <a href="/api/skills" style="color: #818cf8;">/api/skills</a> and <a href="/api/settings" style="color: #818cf8;">/api/settings</a>.</p>
 </body>
 </html>`)
@@ -176,8 +295,39 @@ func main() {
 	handlerWithCORS := h.EnableCORS(mux)
 
 	addr := ":" + port
-	log.Printf("🚀 Taskacao Server listening on http://localhost%s (DB: %s)", addr, dbPath)
-	if err := http.ListenAndServe(addr, handlerWithCORS); err != nil {
+	url := fmt.Sprintf("http://localhost%s", addr)
+
+	// Le port est réservé avant toute autre chose. Ouvrir le navigateur d'abord,
+	// comme le faisait la version précédente, ouvrait un onglet même quand
+	// l'écoute échouait ensuite : lancer l'application une seconde fois
+	// rechargeait l'onglet de la première, puis mourait sur « address already in
+	// use ».
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		// Une instance qui tourne déjà n'est pas une erreur : c'est la fenêtre
+		// que l'utilisateur cherchait. On la lui ouvre et on s'efface.
+		if alreadyServing(url) {
+			log.Printf("Taskacao tourne déjà sur %s : ouverture de la fenêtre existante.", url)
+			if os.Getenv("TASKACAO_NO_BROWSER") == "" {
+				openBrowser(url)
+			}
+			return
+		}
+		log.Fatalf("Port %s indisponible et occupé par autre chose que Taskacao: %v", addr, err)
+	}
+
+	log.Printf("🚀 Taskacao Server listening on %s", url)
+	log.Printf("   base : %s (%s)", dbPath, dbOrigin)
+
+	// Ouverture du navigateur : ce que fait une application quand on la lance.
+	// TASKACAO_NO_BROWSER=1 l'en empêche, pour un serveur ou un lancement par un
+	// gestionnaire de services. Le port est déjà pris à ce stade, donc la page
+	// répondra.
+	if os.Getenv("TASKACAO_NO_BROWSER") == "" && uiEmbedded {
+		go openBrowser(url)
+	}
+
+	if err := http.Serve(listener, handlerWithCORS); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

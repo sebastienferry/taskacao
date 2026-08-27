@@ -22,6 +22,10 @@ import (
 type Handler struct {
 	db          *db.DB
 	terminalMgr *terminal.Manager
+	// dataDir is where the application keeps its own files, the environment file
+	// holding the tracker token included. Empty when the process could not
+	// resolve one, in which case the token can only go to the database.
+	dataDir string
 }
 
 func NewHandler(database *db.DB) *Handler {
@@ -29,6 +33,11 @@ func NewHandler(database *db.DB) *Handler {
 		db:          database,
 		terminalMgr: terminal.NewManager(),
 	}
+}
+
+// SetDataDir tells the handler where the application's own files live.
+func (h *Handler) SetDataDir(dir string) {
+	h.dataDir = dir
 }
 
 func (h *Handler) EnableCORS(next http.Handler) http.Handler {
@@ -1028,11 +1037,13 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 		assignee := r.URL.Query().Get("assignee")
 		// Statuts du tracker à afficher, répétables : ?trackerStatus=Draft&trackerStatus=Selected
 		trackerStatuses := r.URL.Query()["trackerStatus"]
+		// Types de tickets à afficher, répétables : ?issueType=Bug&issueType=Story
+		issueTypes := r.URL.Query()["issueType"]
 		// pinned=1 : les seuls tickets épinglés, le raccourci vers les chantiers
 		// en cours quand le board en porte trois cents.
 		pinnedOnly := r.URL.Query().Get("pinned") == "1" || r.URL.Query().Get("pinned") == "true"
 
-		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team, assignee, trackerStatuses, pinnedOnly)
+		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team, assignee, trackerStatuses, issueTypes, pinnedOnly)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -1060,6 +1071,45 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
+}
+
+// HandleTrackerSetup checks tracker credentials, and saves them once they are
+// known good.
+//
+//	POST /api/setup/tracker/check  {siteUrl, email, token}
+//	POST /api/setup/tracker        {siteUrl, email, token, storeTokenInFile}
+//
+// Checking before saving is the point: a wrong site or a stale token never
+// reaches the settings, and the answer names what is wrong instead of leaving a
+// sync to fail later with nothing to show.
+func (h *Handler) HandleTrackerSetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		SiteURL          string `json:"siteUrl"`
+		Email            string `json:"email"`
+		Token            string `json:"token"`
+		StoreTokenInFile bool   `json:"storeTokenInFile"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+		return
+	}
+
+	if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/check") {
+		writeJSON(w, http.StatusOK, h.db.CheckJiraCredentials(req.SiteURL, req.Email, req.Token))
+		return
+	}
+
+	settings, err := h.db.SaveTrackerCredentials(req.SiteURL, req.Email, req.Token, req.StoreTokenInFile, h.dataDir)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
 }
 
 // HandleAutoSyncStatus reports what the background sync loop has been doing:

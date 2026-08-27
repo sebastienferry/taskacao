@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   Flame,
   Calendar,
+  Clock,
   Sparkles,
   Loader2,
   GitBranch,
@@ -23,6 +24,9 @@ import {
 } from 'lucide-react'
 import type { Task, Priority } from '../types'
 import { useApp } from '../context/AppContext'
+import { issueTypeStyle } from '../lib/issueTypes'
+import { Avatar } from './Avatar'
+import { shortElapsed, isElapsedStale } from '../lib/elapsed'
 import { skillForStage, stageFromColumn } from '../lib/workflow'
 
 interface TaskCardProps {
@@ -396,6 +400,19 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
 
       {/* Ligne 1b : Titre, sous la référence */}
       <h4 className="text-xs font-semibold text-[var(--text-primary)] leading-snug line-clamp-2 mb-1.5">
+        {task.issueType && (
+          <span
+            className="inline-flex items-center align-middle mr-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide"
+            style={{
+              color: issueTypeStyle(task.issueType).color,
+              background: issueTypeStyle(task.issueType).background,
+              border: `1px solid ${issueTypeStyle(task.issueType).border}`,
+            }}
+            title={`Type de ticket : ${task.issueType}`}
+          >
+            {issueTypeStyle(task.issueType).short}
+          </span>
+        )}
         {task.title}
       </h4>
 
@@ -454,13 +471,18 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
 
         {/* Assignee / Date */}
         <div className="flex items-center gap-1.5 shrink-0 ml-auto text-[10px] text-[var(--text-muted)]">
-          {task.assignee && (
-            <div
-              className="w-4.5 h-4.5 rounded-full accent-bg text-white flex items-center justify-center text-[8.5px] font-bold shadow-2xs"
-              title={`Assigné à : ${task.assignee}`}
+          {task.statusChangedAt && shortElapsed(task.statusChangedAt) && (
+            <span
+              className="flex items-center gap-0.5 font-medium"
+              style={{ color: isElapsedStale(task.statusChangedAt) ? 'var(--status-warn)' : 'var(--text-muted)' }}
+              title={`Dans cette catégorie de statut depuis le ${new Date(task.statusChangedAt).toLocaleDateString()}`}
             >
-              {task.assignee.substring(0, 2).toUpperCase()}
-            </div>
+              <Clock size={10} />
+              <span>{shortElapsed(task.statusChangedAt)}</span>
+            </span>
+          )}
+          {task.assignee && (
+            <Avatar name={task.assignee} url={task.assigneeAvatar} size={18} />
           )}
           {task.dueDate && (
             <span className="flex items-center gap-0.5 text-amber-400 font-medium" title={`Échéance : ${task.dueDate}`}>

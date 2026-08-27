@@ -501,13 +501,25 @@ type Task struct {
 	// ParentKey / ParentTitle / ParentType describe the work item this task
 	// hangs under — an epic, or a parent story for a sub-task. The parent is a
 	// property of the task rather than a card of its own.
-	ParentKey   string         `json:"parentKey,omitempty"`
-	ParentTitle string         `json:"parentTitle,omitempty"`
-	ParentType  string         `json:"parentType,omitempty"` // "Epic", "Story", …
-	Activities  []TaskActivity `json:"activities,omitempty"`
-	Pinned      bool           `json:"pinned,omitempty"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	UpdatedAt   time.Time      `json:"updatedAt"`
+	ParentKey   string `json:"parentKey,omitempty"`
+	ParentTitle string `json:"parentTitle,omitempty"`
+	ParentType  string `json:"parentType,omitempty"` // "Epic", "Story", …
+	// TrackerCreatedAt / TrackerUpdatedAt are the tracker's own dates, when it
+	// gave them. CreatedAt and UpdatedAt below are local: on a synced ticket they
+	// hold the import time, which is why they cannot answer "open for how long".
+	// Nil means the tracker did not provide them, and the digest then says so
+	// rather than counting days from an import.
+	TrackerCreatedAt *time.Time `json:"trackerCreatedAt,omitempty"`
+	TrackerUpdatedAt *time.Time `json:"trackerUpdatedAt,omitempty"`
+	// StatusChangedAt is when the work item entered its current status category,
+	// which is what "in progress for four days" counts from. It is the category
+	// and not the precise status: two statuses of the same category, such as a
+	// review column and a merge column, do not move it.
+	StatusChangedAt *time.Time     `json:"statusChangedAt,omitempty"`
+	Activities      []TaskActivity `json:"activities,omitempty"`
+	Pinned          bool           `json:"pinned,omitempty"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
 }
 
 type Settings struct {
@@ -738,6 +750,10 @@ type DigestStats struct {
 	Overdue        int `json:"overdue"`
 	AwaitingReview int `json:"awaitingReview"`
 	DoneLast7Days  int `json:"doneLast7Days"`
+	// Dormant is the open work nobody has touched inside the watch window. It is
+	// counted rather than listed: a brief that prints the whole backlog sorts
+	// nothing, and this number is the honest way to say what was left out.
+	Dormant int `json:"dormant"`
 	// Counters for what could not be dated, so the UI never implies zero.
 	OpenDateUnknown   int `json:"openDateUnknown"`
 	ClosedDateUnknown int `json:"closedDateUnknown"`

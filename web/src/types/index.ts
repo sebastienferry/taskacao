@@ -269,6 +269,15 @@ export interface Task {
   team?: string
   /** Identifiant de l'équipe Atlassian : c'est lui qui donne accès à ses membres. */
   teamId?: string
+  /** Dates du tracker, distinctes de createdAt / updatedAt qui datent l'import. */
+  trackerCreatedAt?: string
+  trackerUpdatedAt?: string
+  /**
+   * Entrée dans la catégorie de statut courante : c'est de là que se compte le
+   * temps passé. La catégorie, pas le statut précis : deux colonnes d'une même
+   * catégorie ne la font pas bouger.
+   */
+  statusChangedAt?: string
   source?: TaskSource
   externalUrl?: string
   /** Tracker work item type. Only "Task" and "Story" are imported. */
@@ -522,6 +531,15 @@ export interface DigestStats {
 export interface TaskFacetValue {
   value: string
   count: number
+}
+
+/** Réponse de la vérification des accès au tracker. */
+export interface TrackerCheck {
+  ok: boolean
+  error?: string
+  identity?: { accountId: string; displayName: string; email?: string; siteUrl: string }
+  /** Projets que ces accès peuvent lire, ce qui rend une erreur de site évidente. */
+  projects?: { id: string; name: string }[]
 }
 
 /** État de la boucle de synchronisation de fond. */

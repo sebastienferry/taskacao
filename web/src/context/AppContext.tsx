@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { EpicRequiredField, SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest, TrackerTeam, TeamMember, TeamWorkload, TaskFacetValue, AutoSyncState } from '../types'
+import type { EpicRequiredField, SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest, TrackerTeam, TeamMember, TeamWorkload, TaskFacetValue, AutoSyncState, TrackerCheck } from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 import { resolveAccentAttribute } from '../lib/accents'
 import {
@@ -58,10 +58,26 @@ interface AppContextType {
     statuses: TaskFacetValue[]
     sources: TaskFacetValue[]
     labels: TaskFacetValue[]
+    issueTypes: TaskFacetValue[]
     total: number
   }
+  /** Types de tickets affichés. Vide veut dire « tous ». */
+  issueTypeFilters: string[]
+  setIssueTypeFilters: (types: string[]) => void
   /** État de la boucle de synchronisation de fond, rafraîchi avec les activités. */
   autoSync: AutoSyncState | null
+  /** Écran de connexion au tracker, ouvert à la demande et jamais au démarrage. */
+  isTrackerSetupOpen: boolean
+  setIsTrackerSetupOpen: (open: boolean) => void
+  /** Vérifie des accès tracker sans rien enregistrer. */
+  checkTrackerCredentials: (siteUrl: string, email: string, token: string) => Promise<TrackerCheck>
+  /** Enregistre des accès déjà vérifiés, jeton en base ou dans un fichier à part. */
+  saveTrackerCredentials: (
+    siteUrl: string,
+    email: string,
+    token: string,
+    storeTokenInFile: boolean
+  ) => Promise<boolean>
   /**
    * Statuts du tracker affichés. Vide veut dire « tous » : c'est le choix
    * explicite de ce qu'on regarde, board comme liste, et il remplace le
@@ -256,6 +272,12 @@ interface AppContextType {
   openInEditor: (options?: { taskId?: string; projectId?: string; path?: string; editorCommand?: string }) => Promise<boolean>
 }
 
+/**
+ * Vues connues. Ce qui sort du stockage local n'est pas fiable : une vue retirée
+ * d'une version à l'autre laisserait un écran vide au démarrage.
+ */
+const VIEW_MODES: ViewMode[] = ['board', 'list', 'roadmap', 'activities', 'sync', 'digest', 'skills', 'team']
+
 const defaultSettings: UserSettings = {
   id: 1,
   theme: 'dark',
@@ -311,7 +333,48 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isSyncing, setIsSyncing] = useState(false)
   const [runningSkillId, setRunningSkillId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [activeView, setActiveView] = useState<ViewMode>('board')
+  /**
+   * L'écran affiché survit au rechargement.
+   *
+   * Recharger est un geste courant : un F5, une reprise après remplacement du
+   * binaire, un onglet restauré. Repartir de force sur le board fait perdre sa
+   * place, et il fallait revenir à la main dans la roadmap ou le triage à chaque
+   * fois.
+   *
+   * Au tout premier lancement il n'y a rien à restaurer : la vue par défaut des
+   * réglages prend alors le relais, ce qui est son rôle et n'était appliqué
+   * nulle part jusqu'ici. Ensuite c'est la dernière vue visitée qui gagne, sinon
+   * la mémorisation ne servirait à rien.
+   */
+  const [activeView, setActiveViewState] = useState<ViewMode>(() => {
+    try {
+      const stored = localStorage.getItem('taskacao_active_view')
+      return stored && VIEW_MODES.includes(stored as ViewMode) ? (stored as ViewMode) : 'board'
+    } catch {
+      return 'board'
+    }
+  })
+  // Vrai tant qu'aucune vue n'a été mémorisée : la vue par défaut des réglages
+  // ne s'applique qu'à cet instant, jamais par-dessus un choix en cours.
+  const defaultViewPending = useRef<boolean>(
+    (() => {
+      try {
+        return !localStorage.getItem('taskacao_active_view')
+      } catch {
+        return false
+      }
+    })()
+  )
+
+  const setActiveView = useCallback((view: ViewMode) => {
+    setActiveViewState(view)
+    defaultViewPending.current = false
+    try {
+      localStorage.setItem('taskacao_active_view', view)
+    } catch {
+      // stockage indisponible : la vue vaut pour cette session
+    }
+  }, [])
 
   // The docked terminal keeps its open state and width across reloads: it is a
   // workspace tool, not a transient modal.
@@ -372,6 +435,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     statuses: TaskFacetValue[]
     sources: TaskFacetValue[]
     labels: TaskFacetValue[]
+    issueTypes: TaskFacetValue[]
     total: number
   }>({
     sprints: [],
@@ -382,9 +446,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     statuses: [],
     sources: [],
     labels: [],
+    issueTypes: [],
     total: 0,
   })
+  const [issueTypeFilters, setIssueTypeFiltersState] = useState<string[]>([])
   const [autoSync, setAutoSync] = useState<AutoSyncState | null>(null)
+  const [isTrackerSetupOpen, setIsTrackerSetupOpen] = useState(false)
   const [trackerStatusFilters, setTrackerStatusFiltersState] = useState<string[]>([])
   const [teams, setTeams] = useState<TrackerTeam[]>([])
   const [sprintFilter, setSprintFilterState] = useState<string | null>(null)
@@ -544,6 +611,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     persistFilter({ trackerStatuses: values.length > 0 ? JSON.stringify(values) : null })
   }, [persistFilter])
 
+  const setIssueTypeFilters = useCallback((values: string[]) => {
+    setIssueTypeFiltersState(values)
+    persistFilter({ issueTypes: values.length > 0 ? JSON.stringify(values) : null })
+  }, [persistFilter])
+
   const setAssigneeFilter = useCallback((value: string | null) => {
     setAssigneeFilterState(value)
     persistFilter({ assignee: value })
@@ -573,17 +645,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return
     }
 
+    // Une conversion qui ne trouve rien ne doit pas lever le filtre : sans
+    // mapping de colonnes (un projet dont le board n'a jamais été importé), le
+    // filtre d'étape reste parfaitement applicable dans les deux modes, et le
+    // supprimer en silence donnait un board qui change de contenu sans raison
+    // visible.
     if (mode === 'status') {
       if (statusFilter) {
         const stage = stageForInternalStatus(statusFilter)
         const statuses = trackerStatusesForStage(currentProject, stage)
-        setStatusFilter(null)
-        setTrackerStatusFilters(statuses)
+        if (statuses.length > 0) {
+          setStatusFilter(null)
+          setTrackerStatusFilters(statuses)
+        }
       }
     } else if (trackerStatusFilters.length > 0) {
       const stage = stageForTrackerStatuses(currentProject, trackerStatusFilters)
-      setTrackerStatusFilters([])
-      setStatusFilter(stage ? INTERNAL_STATUS_BY_STAGE[stage] : null)
+      if (stage) {
+        setTrackerStatusFilters([])
+        setStatusFilter(INTERNAL_STATUS_BY_STAGE[stage])
+      }
     }
 
     persistBoardGrouping(mode)
@@ -682,11 +763,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (res.ok) {
         const data: UserSettings = await res.json()
         setSettings(data)
+        // Premier lancement : aucune vue mémorisée, la vue par défaut des
+        // réglages s'applique ici et nulle part ailleurs. C'est le seul moment
+        // où l'on tient la valeur du serveur plutôt que celle de repli.
+        if (defaultViewPending.current) {
+          defaultViewPending.current = false
+          if (data.defaultView && VIEW_MODES.includes(data.defaultView)) {
+            setActiveView(data.defaultView)
+          }
+        }
       }
     } catch (err) {
       console.warn('Failed to load settings from server', err)
     }
-  }, [])
+  }, [setActiveView])
 
   const fetchSkills = useCallback(async () => {
     try {
@@ -831,7 +921,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (selectedProjectId && selectedProjectId !== 'all') {
       params.append('projectId', selectedProjectId)
     }
-    if (searchQuery) params.append('q', searchQuery)
+    // La roadmap se cherche par épic, pas par ticket. Envoyer la recherche au
+    // serveur y amputerait les enfants de chaque épic : les compteurs de sprint
+    // et le détail se videraient, et un épic dont aucun ticket ne correspond
+    // disparaîtrait au lieu d'être trouvé. La vue filtre donc ses lignes
+    // elle-même, sur des données complètes.
+    if (searchQuery && activeView !== 'roadmap') params.append('q', searchQuery)
     if (statusFilter) params.append('status', statusFilter)
     if (priorityFilter) params.append('priority', priorityFilter)
     if (labelFilter) params.append('label', labelFilter)
@@ -841,9 +936,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // nulle part, ce qui laissait « Mes tâches » sans effet.
     if (assigneeFilter) params.append('assignee', assigneeFilter)
     trackerStatusFilters.forEach(status => params.append('trackerStatus', status))
+    issueTypeFilters.forEach(type => params.append('issueType', type))
     if (pinnedOnly) params.append('pinned', '1')
     return params.toString()
-  }, [selectedProjectId, searchQuery, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, assigneeFilter, trackerStatusFilters, pinnedOnly])
+  }, [selectedProjectId, searchQuery, activeView, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, assigneeFilter, trackerStatusFilters, issueTypeFilters, pinnedOnly])
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -876,6 +972,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch {
       setTrackerStatusFiltersState([])
     }
+    try {
+      const raw = stored.issueTypes
+      setIssueTypeFiltersState(raw ? JSON.parse(raw) : [])
+    } catch {
+      setIssueTypeFiltersState([])
+    }
     setPinnedOnlyState(stored.pinnedOnly === '1')
   }, [selectedProjectId])
 
@@ -897,6 +999,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         statuses: data?.statuses || [],
         sources: data?.sources || [],
         labels: data?.labels || [],
+        issueTypes: data?.issueTypes || [],
         total: data?.total || 0,
       })
     } catch {
@@ -907,6 +1010,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     fetchTaskFacets()
   }, [fetchTaskFacets, tasks.length])
+
+  const checkTrackerCredentials = useCallback(
+    async (siteUrl: string, email: string, token: string): Promise<TrackerCheck> => {
+      try {
+        const res = await fetch(`${API_BASE}/setup/tracker/check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ siteUrl, email, token }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) return { ok: false, error: data.error || 'Vérification impossible' }
+        return data
+      } catch (err: any) {
+        return { ok: false, error: err.message || 'Serveur injoignable' }
+      }
+    },
+    []
+  )
+
+  const saveTrackerCredentials = useCallback(
+    async (siteUrl: string, email: string, token: string, storeTokenInFile: boolean): Promise<boolean> => {
+      try {
+        const res = await fetch(`${API_BASE}/setup/tracker`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ siteUrl, email, token, storeTokenInFile }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Enregistrement refusé')
+        setSettings(data)
+        return true
+      } catch (err: any) {
+        addToast({ type: 'error', title: 'Accès non enregistrés', description: err.message })
+        return false
+      }
+    },
+    []
+  )
 
   const fetchAutoSyncStatus = useCallback(async () => {
     try {
@@ -2555,7 +2696,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (activeView === 'digest' && !isDigestAvailable) {
       setActiveView('board')
     }
-  }, [activeView, isDigestAvailable])
+  }, [activeView, isDigestAvailable, setActiveView])
 
   const fetchDailyDigest = useCallback(async (date?: string, assignee?: string): Promise<DailyDigest | null> => {
     const pid = digestProjectId()
@@ -2994,7 +3135,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isCommandPaletteOpen, isQuickAddOpen, selectedTask, selectedActivity, isProfileOpen, searchQuery, diffTask, toggleTerminalPanel])
+  }, [isCommandPaletteOpen, isQuickAddOpen, selectedTask, selectedActivity, isProfileOpen, searchQuery, diffTask, toggleTerminalPanel, setActiveView, openInEditor])
 
   return (
     <AppContext.Provider
@@ -3051,7 +3192,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setAssigneeFilter,
         trackerStatusFilters,
         setTrackerStatusFilters,
+        issueTypeFilters,
+        setIssueTypeFilters,
         autoSync,
+        isTrackerSetupOpen,
+        setIsTrackerSetupOpen,
+        checkTrackerCredentials,
+        saveTrackerCredentials,
         sourceFilter,
         setSourceFilter,
         parentFilter,

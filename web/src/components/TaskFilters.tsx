@@ -1,5 +1,5 @@
 import React from 'react'
-import { Flame, Calendar, Layers, Pin, User, SlidersHorizontal, Check } from 'lucide-react'
+import { Flame, Calendar, Layers, Pin, User, SlidersHorizontal, Check, Shapes, Settings2 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField } from './LookupField'
 import { valueLookup } from '../lib/lookups'
@@ -32,6 +32,11 @@ export const TaskFilters: React.FC = () => {
     setAssigneeFilter,
     trackerStatusFilters,
     setTrackerStatusFilters,
+    issueTypeFilters,
+    setIssueTypeFilters,
+    currentProject,
+    setEditingProject,
+    setIsProjectModalOpen,
     availableAssignees,
     unassignedFilterValue,
     pinnedOnly,
@@ -51,6 +56,19 @@ export const TaskFilters: React.FC = () => {
 
   const [isStatusMenuOpen, setIsStatusMenuOpen] = React.useState(false)
   const statusMenuRef = React.useRef<HTMLDivElement>(null)
+  const [isTypeMenuOpen, setIsTypeMenuOpen] = React.useState(false)
+  const typeMenuRef = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    if (!isTypeMenuOpen) return
+    const onDocClick = (e: MouseEvent) => {
+      if (typeMenuRef.current && !typeMenuRef.current.contains(e.target as Node)) {
+        setIsTypeMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [isTypeMenuOpen])
 
   // Fermeture au clic extérieur : ce menu vit dans une barre d'outils dense.
   React.useEffect(() => {
@@ -213,6 +231,102 @@ export const TaskFilters: React.FC = () => {
                       {status.value}
                     </span>
                     <span className="text-[9.5px] font-mono text-[var(--text-muted)]">{status.count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {taskFacets.issueTypes.length > 1 && (
+        <div className="relative" ref={typeMenuRef}>
+          <button
+            type="button"
+            onClick={() => setIsTypeMenuOpen(open => !open)}
+            title="Choisir les types de tickets affichés"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-semibold border cursor-pointer transition-colors"
+            style={{
+              color: issueTypeFilters.length > 0 ? 'var(--accent-color)' : 'var(--text-secondary)',
+              background: issueTypeFilters.length > 0 ? 'var(--accent-light)' : 'var(--bg-secondary)',
+              borderColor: issueTypeFilters.length > 0 ? 'rgb(var(--accent-rgb) / 0.4)' : 'var(--border-color)',
+            }}
+          >
+            <Shapes size={11} />
+            {issueTypeFilters.length > 0 ? `${issueTypeFilters.length} type(s)` : 'Types'}
+          </button>
+
+          {isTypeMenuOpen && (
+            <div className="absolute right-0 z-50 mt-1 w-[240px] max-h-[300px] overflow-auto rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-lg p-1">
+              <div className="flex items-center justify-between px-1.5 py-1">
+                <span className="text-[9.5px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
+                  Types de tickets
+                </span>
+                {issueTypeFilters.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIssueTypeFilters([])}
+                    className="text-[10px] font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                  >
+                    Tous
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTypeMenuOpen(false)
+                  setEditingProject(currentProject || null)
+                  setIsProjectModalOpen(true)
+                }}
+                disabled={!currentProject}
+                title={
+                  currentProject
+                    ? `Choisir les types importés depuis le tracker pour ${currentProject.name}`
+                    : 'Sélectionnez un projet pour régler ses types importés'
+                }
+                className="w-full flex items-center gap-1.5 px-1.5 py-1 mb-1 rounded-lg text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] cursor-pointer disabled:opacity-40 border-b border-[var(--border-color)] rounded-b-none"
+              >
+                <Settings2 size={10} />
+                <span className="text-left leading-snug">
+                  Cette liste ne contient que les types importés. En ajouter dans le projet.
+                </span>
+              </button>
+              {taskFacets.issueTypes.map(type => {
+                const isActive = issueTypeFilters.includes(type.value)
+                // Un conteneur n'est pas montré tant qu'il n'est pas demandé :
+                // sans cette mention, son compteur face à une liste qui n'en
+                // affiche aucun serait incompréhensible.
+                const isContainer = ['epic', 'initiative'].includes(type.value.toLowerCase())
+                return (
+                  <button
+                    key={type.value}
+                    type="button"
+                    onClick={() =>
+                      setIssueTypeFilters(
+                        isActive
+                          ? issueTypeFilters.filter(t2 => t2 !== type.value)
+                          : [...issueTypeFilters, type.value]
+                      )
+                    }
+                    className="w-full flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-[var(--bg-tertiary)] cursor-pointer"
+                  >
+                    <span
+                      className="w-3 h-3 rounded flex items-center justify-center shrink-0"
+                      style={{
+                        background: isActive ? 'var(--accent-color)' : 'transparent',
+                        border: `1px solid ${isActive ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                      }}
+                    >
+                      {isActive && <Check size={8} className="text-white" />}
+                    </span>
+                    <span className="text-[11px] text-[var(--text-primary)] truncate flex-1 text-left">
+                      {type.value}
+                      {isContainer && !isActive && (
+                        <span className="ml-1 text-[9px] text-[var(--text-muted)]">masqué</span>
+                      )}
+                    </span>
+                    <span className="text-[9.5px] font-mono text-[var(--text-muted)]">{type.count}</span>
                   </button>
                 )
               })}

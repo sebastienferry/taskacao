@@ -177,6 +177,9 @@ func (d *DB) initSchema() error {
 			sprint TEXT NOT NULL DEFAULT '',
 			team TEXT NOT NULL DEFAULT '',
 			team_id TEXT NOT NULL DEFAULT '',
+			tracker_created_at DATETIME,
+			tracker_updated_at DATETIME,
+			status_changed_at DATETIME,
 			tracker_status TEXT NOT NULL DEFAULT '',
 			source TEXT NOT NULL DEFAULT 'local',
 			external_url TEXT,
@@ -246,6 +249,14 @@ func (d *DB) initSchema() error {
 	// team_id : le nom d'équipe ne suffit pas pour lire ses membres, l'API des
 	// équipes est indexée par identifiant.
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN team_id TEXT NOT NULL DEFAULT '';")
+	// Dates du tracker, distinctes de created_at / updated_at qui portent l'heure
+	// d'import sur un ticket synchronisé. Sans elles, « ouvert depuis N jours »
+	// se calculerait sur la date d'import, ce qui serait inventé.
+	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN tracker_created_at DATETIME;")
+	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN tracker_updated_at DATETIME;")
+	// Entrée dans la catégorie de statut : c'est de là que se compte « en cours
+	// depuis N jours ».
+	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN status_changed_at DATETIME;")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_team ON tasks(team);")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN tracker_status TEXT NOT NULL DEFAULT '';")
@@ -451,9 +462,9 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 				`, newID, t.UpdatedAt.Format(time.RFC3339))
 			}
 			if _, insErr := d.conn.Exec(`
-				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, team, team_id, tracker_status, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), pinnedVal, t.Assignee, t.AssigneeAvatar, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.Sprint, t.Team, t.TeamID, t.TrackerStatus, t.CreatedAt, now); insErr != nil {
+				INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, team, team_id, tracker_status, tracker_created_at, tracker_updated_at, status_changed_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, newID, projID, t.Key, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), pinnedVal, t.Assignee, t.AssigneeAvatar, t.Position, t.DueDate, src, t.ExternalURL, t.IssueType, t.ParentKey, t.ParentTitle, t.ParentType, t.Sprint, t.Team, t.TeamID, t.TrackerStatus, t.TrackerCreatedAt, t.TrackerUpdatedAt, t.StatusChangedAt, t.CreatedAt, now); insErr != nil {
 				// Never swallow this: a silent failure here makes a sync report
 				// "N tickets imported" while the board stays empty.
 				log.Printf("[DB.ImportOrUpdateTasks] insert of %s failed: %v", t.Key, insErr)
@@ -480,11 +491,14 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 				    team = CASE WHEN ? != '' THEN ? ELSE team END,
 				    team_id = CASE WHEN ? != '' THEN ? ELSE team_id END,
 				    tracker_status = CASE WHEN ? != '' THEN ? ELSE tracker_status END,
+				    tracker_created_at = COALESCE(?, tracker_created_at),
+				    tracker_updated_at = COALESCE(?, tracker_updated_at),
+				    status_changed_at = COALESCE(?, status_changed_at),
 				    updated_at = ?
 				WHERE id = ?
 			`, t.Title, t.Description, string(t.Status), string(t.Priority), string(labelsJSON), pinnedVal, t.Assignee, t.AssigneeAvatar, src, t.ExternalURL,
 				t.IssueType, t.IssueType, t.ParentKey, t.ParentKey, t.ParentTitle, t.ParentTitle, t.ParentType, t.ParentType,
-				t.Sprint, t.Sprint, t.Team, t.Team, t.TeamID, t.TeamID, t.TrackerStatus, t.TrackerStatus, now, existingID); updErr != nil {
+				t.Sprint, t.Sprint, t.Team, t.Team, t.TeamID, t.TeamID, t.TrackerStatus, t.TrackerStatus, t.TrackerCreatedAt, t.TrackerUpdatedAt, t.StatusChangedAt, now, existingID); updErr != nil {
 				log.Printf("[DB.ImportOrUpdateTasks] update of %s failed: %v", t.Key, updErr)
 				importErrs = append(importErrs, fmt.Sprintf("%s: %v", t.Key, updErr))
 			}
@@ -556,6 +570,16 @@ func (d *DB) computeExternalURLUnsafe(t *models.Task) *string {
 // TaskFacets lists the distinct tracker values present in the board, so the UI
 // can offer a filter only when the tracker actually feeds the field. A GitHub or
 // local project simply returns empty lists.
+// containerIssueTypes are work item types that hold other work items rather than
+// being work of their own. They stay out of the board and the list unless asked
+// for by name: an epic is a container, shown as such by the roadmap, and a
+// hundred and fifty of them among the cards is a hundred and fifty rows of
+// something nobody works on.
+//
+// They remain in the database: the tickets under them carry their key, and the
+// roadmap reads that.
+var containerIssueTypes = []string{"Epic", "Initiative"}
+
 // unassignedFilterValue is the sentinel the assignee filter uses to ask for the
 // work items nobody owns. An empty parameter cannot say it: it means "no filter".
 const unassignedFilterValue = "__unassigned__"
@@ -583,7 +607,11 @@ type TaskFacets struct {
 	// filter but the project.
 	Statuses []TaskFacetValue `json:"statuses"`
 	Sources  []TaskFacetValue `json:"sources"`
-	Labels   []TaskFacetValue `json:"labels"`
+	// IssueTypes are the tracker's own work item types present on the board. A
+	// project may import a dozen of them (Bug, Technical debt, Corrective
+	// action…), and telling them apart on a card starts with knowing which exist.
+	IssueTypes []TaskFacetValue `json:"issueTypes"`
+	Labels     []TaskFacetValue `json:"labels"`
 	// Total is the project's work item count, all filters ignored.
 	Total int `json:"total"`
 }
@@ -609,6 +637,7 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 		TrackerStatuses: []TaskFacetValue{},
 		Statuses:        []TaskFacetValue{},
 		Sources:         []TaskFacetValue{},
+		IssueTypes:      []TaskFacetValue{},
 		Labels:          []TaskFacetValue{},
 	}
 
@@ -693,7 +722,7 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 
 	// Statut interne et tracker d'origine : deux regroupements simples, comptés
 	// sur le même périmètre que le reste.
-	for _, column := range []string{"status", "source"} {
+	for _, column := range []string{"status", "source", "issue_type"} {
 		countQuery := fmt.Sprintf("SELECT %s, COUNT(*) FROM tasks WHERE TRIM(%s) != ''", column, column)
 		if projectID != "" {
 			countQuery += " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
@@ -713,10 +742,13 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 			if value = strings.TrimSpace(value); value == "" {
 				continue
 			}
-			if column == "status" {
+			switch column {
+			case "status":
 				facets.Statuses = append(facets.Statuses, TaskFacetValue{Value: value, Count: count})
-			} else {
+			case "source":
 				facets.Sources = append(facets.Sources, TaskFacetValue{Value: value, Count: count})
+			default:
+				facets.IssueTypes = append(facets.IssueTypes, TaskFacetValue{Value: value, Count: count})
 			}
 		}
 		rows.Close()
@@ -770,7 +802,7 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 // GetTasks lists the tasks matching the filters. pinnedOnly restricts to the
 // pinned tickets, which is the fastest way back to the two or three chantiers in
 // flight when the board carries three hundred.
-func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, assignee string, trackerStatuses []string, pinnedOnly bool) ([]models.Task, error) {
+func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, assignee string, trackerStatuses, issueTypes []string, pinnedOnly bool) ([]models.Task, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -820,6 +852,35 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, a
 		args = append(args, team)
 	}
 
+	// Les conteneurs sont écartés par défaut, et seulement par défaut : les
+	// demander nommément les ramène, ce qui est le sens du sélecteur de types.
+	if len(issueTypes) == 0 {
+		placeholders := make([]string, 0, len(containerIssueTypes))
+		for _, ct := range containerIssueTypes {
+			placeholders = append(placeholders, "?")
+			args = append(args, ct)
+		}
+		conditions = append(conditions, fmt.Sprintf("(issue_type IS NULL OR issue_type NOT IN (%s))", strings.Join(placeholders, ", ")))
+	}
+
+	// Types de tickets retenus. Un board qui porte douze types n'est lisible qu'en
+	// pouvant n'en regarder qu'un : les correctives d'un côté, les stories de
+	// l'autre.
+	if len(issueTypes) > 0 {
+		placeholders := make([]string, 0, len(issueTypes))
+		for _, it := range issueTypes {
+			it = strings.TrimSpace(it)
+			if it == "" {
+				continue
+			}
+			placeholders = append(placeholders, "?")
+			args = append(args, it)
+		}
+		if len(placeholders) > 0 {
+			conditions = append(conditions, fmt.Sprintf("issue_type IN (%s)", strings.Join(placeholders, ", ")))
+		}
+	}
+
 	// Statuts du tracker retenus : c'est le choix explicite de ce qu'on veut voir,
 	// et il remplace avantageusement le masquage des terminés, qui ne connaissait
 	// que le statut interne.
@@ -850,7 +911,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, a
 		}
 	}
 
-	sqlQuery := "SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at FROM tasks"
+	sqlQuery := "SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, tracker_created_at, tracker_updated_at, status_changed_at, created_at, updated_at FROM tasks"
 	if len(conditions) > 0 {
 		sqlQuery += " WHERE " + strings.Join(conditions, " AND ")
 	}
@@ -867,6 +928,7 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, a
 		var t models.Task
 		var labelsJSON string
 		var dueDate, branchName, prURL, repoPath, sprint, team, teamID, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+		var trackerCreatedAt, trackerUpdatedAt, statusChangedAt sql.NullTime
 		var statusStr, priorityStr string
 
 		err := rows.Scan(
@@ -895,6 +957,9 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, a
 			&parentKey,
 			&parentTitle,
 			&parentType,
+			&trackerCreatedAt,
+			&trackerUpdatedAt,
+			&statusChangedAt,
 			&t.CreatedAt,
 			&t.UpdatedAt,
 		)
@@ -923,6 +988,18 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, a
 		if team.Valid {
 			t.Team = team.String
 			t.TeamID = teamID.String
+			if trackerCreatedAt.Valid {
+				created := trackerCreatedAt.Time
+				t.TrackerCreatedAt = &created
+			}
+			if trackerUpdatedAt.Valid {
+				updated := trackerUpdatedAt.Time
+				t.TrackerUpdatedAt = &updated
+			}
+			if statusChangedAt.Valid {
+				changed := statusChangedAt.Time
+				t.StatusChangedAt = &changed
+			}
 		}
 		if trackerStatus.Valid {
 			t.TrackerStatus = trackerStatus.String
@@ -971,10 +1048,11 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 	var t models.Task
 	var labelsJSON string
 	var dueDate, branchName, prURL, repoPath, sprint, team, teamID, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+	var trackerCreatedAt, trackerUpdatedAt, statusChangedAt sql.NullTime
 	var statusStr, priorityStr string
 
 	err := d.conn.QueryRow(`
-		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, tracker_created_at, tracker_updated_at, status_changed_at, created_at, updated_at
 		FROM tasks WHERE id = ? OR key = ?
 	`, id, id).Scan(
 		&t.ID,
@@ -1002,6 +1080,9 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 		&parentKey,
 		&parentTitle,
 		&parentType,
+		&trackerCreatedAt,
+		&trackerUpdatedAt,
+		&statusChangedAt,
 		&t.CreatedAt,
 		&t.UpdatedAt,
 	)
@@ -1033,6 +1114,18 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 	if team.Valid {
 		t.Team = team.String
 		t.TeamID = teamID.String
+		if trackerCreatedAt.Valid {
+			created := trackerCreatedAt.Time
+			t.TrackerCreatedAt = &created
+		}
+		if trackerUpdatedAt.Valid {
+			updated := trackerUpdatedAt.Time
+			t.TrackerUpdatedAt = &updated
+		}
+		if statusChangedAt.Valid {
+			changed := statusChangedAt.Time
+			t.StatusChangedAt = &changed
+		}
 	}
 	if trackerStatus.Valid {
 		t.TrackerStatus = trackerStatus.String
@@ -2473,10 +2566,11 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	var t models.Task
 	var labelsJSON string
 	var dueDate, branchName, prURL, repoPath, sprint, team, teamID, trackerStatus, source, extURL, issueType, parentKey, parentTitle, parentType sql.NullString
+	var trackerCreatedAt, trackerUpdatedAt, statusChangedAt sql.NullTime
 	var statusStr, priorityStr string
 
 	err := d.conn.QueryRow(`
-		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, tracker_created_at, tracker_updated_at, status_changed_at, created_at, updated_at
 		FROM tasks WHERE id = ? OR key = ?
 	`, id, id).Scan(
 		&t.ID,
@@ -2504,6 +2598,9 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 		&parentKey,
 		&parentTitle,
 		&parentType,
+		&trackerCreatedAt,
+		&trackerUpdatedAt,
+		&statusChangedAt,
 		&t.CreatedAt,
 		&t.UpdatedAt,
 	)
@@ -2535,6 +2632,18 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 	if team.Valid {
 		t.Team = team.String
 		t.TeamID = teamID.String
+		if trackerCreatedAt.Valid {
+			created := trackerCreatedAt.Time
+			t.TrackerCreatedAt = &created
+		}
+		if trackerUpdatedAt.Valid {
+			updated := trackerUpdatedAt.Time
+			t.TrackerUpdatedAt = &updated
+		}
+		if statusChangedAt.Valid {
+			changed := statusChangedAt.Time
+			t.StatusChangedAt = &changed
+		}
 	}
 	if trackerStatus.Valid {
 		t.TrackerStatus = trackerStatus.String
