@@ -247,10 +247,22 @@ export const Sidebar: React.FC = () => {
    * découpent le travail. Le filtre posé est celui des statuts, le même que la
    * barre d'outils des vues.
    */
-  const showTrackerStatuses = boardGrouping === 'status' && (currentProject?.trackerColumns || []).length > 0
+  const showTrackerStatuses = boardGrouping === 'status' && (
+    (currentProject?.trackerColumns || []).length > 0 || taskFacets.trackerStatuses.length > 0
+  )
 
   const trackerColumnItems = React.useMemo(() => {
     const columns = (currentProject?.trackerColumns || []).filter(col => !col.hidden)
+    // Aucun board importé : chaque statut vaut sa propre entrée. C'est moins
+    // structuré que les colonnes du tracker, et bien plus utile qu'une liste
+    // d'étapes que l'écran de droite n'utilise pas.
+    if (columns.length === 0) {
+      return taskFacets.trackerStatuses.map(status => ({
+        name: status.value,
+        statuses: [status.value],
+        count: status.count,
+      }))
+    }
     return columns.map(col => {
       const statuses = col.statuses || []
       const lowered = statuses.map(st => st.toLowerCase())

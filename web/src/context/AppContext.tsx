@@ -573,17 +573,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return
     }
 
+    // Une conversion qui ne trouve rien ne doit pas lever le filtre : sans
+    // mapping de colonnes (un projet dont le board n'a jamais été importé), le
+    // filtre d'étape reste parfaitement applicable dans les deux modes, et le
+    // supprimer en silence donnait un board qui change de contenu sans raison
+    // visible.
     if (mode === 'status') {
       if (statusFilter) {
         const stage = stageForInternalStatus(statusFilter)
         const statuses = trackerStatusesForStage(currentProject, stage)
-        setStatusFilter(null)
-        setTrackerStatusFilters(statuses)
+        if (statuses.length > 0) {
+          setStatusFilter(null)
+          setTrackerStatusFilters(statuses)
+        }
       }
     } else if (trackerStatusFilters.length > 0) {
       const stage = stageForTrackerStatuses(currentProject, trackerStatusFilters)
-      setTrackerStatusFilters([])
-      setStatusFilter(stage ? INTERNAL_STATUS_BY_STAGE[stage] : null)
+      if (stage) {
+        setTrackerStatusFilters([])
+        setStatusFilter(INTERNAL_STATUS_BY_STAGE[stage])
+      }
     }
 
     persistBoardGrouping(mode)
