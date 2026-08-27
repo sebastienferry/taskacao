@@ -699,7 +699,10 @@ func (c *JiraRESTClient) SearchProjectIssues(ctx context.Context, projectKey str
 	}
 	jql += " ORDER BY updated DESC"
 
-	fields := []string{"key", "summary", "description", "status", "priority", "assignee", "labels", "issuetype", "parent"}
+	// created et updated sont demandés ici et nulle part ailleurs : acli refuse ces
+	// deux champs, et sans eux le digest ne peut dire ni « ouvert depuis N jours »
+	// ni « fermé récemment », faute de savoir quand quoi que ce soit s'est passé.
+	fields := []string{"key", "summary", "description", "status", "priority", "assignee", "labels", "issuetype", "parent", "created", "updated"}
 	if c.sprintFieldID != "" {
 		fields = append(fields, c.sprintFieldID)
 	}
