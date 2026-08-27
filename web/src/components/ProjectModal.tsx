@@ -1411,7 +1411,7 @@ export const ProjectModal: React.FC = () => {
                     )}
                     <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
                       Rien de sélectionné vaut Task et Story. Un projet dont le tracker n'expose que
-                      son propre type (Platform Feedback, par exemple) n'importe aucun ticket tant
+                      son propre type (un type maison, par exemple) n'importe aucun ticket tant
                       qu'il n'est pas coché ici.
                     </span>
                   </div>

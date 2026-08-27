@@ -642,7 +642,7 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "Invalid epic payload: "+err.Error())
 				return
 			}
-			// La clé peut venir du chemin (/epics/PE-1065) ou du corps.
+			// La clé peut venir du chemin (/epics/PROJ-123) ou du corps.
 			key := req.Key
 			if len(parts) >= 3 && parts[2] != "" {
 				if decoded, err := url.PathUnescape(parts[2]); err == nil {

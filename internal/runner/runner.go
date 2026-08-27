@@ -1069,8 +1069,8 @@ const jiraSearchFields = "key,summary,description,status,priority,assignee,label
 // the board without being part of the dev workflow.
 //
 // A project can override the list, and has to: an instance may carry a project
-// whose only type is its own (PEF holds nothing but "Platform Feedback"), and
-// the default would import exactly nothing from it.
+// whose only type is its own (a feedback project may hold nothing but its own
+// "Feedback" type), and the default would import exactly nothing from it.
 var jiraSyncedIssueTypes = []string{"Task", "Story"}
 
 // NormalizeIssueTypes cleans a configured list of work item types, and falls
@@ -1636,7 +1636,7 @@ func (r *Runner) enrichJiraParents(projectKey string, tasks []models.Task, repoP
 		found, len(tasks), len(epics))
 }
 
-// jiraKeyPattern matches a work item key such as PE-1234 in acli's plain output.
+// jiraKeyPattern matches a work item key such as PROJ-1234 in acli's plain output.
 var jiraKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9]+-[0-9]+`)
 
 // CreateJiraEpic creates an epic, the container a roadmap needs before stories

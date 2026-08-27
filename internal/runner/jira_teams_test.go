@@ -14,29 +14,29 @@ func TestParseJiraTeamValue(t *testing.T) {
 	}{
 		{
 			name:     "atlassian team object",
-			raw:      `{"id":"6aafbf90-c8b2-4ed3-a196-01d2dccd837a","name":"Transversal - PE DevEx","isVerified":false}`,
-			wantID:   "6aafbf90-c8b2-4ed3-a196-01d2dccd837a",
-			wantName: "Transversal - PE DevEx",
+			raw:      `{"id":"11111111-2222-3333-4444-555555555555","name":"Platform Team","isVerified":false}`,
+			wantID:   "11111111-2222-3333-4444-555555555555",
+			wantName: "Platform Team",
 		},
 		{
 			// Une équipe rattachée au site porte un suffixe qui fait partie de
 			// l'identifiant : le tronquer donne un 404 sur ses membres.
 			name:     "site scoped team keeps its suffix",
-			raw:      `{"id":"53fb2415-9173-4eaa-9357-a735bb6a42e8-67","name":"Transversal - ARC"}`,
-			wantID:   "53fb2415-9173-4eaa-9357-a735bb6a42e8-67",
-			wantName: "Transversal - ARC",
+			raw:      `{"id":"66666666-7777-8888-9999-000000000000-42","name":"Site Scoped Team"}`,
+			wantID:   "66666666-7777-8888-9999-000000000000-42",
+			wantName: "Site Scoped Team",
 		},
 		{
 			name:     "label under title",
-			raw:      `{"id":"abc","title":"QE"}`,
+			raw:      `{"id":"abc","title":"Quality"}`,
 			wantID:   "abc",
-			wantName: "QE",
+			wantName: "Quality",
 		},
 		{
 			name:     "plain string field",
-			raw:      `"Transversal - PE Core"`,
+			raw:      `"Plain Text Team"`,
 			wantID:   "",
-			wantName: "Transversal - PE Core",
+			wantName: "Plain Text Team",
 		},
 		{
 			name:     "empty field",
@@ -71,8 +71,8 @@ func TestNormalizeIssueTypes(t *testing.T) {
 			// Un projet dont le tracker n'expose que son propre type doit pouvoir
 			// le nommer : sans cela sa synchro ne ramène rien du tout.
 			name: "type propre au projet",
-			in:   []string{"Platform Feedback"},
-			want: []string{"Platform Feedback"},
+			in:   []string{"Customer Feedback"},
+			want: []string{"Customer Feedback"},
 		},
 		{name: "doublons et espaces retirés", in: []string{" Task ", "task", "Story"}, want: []string{"Task", "Story"}},
 	}

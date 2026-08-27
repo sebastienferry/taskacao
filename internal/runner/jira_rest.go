@@ -29,7 +29,7 @@ const (
 	jiraRESTPageSize = 100
 	jiraRESTMaxPages = 40 // 4000 work items, well past the largest project here
 	// jiraErrorBodyLimit is how much of a refusal body is kept. Jira names the
-	// offending field in it ("customfield_14546: Epic Type is required"), and
+	// offending field in it ("customfield_NNNNN: Epic Type is required"), and
 	// that sentence is what the activity has to show, so the old 200 characters
 	// cut exactly where it mattered.
 	jiraErrorBodyLimit = 800

@@ -29,7 +29,7 @@ func TestJiraItemsToTasksStatusMapping(t *testing.T) {
 
 	r := &Runner{}
 	for _, tc := range cases {
-		item := JiraIssueItem{Key: "SFE-1"}
+		item := JiraIssueItem{Key: "PROJ-1"}
 		item.Fields.Summary = "un ticket"
 		item.Fields.IssueType.Name = "Task"
 		item.Fields.Status.Name = tc.statusName

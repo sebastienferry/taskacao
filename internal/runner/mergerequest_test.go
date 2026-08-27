@@ -17,8 +17,8 @@ func TestDetectMergeRequestURL(t *testing.T) {
 		},
 		{
 			name: "merge request GitLab autohébergée",
-			text: "Voir https://gitlab.equativ.net/platform/pe/-/merge_requests/447",
-			want: "https://gitlab.equativ.net/platform/pe/-/merge_requests/447",
+			text: "Voir https://gitlab.example.com/platform/core/-/merge_requests/447",
+			want: "https://gitlab.example.com/platform/core/-/merge_requests/447",
 		},
 		{
 			name: "la dernière citée gagne",
@@ -37,7 +37,7 @@ func TestDetectMergeRequestURL(t *testing.T) {
 		},
 		{
 			name: "un lien de dépôt n'est pas une MR",
-			text: "Dépôt : https://github.com/o/r et branche SFE-1",
+			text: "Dépôt : https://github.com/o/r et branche PROJ-1",
 			want: "",
 		},
 	}

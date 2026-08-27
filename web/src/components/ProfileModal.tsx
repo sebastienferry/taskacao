@@ -469,7 +469,7 @@ export const ProfileModal: React.FC = () => {
                     type="text"
                     value={jiraUrl}
                     onChange={e => setJiraUrl(e.target.value)}
-                    placeholder="equativ.atlassian.net"
+                    placeholder="mon-org.atlassian.net"
                     className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
                   />
                   <input

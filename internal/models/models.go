@@ -99,8 +99,8 @@ type Project struct {
 	MonoRepo bool `json:"monoRepo"`
 	// IssueTypes names the tracker work item types this project imports as cards.
 	// Empty means the default (Task and Story). A project whose tracker exposes
-	// its own type imports nothing without it: PEF carries only "Platform
-	// Feedback", and the default list matched none of its tickets.
+	// its own type imports nothing without it: a feedback project may carry a
+	// single custom type, which the default list would match on no ticket.
 	IssueTypes []string `json:"issueTypes,omitempty"`
 	// Sprints mirrors the board's sprints with their state, refreshed by the sync.
 	Sprints []TrackerSprint `json:"sprints,omitempty"`
