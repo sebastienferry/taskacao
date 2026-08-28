@@ -281,15 +281,15 @@ export const Sidebar: React.FC = () => {
 
   return (
     <aside
-      className={`relative flex flex-col border-r transition-all duration-300 ease-in-out select-none ${
+      className={`relative flex flex-col transition-all duration-300 ease-in-out select-none ${
         sidebarCollapsed ? 'w-16' : 'w-64'
-      } h-full z-20 shrink-0 border-[var(--sidebar-border)] shadow-xs`}
+      } h-full z-20 shrink-0 shadow-xs`}
       style={{
         background: 'linear-gradient(180deg, var(--sidebar-accent-tint) 0%, var(--bg-secondary) 85%)',
       }}
     >
       {/* Brand Header with Accent Glow */}
-      <div className="flex items-center justify-between h-14 px-3 border-b border-[var(--sidebar-border)] bg-[var(--accent-light)]/25 backdrop-blur-xs">
+      <div className="flex items-center justify-between h-14 px-3 border-b border-[var(--sidebar-border)]/50 bg-[var(--accent-light)]/20 backdrop-blur-xs">
         {!sidebarCollapsed ? (
           <>
             <div className="flex items-center gap-2.5 min-w-0 overflow-hidden">
@@ -489,7 +489,7 @@ export const Sidebar: React.FC = () => {
               onClick={() => setActiveView('digest')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'digest'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.digest}
@@ -506,7 +506,7 @@ export const Sidebar: React.FC = () => {
               onClick={() => setAssigneeFilter(isMyTasksActive ? null : settings.userName)}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 isMyTasksActive
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={`${t.nav.myTasks} (${settings.userName || 'nom non renseigné dans le profil'})`}
@@ -520,7 +520,7 @@ export const Sidebar: React.FC = () => {
               onClick={() => setActiveView('board')}
               className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'board'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.board}
@@ -532,7 +532,7 @@ export const Sidebar: React.FC = () => {
               onClick={() => setActiveView('list')}
               className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'list'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.list}
@@ -544,7 +544,7 @@ export const Sidebar: React.FC = () => {
               onClick={() => setActiveView('triage')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'triage'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title="Triage : affectation rapide Sprints et Macros"
@@ -559,7 +559,7 @@ export const Sidebar: React.FC = () => {
               onClick={() => setActiveView('roadmap')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'roadmap'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title="Roadmap : NOW / NEXT / FUTURE"
@@ -578,7 +578,7 @@ export const Sidebar: React.FC = () => {
               onClick={() => setActiveView('activities')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'activities'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.activities}
@@ -604,7 +604,7 @@ export const Sidebar: React.FC = () => {
               onClick={() => setActiveView('skills')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'skills'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title="Skills du workflow agentique : une par étape, éditables ici"
@@ -618,7 +618,7 @@ export const Sidebar: React.FC = () => {
               onClick={() => setActiveView('sync')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'sync'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
               title={t.nav.sync || "Synchronisation"}
@@ -634,7 +634,7 @@ export const Sidebar: React.FC = () => {
                 onClick={() => setActiveView('team')}
                 className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                   activeView === 'team'
-                    ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                    ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                 }`}
                 title="Charge de l'équipe, personne par personne"
@@ -673,7 +673,7 @@ export const Sidebar: React.FC = () => {
                     onClick={() => setTrackerStatusFilters(isActive ? [] : item.statuses)}
                     className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                       isActive
-                        ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                        ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                     }`}
                     title={`${item.name} : ${item.statuses.join(', ')}`}
@@ -712,7 +712,7 @@ export const Sidebar: React.FC = () => {
                   }}
                   className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                     isActive
-                      ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                      ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                   }`}
                   title={item.label}
@@ -765,7 +765,7 @@ export const Sidebar: React.FC = () => {
                   onClick={() => setSourceFilter(item.id)}
                   className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                     isActive
-                      ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                      ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                   }`}
                   title={item.label}
@@ -820,7 +820,7 @@ export const Sidebar: React.FC = () => {
                     onClick={() => setParentFilter(isSelected ? null : par.key)}
                     className={`w-full flex items-center justify-between gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer ${
                       isSelected
-                        ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                        ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                     }`}
                     title={`${par.type || 'Parent'} ${par.key}${par.title ? ` — ${par.title}` : ''}`}
@@ -872,7 +872,7 @@ export const Sidebar: React.FC = () => {
                     onClick={() => setLabelFilter(isSelected ? null : lbl)}
                     className={`w-full flex items-center gap-2 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer ${
                       isSelected
-                        ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                        ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
                     }`}
                     title={lbl}
@@ -888,7 +888,7 @@ export const Sidebar: React.FC = () => {
       </div>
 
       {/* Footer Profile & Settings */}
-      <div className="p-2 border-t border-[var(--sidebar-border)] bg-[var(--accent-light)]/15 backdrop-blur-xs space-y-1">
+      <div className="p-2 border-t border-[var(--sidebar-border)]/50 bg-[var(--accent-light)]/10 backdrop-blur-xs space-y-1">
         <button
           onClick={() => setIsProfileOpen(true)}
           className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] transition-colors group text-left cursor-pointer"
