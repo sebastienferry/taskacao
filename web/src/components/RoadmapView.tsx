@@ -20,6 +20,7 @@ import {
   Scissors,
   Search,
   Clock,
+  Loader2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField } from './LookupField'
@@ -69,6 +70,7 @@ const TABS: { id: HorizonTab; label: string; icon: React.ReactNode }[] = [
 export const RoadmapView: React.FC = () => {
   const {
     tasks,
+    projects,
     currentProject,
     setSelectedTask,
     setChatTask,
@@ -104,6 +106,11 @@ export const RoadmapView: React.FC = () => {
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [onlyIssues, setOnlyIssues] = useState(false)
   const [showClosed, setShowClosed] = useState(false)
+
+  const [showCreateMacroModal, setShowCreateMacroModal] = useState(false)
+  const [createMacroTitle, setCreateMacroTitle] = useState('')
+  const [createMacroHorizon, setCreateMacroHorizon] = useState<EpicHorizon>('now')
+  const [createMacroProjectId, setCreateMacroProjectId] = useState<string>('')
 
   // Le cadrage n'est enregistré qu'à la demande
   const [draftDescription, setDraftDescription] = useState('')
@@ -508,24 +515,16 @@ export const RoadmapView: React.FC = () => {
 
           <button
             type="button"
-            disabled={busyKey === 'epic' || !currentProject?.id}
-            onClick={async () => {
-              const title = window.prompt('Titre de la nouvelle macro ?')
-              if (!title?.trim() || !currentProject?.id) return
-              setBusyKey('epic')
-              const created = await createEpic(
-                currentProject.id,
-                title.trim(),
-                tab === 'unclassified' || tab === 'hidden' ? '' : (tab as EpicHorizon)
-              )
-              if (created) {
-                setEpicMeta(prev => [...prev.filter(m => m.key !== created.key), created])
-                setSelectedKey(created.key)
-              }
-              setBusyKey(null)
+            disabled={busyKey === 'epic'}
+            onClick={() => {
+              const defaultProjId = currentProject?.id || projects.find(p => p.isDefault)?.id || projects[0]?.id || ''
+              setCreateMacroProjectId(defaultProjId)
+              setCreateMacroHorizon(tab === 'unclassified' || tab === 'hidden' ? 'now' : (tab as EpicHorizon))
+              setCreateMacroTitle('')
+              setShowCreateMacroModal(true)
             }}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold text-white accent-bg cursor-pointer disabled:opacity-40"
-            title="Créer une macro vide, utilisable comme cible pour découper une macro trop grosse"
+            title="Créer une macro / milestone GitHub"
           >
             <Plus size={12} /> Macro
           </button>
@@ -1340,6 +1339,115 @@ export const RoadmapView: React.FC = () => {
         )}
       </div>
         </>
+      )}
+
+      {showCreateMacroModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-color)]">
+              <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
+                <Target size={16} className="text-[var(--accent-color)]" />
+                <span>Créer une Macro (Milestone)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateMacroModal(false)}
+                className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault()
+                const targetProjId = createMacroProjectId || currentProject?.id || projects[0]?.id
+                if (!createMacroTitle.trim() || !targetProjId) return
+                setBusyKey('epic')
+                const created = await createEpic(
+                  targetProjId,
+                  createMacroTitle.trim(),
+                  createMacroHorizon
+                )
+                if (created) {
+                  setEpicMeta(prev => [...prev.filter(m => m.key !== created.key), created])
+                  setSelectedKey(created.key)
+                  setShowCreateMacroModal(false)
+                }
+                setBusyKey(null)
+              }}
+              className="p-5 space-y-4"
+            >
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                  Titre de la macro / milestone
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={createMacroTitle}
+                  onChange={(e) => setCreateMacroTitle(e.target.value)}
+                  placeholder="Ex : Refonte API v2, Authentification SSO, Q3 Release…"
+                  className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] font-medium"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                    Horizon
+                  </label>
+                  <select
+                    value={createMacroHorizon}
+                    onChange={(e) => setCreateMacroHorizon(e.target.value as EpicHorizon)}
+                    className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] font-medium"
+                  >
+                    <option value="now">NOW (En cours)</option>
+                    <option value="next">NEXT (À venir)</option>
+                    <option value="later">LATER (Plus tard / Design)</option>
+                  </select>
+                </div>
+
+                {projects.length > 1 && (
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                      Projet
+                    </label>
+                    <select
+                      value={createMacroProjectId}
+                      onChange={(e) => setCreateMacroProjectId(e.target.value)}
+                      className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] font-medium"
+                    >
+                      {projects.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateMacroModal(false)}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={!createMacroTitle.trim() || busyKey === 'epic'}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white accent-bg rounded-xl cursor-pointer disabled:opacity-50"
+                >
+                  {busyKey === 'epic' ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                  Créer la macro
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   )

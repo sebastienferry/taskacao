@@ -40,6 +40,7 @@ export const TriageView: React.FC = () => {
     setTaskTeam,
     setTasksTeam,
     setTaskEpic,
+    createEpic,
     moveTasksToEpic,
     updateTask,
     fetchProjectEpics,
@@ -153,7 +154,16 @@ export const TriageView: React.FC = () => {
     )
   }
 
-  const searchMacro = useMemo(() => epicLookup(macros), [macros])
+  const searchMacro = useMemo(() => {
+    const base = epicLookup(macros)
+    return async (query: string): Promise<LookupOption[]> => {
+      const res = await base(query)
+      if (query.trim() && !res.some(o => o.label.toLowerCase() === query.trim().toLowerCase() || o.id.toLowerCase() === query.trim().toLowerCase())) {
+        res.unshift({ id: `__create__:${query.trim()}`, label: query.trim(), sublabel: 'Créer ce milestone GitHub' })
+      }
+      return res
+    }
+  }, [macros])
   const searchSprint = useMemo(() => sprintLookup(currentProject?.sprints || []), [currentProject?.sprints])
 
   const searchTeamOptions = async (query: string): Promise<LookupOption[]> => {
@@ -546,7 +556,23 @@ export const TriageView: React.FC = () => {
                         clearLabel="Détacher de la macro"
                         emptyHint="Aucune macro ne correspond."
                         onSearch={searchMacro}
-                        onPick={option => setTaskEpic(task.id, option?.id || '')}
+                        onPick={async (option) => {
+                          if (!option?.id) {
+                            await setTaskEpic(task.id, '')
+                            return
+                          }
+                          if (option.id.startsWith('__create__:')) {
+                            const title = option.id.replace('__create__:', '')
+                            const created = await createEpic(task.projectId || currentProject?.id || 'default', title)
+                            if (created) {
+                              await setTaskEpic(task.id, created.key)
+                              const epics = await fetchProjectEpics(task.projectId || currentProject?.id || 'default')
+                              if (epics) setMacros(epics)
+                            }
+                          } else {
+                            await setTaskEpic(task.id, option.id)
+                          }
+                        }}
                       />
                     </td>
 

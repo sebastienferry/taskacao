@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   X,
   Trash2,
@@ -34,15 +34,16 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
+  Target,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { TeamMember, Status, Priority, DetailMode, SpecFramework, WorkflowStage } from '../types'
+import type { TeamMember, Status, Priority, DetailMode, SpecFramework, WorkflowStage, EpicMeta } from '../types'
 import { WORKFLOW_ORDER } from '../lib/workflow'
 import { InteractiveTerminal } from './InteractiveTerminal'
 import { TaskComments } from './TaskComments'
 import { LookupField, type LookupOption } from './LookupField'
 import { MarkdownEditor } from './Markdown'
-import { sprintLookup } from '../lib/lookups'
+import { sprintLookup, epicLookup } from '../lib/lookups'
 
 export const TaskDetailModal: React.FC = () => {
   const {
@@ -73,11 +74,51 @@ export const TaskDetailModal: React.FC = () => {
     searchTrackerTeams,
     setTaskTeam,
     setTaskSprint,
+    setTaskEpic,
+    createEpic,
+    fetchProjectEpics,
     togglePin,
     isPinned,
     syncSingleTask,
     t,
   } = useApp()
+
+  const [projectEpics, setProjectEpics] = useState<EpicMeta[]>([])
+
+  useEffect(() => {
+    const projId = selectedTask?.projectId || projects[0]?.id
+    if (projId) {
+      fetchProjectEpics(projId).then(epics => {
+        setProjectEpics(epics || [])
+      }).catch(() => {})
+    }
+  }, [selectedTask?.projectId, projects, fetchProjectEpics])
+
+  const availableMacros = useMemo(() => {
+    const combined: EpicMeta[] = [...projectEpics]
+    const currentProjId = selectedTask?.projectId || projects[0]?.id
+    const distinctTaskMacros = tasks
+      .filter(t => t.projectId === currentProjId && (t.parentKey || t.parentTitle))
+      .map(t => ({ key: t.parentKey || t.parentTitle || '', title: t.parentTitle || t.parentKey || '' }))
+    for (const dm of distinctTaskMacros) {
+      if (!combined.some(e => e.key.toLowerCase() === dm.key.toLowerCase() || (e.title && e.title.toLowerCase() === dm.title.toLowerCase()))) {
+        combined.push({
+          projectId: currentProjId || 'default',
+          key: dm.key,
+          title: dm.title,
+          horizon: 'now',
+          description: '',
+          todos: [],
+          status: 'open',
+          closed: false,
+          updatedAt: new Date().toISOString(),
+        })
+      }
+    }
+    return combined
+  }, [projectEpics, selectedTask?.projectId, projects, tasks])
+
+  const searchMacro = useMemo(() => epicLookup(availableMacros), [availableMacros])
 
   // The task's own project drives the AI provider, the command template and the
   // skill overrides. It is NOT necessarily the project selected in the sidebar:
@@ -1504,6 +1545,43 @@ export const TaskDetailModal: React.FC = () => {
               />
           </div>
         )}
+
+        {/* Macro (Milestone) : sélection ou création de macro / milestone GitHub */}
+        <div>
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+            Macro (Milestone)
+          </label>
+          <LookupField
+            value={selectedTask.parentKey || selectedTask.parentTitle || ''}
+            icon={<Target size={12} />}
+            placeholder="Assigner ou nommer une macro…"
+            clearLabel="Détacher de la macro"
+            emptyHint="Aucune macro trouvée. Tapez un nom pour créer."
+            onSearch={async (query: string) => {
+              const res = await searchMacro(query)
+              if (query.trim() && !res.some(o => o.label.toLowerCase() === query.trim().toLowerCase() || o.id.toLowerCase() === query.trim().toLowerCase())) {
+                res.unshift({ id: `__create__:${query.trim()}`, label: query.trim(), sublabel: 'Créer ce milestone GitHub' })
+              }
+              return res
+            }}
+            onPick={async (option) => {
+              if (!selectedTask) return
+              if (!option?.id) {
+                await setTaskEpic(selectedTask.id, '')
+                return
+              }
+              if (option.id.startsWith('__create__:')) {
+                const title = option.id.replace('__create__:', '')
+                const created = await createEpic(selectedTask.projectId || projects[0]?.id || 'default', title)
+                if (created) {
+                  await setTaskEpic(selectedTask.id, created.key)
+                }
+              } else {
+                await setTaskEpic(selectedTask.id, option.id)
+              }
+            }}
+          />
+        </div>
 
         {/* Due Date */}
         <div>

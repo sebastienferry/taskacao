@@ -1163,8 +1163,8 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 
 	err := d.conn.QueryRow(`
 		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, tracker_created_at, tracker_updated_at, status_changed_at, created_at, updated_at
-		FROM tasks WHERE id = ? OR key = ?
-	`, id, id).Scan(
+		FROM tasks WHERE id = ?
+	`, id).Scan(
 		&t.ID,
 		&t.ProjectID,
 		&t.Key,
@@ -1196,6 +1196,43 @@ func (d *DB) GetTaskByID(id string) (*models.Task, error) {
 		&t.CreatedAt,
 		&t.UpdatedAt,
 	)
+	if err == sql.ErrNoRows {
+		err = d.conn.QueryRow(`
+			SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, tracker_created_at, tracker_updated_at, status_changed_at, created_at, updated_at
+			FROM tasks WHERE key = ? LIMIT 1
+		`, id).Scan(
+			&t.ID,
+			&t.ProjectID,
+			&t.Key,
+			&t.Title,
+			&t.Description,
+			&statusStr,
+			&priorityStr,
+			&labelsJSON,
+			&t.Assignee,
+			&t.AssigneeAvatar,
+			&t.Position,
+			&dueDate,
+			&branchName,
+			&prURL,
+			&repoPath,
+			&sprint,
+			&team,
+			&teamID,
+			&trackerStatus,
+			&source,
+			&extURL,
+			&issueType,
+			&parentKey,
+			&parentTitle,
+			&parentType,
+			&trackerCreatedAt,
+			&trackerUpdatedAt,
+			&statusChangedAt,
+			&t.CreatedAt,
+			&t.UpdatedAt,
+		)
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -2519,8 +2556,8 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 	_, err = d.conn.Exec(`
 		UPDATE tasks
 		SET project_id = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?, pinned = ?, assignee = ?, assignee_avatar = ?, position = ?, due_date = ?, branch_name = ?, pr_url = ?, repo_path = ?, tracker_status = ?, source = ?, external_url = ?, sprint = ?, updated_at = ?
-		WHERE id = ? OR key = ?
-	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), pinnedVal, existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, repoPathValue(existing.RepoPath), existing.TrackerStatus, existing.Source, existing.ExternalURL, existing.Sprint, existing.UpdatedAt, existing.ID, existing.Key)
+		WHERE id = ?
+	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), pinnedVal, existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, repoPathValue(existing.RepoPath), existing.TrackerStatus, existing.Source, existing.ExternalURL, existing.Sprint, existing.UpdatedAt, existing.ID)
 
 	if err != nil {
 		return nil, err
@@ -2733,8 +2770,8 @@ func (d *DB) MoveTask(id string, newStatus models.Status, newPosition int) (*mod
 	_, err = d.conn.Exec(`
 		UPDATE tasks
 		SET status = ?, labels = ?, position = ?, updated_at = ?
-		WHERE id = ? OR key = ?
-	`, string(newStatus), string(labelsJSON), newPosition, now, existing.ID, existing.Key)
+		WHERE id = ?
+	`, string(newStatus), string(labelsJSON), newPosition, now, existing.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -2755,15 +2792,15 @@ func (d *DB) DeleteTask(id string) error {
 
 	existing, _ := d.getTaskByIDUnsafe(id)
 	if existing != nil {
-		_, _ = d.conn.Exec("DELETE FROM pinned_tasks WHERE task_id = ? OR task_id = ?", existing.ID, existing.Key)
-		_, _ = d.conn.Exec("DELETE FROM task_activities WHERE task_id = ? OR task_id = ?", existing.ID, existing.Key)
-		_, err := d.conn.Exec("DELETE FROM tasks WHERE id = ? OR key = ?", existing.ID, existing.Key)
+		_, _ = d.conn.Exec("DELETE FROM pinned_tasks WHERE task_id = ?", existing.ID)
+		_, _ = d.conn.Exec("DELETE FROM task_activities WHERE task_id = ?", existing.ID)
+		_, err := d.conn.Exec("DELETE FROM tasks WHERE id = ?", existing.ID)
 		return err
 	}
 
 	_, _ = d.conn.Exec("DELETE FROM pinned_tasks WHERE task_id = ?", id)
 	_, _ = d.conn.Exec("DELETE FROM task_activities WHERE task_id = ?", id)
-	_, err := d.conn.Exec("DELETE FROM tasks WHERE id = ? OR key = ?", id, id)
+	_, err := d.conn.Exec("DELETE FROM tasks WHERE id = ?", id)
 	return err
 }
 
@@ -2776,8 +2813,8 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 
 	err := d.conn.QueryRow(`
 		SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, tracker_created_at, tracker_updated_at, status_changed_at, created_at, updated_at
-		FROM tasks WHERE id = ? OR key = ?
-	`, id, id).Scan(
+		FROM tasks WHERE id = ?
+	`, id).Scan(
 		&t.ID,
 		&t.ProjectID,
 		&t.Key,
@@ -2809,6 +2846,43 @@ func (d *DB) getTaskByIDUnsafe(id string) (*models.Task, error) {
 		&t.CreatedAt,
 		&t.UpdatedAt,
 	)
+	if err == sql.ErrNoRows {
+		err = d.conn.QueryRow(`
+			SELECT id, project_id, key, title, description, status, priority, labels, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, tracker_created_at, tracker_updated_at, status_changed_at, created_at, updated_at
+			FROM tasks WHERE key = ? LIMIT 1
+		`, id).Scan(
+			&t.ID,
+			&t.ProjectID,
+			&t.Key,
+			&t.Title,
+			&t.Description,
+			&statusStr,
+			&priorityStr,
+			&labelsJSON,
+			&t.Assignee,
+			&t.AssigneeAvatar,
+			&t.Position,
+			&dueDate,
+			&branchName,
+			&prURL,
+			&repoPath,
+			&sprint,
+			&team,
+			&teamID,
+			&trackerStatus,
+			&source,
+			&extURL,
+			&issueType,
+			&parentKey,
+			&parentTitle,
+			&parentType,
+			&trackerCreatedAt,
+			&trackerUpdatedAt,
+			&statusChangedAt,
+			&t.CreatedAt,
+			&t.UpdatedAt,
+		)
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -3739,8 +3813,8 @@ func (d *DB) processSkillJob(job SkillJob) {
 	_, _ = d.conn.Exec(`
 		UPDATE tasks
 		SET status = ?, labels = ?, branch_name = ?, pr_url = ?, updated_at = ?
-		WHERE id = ? OR key = ?
-	`, string(task.Status), string(labelsJSON), task.BranchName, task.PrURL, completedTime, task.ID, task.Key)
+		WHERE id = ?
+	`, string(task.Status), string(labelsJSON), task.BranchName, task.PrURL, completedTime, task.ID)
 
 	stepsJSON, _ := json.Marshal(steps)
 	_, _ = d.conn.Exec(`

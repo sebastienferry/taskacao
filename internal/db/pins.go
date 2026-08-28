@@ -214,8 +214,8 @@ func (d *DB) SetTaskPinned(taskID string, pinned bool) error {
 		_, err = d.conn.Exec(`
 			UPDATE tasks
 			SET labels = ?, pinned = 1, updated_at = ?
-			WHERE id = ? OR key = ?
-		`, string(labelsJSON), now, task.ID, task.Key)
+			WHERE id = ?
+		`, string(labelsJSON), now, task.ID)
 		if err != nil {
 			return err
 		}
@@ -230,14 +230,14 @@ func (d *DB) SetTaskPinned(taskID string, pinned bool) error {
 		task.Pinned = false
 		task.UpdatedAt = now
 
-		_, _ = d.conn.Exec(`DELETE FROM pinned_tasks WHERE task_id = ? OR task_id = ?`, task.ID, task.Key)
+		_, _ = d.conn.Exec(`DELETE FROM pinned_tasks WHERE task_id = ?`, task.ID)
 
 		labelsJSON, _ := json.Marshal(task.Labels)
 		_, err = d.conn.Exec(`
 			UPDATE tasks
 			SET labels = ?, pinned = 0, updated_at = ?
-			WHERE id = ? OR key = ?
-		`, string(labelsJSON), now, task.ID, task.Key)
+			WHERE id = ?
+		`, string(labelsJSON), now, task.ID)
 		if err != nil {
 			return err
 		}
