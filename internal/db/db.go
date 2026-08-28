@@ -4132,6 +4132,14 @@ func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 		} else {
 			outputText = fmt.Sprintf("Issue GitHub %s synchronisée avec succès dans %s (Titre: %s, Statut: %s, Labels: %v)", task.Key, repo, task.Title, task.Status, task.Labels)
 			steps = append(steps, fmt.Sprintf("✅ Issue GitHub %s synchronisée avec succès via la CLI", task.Key))
+
+			// Rsync local (two-way unit sync): fetch fresh remote state from GitHub and update SQLite
+			steps = append(steps, fmt.Sprintf("Synchronisation retour unitaire (rsync local) depuis %s...", repo))
+			if _, syncErr := d.SyncSingleTask(task.ID); syncErr != nil {
+				steps = append(steps, fmt.Sprintf("⚠️ Rsync local partiel : %v", syncErr))
+			} else {
+				steps = append(steps, "✅ Rsync local terminé : état distant réaligné en base locale")
+			}
 		}
 	} else {
 		outputText = "Aucun tracker distant configuré pour cette tâche"
@@ -4156,6 +4164,70 @@ func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 		WHERE id = ?
 	`, status, summary, outputText, string(stepsJSON), errText, completedTime, job.ActivityID)
 	d.mu.Unlock()
+}
+
+// SyncSingleTask pulls the single authoritative issue state from the remote tracker and writes it to SQLite.
+func (d *DB) SyncSingleTask(taskID string) (*models.Task, error) {
+	d.mu.RLock()
+	task, err := d.getTaskByIDUnsafe(taskID)
+	settings, _ := d.getSettingsUnsafe()
+	d.mu.RUnlock()
+
+	if err != nil || task == nil {
+		return nil, fmt.Errorf("task not found")
+	}
+
+	proj, _ := d.GetProjectByID(task.ProjectID)
+	repo := ""
+	repoPath := ""
+	if proj != nil {
+		repo = proj.GithubRepo
+		repoPath = proj.RepoPath
+	}
+	if repo == "" && settings != nil {
+		repo = settings.GithubRepo
+	}
+	if repoPath == "" && settings != nil {
+		repoPath = settings.RepoPath
+	}
+
+	var syncedTask *models.Task
+	if task.Source == "github" || strings.HasPrefix(task.Key, "#") || strings.HasPrefix(task.Key, "gh-") {
+		cleanNum := strings.TrimPrefix(strings.TrimPrefix(task.Key, "#"), "gh-")
+		var issueNum int
+		fmt.Sscanf(cleanNum, "%d", &issueNum)
+		if issueNum > 0 {
+			syncedTask, err = d.runner.FetchSingleGithubIssue(repo, repoPath, issueNum)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if syncedTask != nil {
+		syncedTask.ProjectID = task.ProjectID
+		if syncedTask.Priority == "" || syncedTask.Priority == models.PriorityMedium {
+			if task.Priority != "" {
+				syncedTask.Priority = task.Priority
+			}
+		}
+		if syncedTask.Position == 0 && task.Position > 0 {
+			syncedTask.Position = task.Position
+		}
+		if task.BranchName != nil {
+			syncedTask.BranchName = task.BranchName
+		}
+		if task.PrURL != nil {
+			syncedTask.PrURL = task.PrURL
+		}
+
+		if impErr := d.ImportOrUpdateTasks([]models.Task{*syncedTask}); impErr != nil {
+			return nil, impErr
+		}
+		return d.GetTaskByID(task.ID)
+	}
+
+	return task, nil
 }
 
 func (d *DB) EnqueueSync(syncType string, param string, projectID string) (*models.TaskActivity, error) {

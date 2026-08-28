@@ -247,6 +247,7 @@ interface AppContextType {
   syncGithub: (repo?: string) => Promise<void>
   syncJira: (projectKey?: string) => Promise<void>
   syncCurrentProject: () => Promise<void>
+  syncSingleTask: (taskId: string) => Promise<Task | null>
   fetchCliStatus: () => Promise<void>
   refreshTasks: () => Promise<void>
   activities: TaskActivity[]
@@ -1667,6 +1668,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addToast({
         type: 'error',
         title: t.toasts.error,
+        description: err.message,
+      })
+      return null
+    }
+  }
+
+  const syncSingleTask = async (id: string): Promise<Task | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/sync`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Échec de la synchronisation')
+      }
+      const data = await res.json()
+      const updated: Task = data.task
+      if (updated) {
+        setTasks(prev => prev.map(t => (t.id === id || t.key === id || t.id === updated.id || t.key === updated.key ? updated : t)))
+        if (selectedTask && (selectedTask.id === id || selectedTask.key === id || selectedTask.id === updated.id)) {
+          setSelectedTask(updated)
+        }
+        addToast({
+          type: 'success',
+          title: 'Synchronisation unitaire terminée',
+          description: `${updated.key} réaligné avec le tracker distant`,
+        })
+      }
+      return updated
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Erreur de synchronisation',
         description: err.message,
       })
       return null
@@ -3380,6 +3414,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         syncGithub,
         syncJira,
         syncCurrentProject,
+        syncSingleTask,
         fetchCliStatus,
         refreshTasks: fetchTasks,
         activities,

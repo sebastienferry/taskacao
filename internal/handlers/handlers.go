@@ -1880,6 +1880,20 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Sub-action: /api/tasks/{id}/sync — perform a unit two-way sync (update tracker and rsync local state)
+	if subAction == "sync" && (r.Method == http.MethodPost || r.Method == http.MethodGet) {
+		task, err := h.db.SyncSingleTask(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Échec de la synchronisation unitaire: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"message": "Synchronisation unitaire effectuée avec succès",
+			"task":    task,
+		})
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		task, err := h.db.GetTaskByID(id)

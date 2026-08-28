@@ -33,6 +33,7 @@ import {
   Code2,
   Maximize2,
   Minimize2,
+  RefreshCw,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { TeamMember, Status, Priority, DetailMode, SpecFramework, WorkflowStage } from '../types'
@@ -73,6 +74,7 @@ export const TaskDetailModal: React.FC = () => {
     setTaskSprint,
     togglePin,
     isPinned,
+    syncSingleTask,
     t,
   } = useApp()
 
@@ -96,6 +98,7 @@ export const TaskDetailModal: React.FC = () => {
   const specifySkillLabel = skillLabel('specify', 'Spécifications', taskProject?.id)
 
   const [isSwitchingBranch, setIsSwitchingBranch] = useState(false)
+  const [isSyncingTask, setIsSyncingTask] = useState(false)
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -1810,6 +1813,26 @@ export const TaskDetailModal: React.FC = () => {
                   <span className="hidden sm:inline">Modale</span>
                 </button>
 
+                {/* Two-way Unit Sync Button */}
+                <button
+                  type="button"
+                  disabled={isSyncingTask}
+                  onClick={async () => {
+                    if (!selectedTask) return
+                    setIsSyncingTask(true)
+                    try {
+                      await syncSingleTask(selectedTask.id)
+                    } finally {
+                      setIsSyncingTask(false)
+                    }
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 transition-all cursor-pointer shadow-xs active:scale-95 disabled:opacity-50"
+                  title="Synchroniser ce ticket dans les deux sens avec le tracker distant (GitHub / Linear)"
+                >
+                  <RefreshCw size={12} className={`text-indigo-400 ${isSyncingTask ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">{isSyncingTask ? 'Sync...' : 'Sync'}</span>
+                </button>
+
                 {selectedTask.prUrl && (
                   <a
                     href={selectedTask.prUrl}
@@ -2024,6 +2047,26 @@ export const TaskDetailModal: React.FC = () => {
             >
               <PanelRight size={14} className="text-indigo-400" />
               <span className="hidden sm:inline">Panneau droit</span>
+            </button>
+
+            {/* Two-way Unit Sync Button */}
+            <button
+              type="button"
+              disabled={isSyncingTask}
+              onClick={async () => {
+                if (!selectedTask) return
+                setIsSyncingTask(true)
+                try {
+                  await syncSingleTask(selectedTask.id)
+                } finally {
+                  setIsSyncingTask(false)
+                }
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 transition-all cursor-pointer shadow-xs active:scale-95 disabled:opacity-50"
+              title="Synchroniser ce ticket dans les deux sens avec le tracker distant (GitHub / Linear)"
+            >
+              <RefreshCw size={13} className={`text-indigo-400 ${isSyncingTask ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{isSyncingTask ? 'Sync...' : 'Sync'}</span>
             </button>
 
             {selectedTask.prUrl && (

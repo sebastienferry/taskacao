@@ -739,6 +739,97 @@ func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, er
 	return tasks, nil
 }
 
+func (r *Runner) FetchSingleGithubIssue(repo string, repoPath string, issueNumber int) (*models.Task, error) {
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/issues/%d", repo, issueNumber)
+	output, err := r.runCommand(ctx, repoPath, ghPath, "api", endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch GitHub issue #%d: %w", issueNumber, err)
+	}
+
+	var item GithubIssueItem
+	if err := json.Unmarshal([]byte(output), &item); err != nil {
+		return nil, fmt.Errorf("failed to parse GitHub issue JSON: %w", err)
+	}
+
+	var labels []string
+	for _, l := range item.Labels {
+		labels = append(labels, l.Name)
+	}
+
+	var status models.Status = models.StatusToClarify
+	if strings.EqualFold(item.State, "closed") {
+		status = models.StatusDone
+	}
+
+	assignee := ""
+	if len(item.Assignees) > 0 {
+		assignee = item.Assignees[0].Login
+	}
+
+	extURL := item.HTMLURL
+	if extURL == "" {
+		extURL = item.URL
+	}
+	if extURL == "" || strings.HasPrefix(extURL, "https://api.github.com/") {
+		if repo != "" {
+			extURL = fmt.Sprintf("https://github.com/%s/issues/%d", repo, item.Number)
+		}
+	}
+
+	sprint := ""
+	parentTitle := ""
+	parentKey := ""
+	if item.Milestone != nil && item.Milestone.Title != "" {
+		mTitle := item.Milestone.Title
+		if strings.HasPrefix(strings.ToLower(mTitle), "sprint") || strings.HasPrefix(strings.ToLower(mTitle), "s-") {
+			sprint = mTitle
+		} else {
+			parentTitle = mTitle
+			parentKey = fmt.Sprintf("M-%d", item.Milestone.Number)
+		}
+	}
+
+	for _, l := range labels {
+		low := strings.ToLower(l)
+		if strings.HasPrefix(low, "macro:") {
+			parentTitle = strings.TrimSpace(l[6:])
+		} else if strings.HasPrefix(low, "parent:") {
+			parentKey = strings.TrimSpace(l[7:])
+		}
+	}
+
+	task := &models.Task{
+		ID:          fmt.Sprintf("gh-%d", item.Number),
+		Key:         fmt.Sprintf("#%d", item.Number),
+		Title:       item.Title,
+		Description: item.Body,
+		Status:      status,
+		Priority:    models.PriorityMedium,
+		Labels:      labels,
+		Assignee:    assignee,
+		Sprint:      sprint,
+		ParentKey:   parentKey,
+		ParentTitle: parentTitle,
+		ParentType:  "macro",
+		Source:      "github",
+		ExternalURL: &extURL,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	return task, nil
+}
+
 func (r *Runner) CreateGithubIssue(repo string, repoPath string, title string, description string, labels []string) (*models.Task, error) {
 	repo, repoPath = ResolveGithubRepo(repo, repoPath)
 
