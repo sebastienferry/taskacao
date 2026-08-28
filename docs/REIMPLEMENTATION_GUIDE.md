@@ -1,6 +1,6 @@
 # Re-Implementation Guide for LLMs & Engineers
 
-This document is an actionable, step-by-step blueprint designed to enable another AI model or software engineer to re-implement **Taskacao** from scratch with full fidelity.
+This document is an actionable, step-by-step blueprint designed to enable another AI model or software engineer to re-implement **TaskFlow** from scratch with full fidelity.
 
 ---
 
@@ -34,7 +34,7 @@ This document is an actionable, step-by-step blueprint designed to enable anothe
    - Compute task branch name `fmt.Sprintf("%s-%s", task.Key, slugifiedTitle)`.
    - Run `git worktree add .tasks/worktrees/<taskKey> -b <branchName> main`.
    - Symlink `node_modules`, `web/node_modules`, `.env`, `.env.local`.
-   - Symlink `.gemini`, `.agents`, `.agy`, `.taskacao` folders.
+   - Symlink `.gemini`, `.agents`, `.agy`, `.taskflow` folders.
    - Ensure the 5 default skill templates (`clarify-issue`, `specify-issue`, `code-issue`, `create-pr`, `pick-issue`) are written into `.gemini/skills/` and `.agents/skills/`.
 2. Implement `RemoveTaskWorktree(mainRepoPath, taskKey)`:
    - Run `git worktree remove --force` and `git worktree prune`.
@@ -42,7 +42,7 @@ This document is an actionable, step-by-step blueprint designed to enable anothe
 ### Step 3: Interactive PTY Manager (`internal/terminal/terminal.go`)
 1. Define `Session` with `pty.StartWithSize` running `/bin/zsh -l` (or `$SHELL`).
 2. Set session `Dir` to the task worktree path.
-3. Inject environment variables: `TASKACAO_TASK_ID`, `TASKACAO_TASK_KEY`, `TASKACAO_TASK_WORKTREE`.
+3. Inject environment variables: `TASKFLOW_TASK_ID`, `TASKFLOW_TASK_KEY`, `TASKFLOW_TASK_WORKTREE`.
 4. Buffer output into a 64KB ring buffer for tab reconnects.
 5. Handle WebSocket connection `/ws/terminal`:
    - Stream PTY read buffer to WebSocket client.

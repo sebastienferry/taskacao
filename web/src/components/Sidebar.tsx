@@ -31,11 +31,12 @@ import {
   Settings2,
   CalendarDays,
   FileCode2,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { accentBadgeStyle } from '../lib/accents'
 import type { Status, TaskSource } from '../types'
-import { TaskacaoLogo } from './TaskacaoLogo'
+import { TaskFlowLogo } from './TaskFlowLogo'
 
 const renderProjectIcon = (iconName: string, size = 15, className = '') => {
   switch (iconName) {
@@ -65,7 +66,8 @@ const SidebarSection: React.FC<{
 }> = ({ id, title, collapsedBar, children, action }) => {
   const [isOpen, setIsOpen] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(`taskacao_sidebar_section_${id}`) !== 'closed'
+      const val = localStorage.getItem(`taskflow_sidebar_section_${id}`) ?? localStorage.getItem(`taskacao_sidebar_section_${id}`)
+      return val !== 'closed'
     } catch {
       return true
     }
@@ -75,7 +77,7 @@ const SidebarSection: React.FC<{
     setIsOpen(prev => {
       const next = !prev
       try {
-        localStorage.setItem(`taskacao_sidebar_section_${id}`, next ? 'open' : 'closed')
+        localStorage.setItem(`taskflow_sidebar_section_${id}`, next ? 'open' : 'closed')
       } catch {
         // stockage indisponible : le repli vaut pour cette session
       }
@@ -246,9 +248,7 @@ export const Sidebar: React.FC = () => {
    * découpent le travail. Le filtre posé est celui des statuts, le même que la
    * barre d'outils des vues.
    */
-  const showTrackerStatuses = boardGrouping === 'status' && (
-    (currentProject?.trackerColumns || []).length > 0 || taskFacets.trackerStatuses.length > 0
-  )
+  const showTrackerStatuses = boardGrouping === 'status'
 
   const trackerColumnItems = React.useMemo(() => {
     const columns = (currentProject?.trackerColumns || []).filter(col => !col.hidden)
@@ -294,7 +294,7 @@ export const Sidebar: React.FC = () => {
           <>
             <div className="flex items-center gap-2.5 min-w-0 overflow-hidden">
               <div className="p-0.5 rounded-xl bg-[var(--accent-light)] border border-[var(--accent-color)]/30 shadow-[0_0_12px_var(--accent-glow)]">
-                <TaskacaoLogo size={28} className="shrink-0" />
+                <TaskFlowLogo size={28} className="shrink-0" />
               </div>
               <span className="font-bold tracking-tight text-base text-[var(--text-primary)] truncate">
                 {t.app.title}
@@ -319,7 +319,7 @@ export const Sidebar: React.FC = () => {
               title={`${t.app.title} - ${t.nav.toggleSidebar || 'Déplier'}`}
             >
               <div className="p-0.5 rounded-lg bg-[var(--accent-light)] border border-[var(--accent-color)]/30 shadow-[0_0_8px_var(--accent-glow)]">
-                <TaskacaoLogo size={24} className="shrink-0" />
+                <TaskFlowLogo size={24} className="shrink-0" />
               </div>
               <span className="absolute -bottom-0.5 -right-0.5 bg-[var(--bg-secondary)] border border-[var(--sidebar-border)] rounded-full p-0.5 text-[var(--text-muted)] group-hover:text-[var(--text-primary)] opacity-0 group-hover:opacity-100 transition-opacity shadow-xs">
                 <ChevronRight size={10} />
@@ -541,6 +541,40 @@ export const Sidebar: React.FC = () => {
               {!sidebarCollapsed && <span className="truncate">{t.nav.list}</span>}
             </button>
             <button
+              onClick={() => setActiveView('triage')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'triage'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Triage : affectation rapide Sprints et Macros"
+            >
+              <div className="flex items-center gap-2.5 min-w-0 truncate">
+                <SlidersHorizontal size={15} className="shrink-0 text-violet-400" />
+                {!sidebarCollapsed && <span className="truncate">Triage</span>}
+              </div>
+            </button>
+            {/* Roadmap : les macros par horizon */}
+            <button
+              onClick={() => setActiveView('roadmap')}
+              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'roadmap'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Roadmap : NOW / NEXT / FUTURE"
+            >
+              <span className="flex items-center gap-2.5 min-w-0">
+                <MapIcon size={15} className="shrink-0" />
+                {!sidebarCollapsed && <span className="truncate">Roadmap</span>}
+              </span>
+              {!sidebarCollapsed && (
+                <span className="text-[9px] font-bold px-1.5 rounded text-[var(--accent-color)] bg-[var(--accent-light)] border border-[var(--accent-color)]/30">
+                  MACROS
+                </span>
+              )}
+            </button>
+            <button
               onClick={() => setActiveView('activities')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                 activeView === 'activities'
@@ -593,26 +627,6 @@ export const Sidebar: React.FC = () => {
                 <RefreshCw size={15} className={`shrink-0 text-indigo-400 ${isSyncing ? 'animate-spin' : ''}`} />
                 {!sidebarCollapsed && <span className="truncate">{t.nav.sync || "Synchronisation"}</span>}
               </div>
-            </button>
-            {/* Roadmap : les épics par horizon */}
-            <button
-              onClick={() => setActiveView('roadmap')}
-              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                activeView === 'roadmap'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs border-l-2 border-[var(--accent-color)] pl-2'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
-              }`}
-              title="Roadmap des épics : NOW / NEXT / FUTURE"
-            >
-              <span className="flex items-center gap-2.5 min-w-0">
-                <MapIcon size={15} className="shrink-0" />
-                {!sidebarCollapsed && <span className="truncate">Roadmap</span>}
-              </span>
-              {!sidebarCollapsed && (
-                <span className="text-[9px] font-bold px-1.5 rounded text-[var(--accent-color)] bg-[var(--accent-light)] border border-[var(--accent-color)]/30">
-                  EPICS
-                </span>
-              )}
             </button>
             {/* Équipes : la charge par personne, quand les tickets portent une équipe */}
             {teams.length > 0 && (
@@ -864,7 +878,7 @@ export const Sidebar: React.FC = () => {
                     title={lbl}
                   >
                     <Tag size={12} className="shrink-0 text-slate-400" />
-                    {!sidebarCollapsed && <span className="truncate">#{lbl}</span>}
+                    {!sidebarCollapsed && <span className="truncate">#{lbl.replace(/^#+/, '')}</span>}
                   </button>
                 )
               })}

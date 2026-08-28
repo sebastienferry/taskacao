@@ -151,19 +151,20 @@ export const BoardView: React.FC = () => {
   // Todo -> In Progress -> In Review & Testing -> Done
   // -------------------------------------------------------------
   const isTaskInStatusColumn = (taskStatus: Status, colId: Status) => {
+    const st = (taskStatus || '').toLowerCase()
     if (colId === 'to_clarify') {
-      return taskStatus === 'to_clarify' || taskStatus === 'backlog'
+      return st === 'to_clarify' || st === 'backlog' || st === 'open' || st === 'todo' || st === 'new'
     }
     if (colId === 'in_progress') {
-      return taskStatus === 'in_progress' || taskStatus === 'to_specify' || taskStatus === 'to_implement' || taskStatus === 'specified'
+      return st === 'in_progress' || st === 'to_specify' || st === 'to_implement' || st === 'specified'
     }
     if (colId === 'to_test') {
-      return taskStatus === 'to_test' || taskStatus === 'to_validate' || taskStatus === 'to_close'
+      return st === 'to_test' || st === 'to_validate' || st === 'to_close' || st === 'in_review' || st === 'testing'
     }
     if (colId === 'to_close' || colId === 'finished') {
-      return taskStatus === 'finished' || taskStatus === 'done'
+      return st === 'finished' || st === 'done' || st === 'closed'
     }
-    return taskStatus === colId
+    return st === colId
   }
 
   const statusColumns: StatusColumnConfig[] = [
@@ -255,7 +256,24 @@ export const BoardView: React.FC = () => {
   // Les colonnes du projet, à la façon de Jira : un nom et les statuts du tracker
   // qu'elles regroupent. Dès qu'un projet en définit, elles remplacent les
   // colonnes de statuts génériques — ce mode n'est qu'une extension de celui-ci.
-  const trackerColumns = currentProject?.trackerColumns || []
+  // Extract distinct trackerStatus from tasks as fallback columns if project trackerColumns is empty
+  const fallbackTrackerColumns = React.useMemo(() => {
+    const seen = new Set<string>()
+    const cols: string[] = []
+    tasks.forEach(t => {
+      const st = (t.trackerStatus || '').trim()
+      if (st && !seen.has(st.toLowerCase())) {
+        seen.add(st.toLowerCase())
+        cols.push(st)
+      }
+    })
+    return cols.map(name => ({ name, statuses: [name], hidden: false }))
+  }, [tasks])
+
+  const trackerColumns = (currentProject?.trackerColumns && currentProject.trackerColumns.length > 0)
+    ? currentProject.trackerColumns
+    : fallbackTrackerColumns
+
   const useTrackerBoard = trackerColumns.length > 0
   const stageColumns = currentProject?.stageColumns || {}
 
@@ -273,7 +291,7 @@ export const BoardView: React.FC = () => {
     ? trackerColumns
     : trackerColumns.filter(c => !c.hidden)
 
-  const effectiveStatusColumns: StatusColumnConfig[] = useTrackerBoard
+  const effectiveStatusColumns: StatusColumnConfig[] = visibleTrackerColumns.length > 0
     ? visibleTrackerColumns.map(col => ({
         id: col.name as unknown as Status,
         title: col.name,
@@ -312,18 +330,18 @@ export const BoardView: React.FC = () => {
     return inColumn.length > 0 && inColumn.every(t => t.status === 'finished' || t.status === 'done')
   }
 
-  const tasksForColumn = (col: StatusColumnConfig, opts?: { includeDone?: boolean }): Task[] => {
-    if (!useTrackerBoard) {
-      return byPriorityDesc(tasks.filter(t => isTaskInStatusColumn(t.status, col.id)))
-    }
+  const tasksForColumn = (col: StatusColumnConfig): Task[] => {
     const statuses = columnStatuses(col.title).map(st => st.toLowerCase())
+    if (statuses.length === 0) {
+      statuses.push(col.title.toLowerCase())
+    }
     return byPriorityDesc(
-      tasks
-        .filter(t => statuses.includes((t.trackerStatus || '').toLowerCase()))
-        // Masquer les terminés porte sur les tickets : un ticket fermé peut vivre
-        // dans une colonne qui n'est pas terminale, et il n'a alors rien à y
-        // faire. La colonne terminale repliée, elle, garde son décompte complet.
-        .filter(t => opts?.includeDone || !hideDone || (t.status !== 'finished' && t.status !== 'done'))
+      tasks.filter(t => {
+        const st = (t.trackerStatus || '').toLowerCase()
+        if (statuses.includes(st)) return true
+        if (st === '' && col.title.toLowerCase() === 'todo') return true
+        return false
+      })
     )
   }
 
@@ -580,7 +598,7 @@ export const BoardView: React.FC = () => {
           {/* ========================================================= */}
           {boardGrouping === 'status' &&
             effectiveStatusColumns.map(col => {
-              const colTasks = tasksForColumn(col, { includeDone: hideDone && isClosedColumn(col) })
+              const colTasks = tasksForColumn(col)
               const isOver = dragOverColumn === col.id
               const onDropColumn = useTrackerBoard
                 ? (e: React.DragEvent) => handleDropTrackerColumn(e, col.title)

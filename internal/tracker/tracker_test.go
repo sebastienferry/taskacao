@@ -17,16 +17,16 @@ func TestCapabilitiesDifferPerTracker(t *testing.T) {
 		{
 			name:   "linear",
 			writer: NewLinearWriter(),
-			has:    []Capability{CapTransition, CapLabels},
+			has:    []Capability{CapLabels},
 			// Sprint et équipe sont exactement ce que les autres trackers n'ont
 			// pas : c'est la raison d'être de cette interface.
-			lacks: []Capability{CapSprint, CapTeam, CapEpic},
+			lacks: []Capability{CapSprint, CapTeam, CapEpic, CapTransition},
 		},
 		{
 			name:   "github",
 			writer: NewGithubWriter(),
-			has:    []Capability{CapTransition, CapAssign},
-			lacks:  []Capability{CapSprint, CapTeam, CapEpic},
+			has:    []Capability{CapLabels, CapAssign},
+			lacks:  []Capability{CapSprint, CapTeam, CapEpic, CapTransition},
 		},
 	}
 

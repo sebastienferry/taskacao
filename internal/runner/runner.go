@@ -556,11 +556,16 @@ func (r *Runner) UpdateLinearIssue(issueKey string, title *string, description *
 
 // GitHub structures
 type GithubIssueItem struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	URL    string `json:"url"`
-	State  string `json:"state"`
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	URL     string `json:"url"`
+	HTMLURL string `json:"html_url"`
+	State   string `json:"state"`
+	Milestone *struct {
+		Title  string `json:"title"`
+		Number int    `json:"number"`
+	} `json:"milestone"`
 	Labels []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
@@ -614,7 +619,7 @@ func ResolveGithubRepo(repo string, repoPath string) (string, string) {
 func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, error) {
 	repo, repoPath = ResolveGithubRepo(repo, repoPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	ghPath, _ := FindCliTool("gh")
@@ -622,45 +627,55 @@ func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, er
 		ghPath = "gh"
 	}
 
-	var args []string
-	if repo != "" {
-		args = []string{"issue", "list", "-R", repo, "--limit", "100", "--json", "number,title,labels,body,url,state,assignees"}
-	} else {
-		args = []string{"issue", "list", "--limit", "100", "--json", "number,title,labels,body,url,state,assignees"}
-	}
-
-	output, err := r.runCommand(ctx, repoPath, ghPath, args...)
+	endpoint := "repos/" + repo + "/issues?per_page=100&state=all"
+	output, err := r.runCommand(ctx, repoPath, ghPath, "api", "--paginate", endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query GitHub issues: %w (output: %s)", err, output)
+		// Fallback to gh issue list if gh api repos/repo/issues fails
+		var fallbackArgs []string
+		if repo != "" {
+			fallbackArgs = []string{"issue", "list", "-R", repo, "--limit", "1000", "--state", "all", "--json", "number,title,labels,body,url,state,assignees"}
+		} else {
+			fallbackArgs = []string{"issue", "list", "--limit", "1000", "--state", "all", "--json", "number,title,labels,body,url,state,assignees"}
+		}
+		fallbackOutput, fallbackErr := r.runCommand(ctx, repoPath, ghPath, fallbackArgs...)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("failed to query GitHub issues via API or CLI: %w (output: %s)", err, output)
+		}
+		output = fallbackOutput
 	}
 
 	var items []GithubIssueItem
-	if err := json.Unmarshal([]byte(output), &items); err != nil {
-		return nil, fmt.Errorf("failed to parse GitHub JSON: %w", err)
+	// Stream decoding for multiple paginated JSON arrays or single array
+	dec := json.NewDecoder(strings.NewReader(output))
+	for dec.More() {
+		var pageItems []GithubIssueItem
+		if decErr := dec.Decode(&pageItems); decErr != nil {
+			break
+		}
+		items = append(items, pageItems...)
+	}
+
+	if len(items) == 0 && len(output) > 0 {
+		if unmarshalErr := json.Unmarshal([]byte(output), &items); unmarshalErr != nil {
+			return nil, fmt.Errorf("failed to parse GitHub JSON: %w", unmarshalErr)
+		}
 	}
 
 	var tasks []models.Task
 	for i, item := range items {
+		// Skip pull requests returned by /repos/{owner}/{repo}/issues API endpoint
+		if strings.Contains(item.URL, "/pull/") {
+			continue
+		}
+
 		var labels []string
 		for _, l := range item.Labels {
 			labels = append(labels, l.Name)
 		}
 
 		var status models.Status = models.StatusToClarify
-		for _, l := range labels {
-			low := strings.ToLower(l)
-			if strings.Contains(low, "clarif") {
-				status = models.StatusToSpecify
-			} else if strings.Contains(low, "specif") {
-				status = models.StatusToImplement
-			} else if strings.Contains(low, "progress") || strings.Contains(low, "implem") {
-				status = models.StatusToTest
-			} else if strings.Contains(low, "valid") || strings.Contains(low, "review") || strings.Contains(low, "test") {
-				status = models.StatusToClose
-			}
-		}
-		if strings.ToUpper(item.State) == "CLOSED" {
-			status = models.StatusToClose
+		if strings.EqualFold(item.State, "closed") {
+			status = models.StatusDone
 		}
 
 		assignee := ""
@@ -668,7 +683,37 @@ func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, er
 			assignee = item.Assignees[0].Login
 		}
 
-		extURL := item.URL
+		extURL := item.HTMLURL
+		if extURL == "" {
+			extURL = item.URL
+		}
+		if extURL == "" || strings.HasPrefix(extURL, "https://api.github.com/") {
+			if repo != "" {
+				extURL = fmt.Sprintf("https://github.com/%s/issues/%d", repo, item.Number)
+			}
+		}
+
+		sprint := ""
+		parentTitle := ""
+		parentKey := ""
+		if item.Milestone != nil && item.Milestone.Title != "" {
+			mTitle := item.Milestone.Title
+			if strings.HasPrefix(strings.ToLower(mTitle), "sprint") || strings.HasPrefix(strings.ToLower(mTitle), "s-") {
+				sprint = mTitle
+			} else {
+				parentTitle = mTitle
+				parentKey = fmt.Sprintf("M-%d", item.Milestone.Number)
+			}
+		}
+
+		for _, l := range labels {
+			low := strings.ToLower(l)
+			if strings.HasPrefix(low, "macro:") {
+				parentTitle = strings.TrimSpace(l[6:])
+			} else if strings.HasPrefix(low, "parent:") {
+				parentKey = strings.TrimSpace(l[7:])
+			}
+		}
 
 		tasks = append(tasks, models.Task{
 			ID:          fmt.Sprintf("gh-%d", item.Number),
@@ -680,6 +725,10 @@ func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, er
 			Labels:      labels,
 			Assignee:    assignee,
 			Position:    i,
+			Sprint:      sprint,
+			ParentKey:   parentKey,
+			ParentTitle: parentTitle,
+			ParentType:  "macro",
 			Source:      "github",
 			ExternalURL: &extURL,
 			CreatedAt:   time.Now(),
@@ -701,7 +750,7 @@ func (r *Runner) CreateGithubIssue(repo string, repoPath string, title string, d
 		ghPath = "gh"
 	}
 
-	// Filter internal workflow labels (like "New", "untouched") that don't exist as standard labels on GitHub repos
+	// Filter internal workflow labels (like "New", "untouched")
 	var filteredLabels []string
 	for _, l := range labels {
 		l = strings.TrimSpace(l)
@@ -710,57 +759,68 @@ func (r *Runner) CreateGithubIssue(repo string, repoPath string, title string, d
 		}
 	}
 
-	var args []string
-	if repo != "" {
-		args = []string{"issue", "create", "-R", repo, "--title", title}
-	} else {
-		args = []string{"issue", "create", "--title", title}
+	payload := map[string]interface{}{
+		"title": title,
+		"body":  description,
+	}
+	if len(filteredLabels) > 0 {
+		payload["labels"] = filteredLabels
 	}
 
-	if description != "" {
-		args = append(args, "--body", description)
-	} else {
-		args = append(args, "--body", "")
-	}
-	for _, l := range filteredLabels {
-		args = append(args, "--label", l)
-	}
-
-	output, err := r.runCommand(ctx, repoPath, ghPath, args...)
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		// Fallback retry without labels if a label doesn't exist on GitHub repo
-		fallbackArgs := []string{"issue", "create"}
-		if repo != "" {
-			fallbackArgs = append(fallbackArgs, "-R", repo)
-		}
-		fallbackArgs = append(fallbackArgs, "--title", title)
-		if description != "" {
-			fallbackArgs = append(fallbackArgs, "--body", description)
-		} else {
-			fallbackArgs = append(fallbackArgs, "--body", "")
-		}
-		retryOutput, retryErr := r.runCommand(ctx, repoPath, ghPath, fallbackArgs...)
-		if retryErr != nil {
-			return nil, fmt.Errorf("gh issue create failed: %w (output: %s)", err, output)
-		}
-		output = retryOutput
+		return nil, fmt.Errorf("failed to encode GitHub issue payload: %w", err)
 	}
 
-	// Extract issue URL and number via regex: https://github.com/owner/repo/issues/123
-	re := regexp.MustCompile(`https://github\.com/[^/\s]+/[^/\s]+/issues/(\d+)`)
-	matches := re.FindStringSubmatch(output)
-	var issueURL string
-	var issueNum string
+	tmpFile, tmpErr := os.CreateTemp("", "gh-create-*.json")
+	if tmpErr != nil {
+		return nil, fmt.Errorf("failed to create temporary payload file: %w", tmpErr)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
 
-	if len(matches) > 1 {
-		issueURL = matches[0]
-		issueNum = matches[1]
-	} else {
-		lines := strings.Split(strings.TrimSpace(output), "\n")
-		lastLine := strings.TrimSpace(lines[len(lines)-1])
-		issueURL = lastLine
-		parts := strings.Split(issueURL, "/")
-		issueNum = parts[len(parts)-1]
+	_, _ = tmpFile.Write(payloadBytes)
+	_ = tmpFile.Close()
+
+	endpoint := "repos/" + repo + "/issues"
+	output, err := r.runCommand(ctx, repoPath, ghPath, "api", "-X", "POST", endpoint, "--input", tmpPath)
+	if err != nil {
+		// Fallback to CLI issue create
+		var fallbackArgs []string
+		if repo != "" {
+			fallbackArgs = []string{"issue", "create", "-R", repo, "--title", title, "--body", description}
+		} else {
+			fallbackArgs = []string{"issue", "create", "--title", title, "--body", description}
+		}
+		for _, l := range filteredLabels {
+			fallbackArgs = append(fallbackArgs, "--label", l)
+		}
+		fallbackOutput, fallbackErr := r.runCommand(ctx, repoPath, ghPath, fallbackArgs...)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("gh issue create API failed: %w (output: %s)", err, output)
+		}
+		output = fallbackOutput
+	}
+
+	var res struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+		URL     string `json:"url"`
+	}
+	_ = json.Unmarshal([]byte(output), &res)
+
+	issueNum := strconv.Itoa(res.Number)
+	issueURL := res.HTMLURL
+	if issueURL == "" {
+		issueURL = res.URL
+	}
+	if issueNum == "0" {
+		re := regexp.MustCompile(`https://github\.com/[^/\s]+/[^/\s]+/issues/(\d+)`)
+		matches := re.FindStringSubmatch(output)
+		if len(matches) > 1 {
+			issueURL = matches[0]
+			issueNum = matches[1]
+		}
 	}
 
 	key := fmt.Sprintf("#%s", issueNum)
@@ -807,21 +867,39 @@ func (r *Runner) UpdateGithubIssueState(repo string, repoPath string, keyOrNumbe
 		ghPath = "gh"
 	}
 
-	var args []string
-	if status == models.StatusDone || status == models.StatusFinished || status == models.StatusToClose {
-		if repo != "" {
-			args = []string{"issue", "close", strconv.Itoa(num), "-R", repo}
-		} else {
-			args = []string{"issue", "close", strconv.Itoa(num)}
-		}
-	} else {
-		if repo != "" {
-			args = []string{"issue", "reopen", strconv.Itoa(num), "-R", repo}
-		} else {
-			args = []string{"issue", "reopen", strconv.Itoa(num)}
+	state := "open"
+	if status == models.StatusFinished || status == models.StatusDone || status == models.StatusToClose {
+		state = "closed"
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/issues/%d", repo, num)
+	payloadBytes, _ := json.Marshal(map[string]interface{}{
+		"state": state,
+	})
+
+	tmpFile, tmpErr := os.CreateTemp("", "gh-state-*.json")
+	if tmpErr == nil {
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath)
+		_, _ = tmpFile.Write(payloadBytes)
+		_ = tmpFile.Close()
+
+		_, err = r.runCommand(ctx, repoPath, ghPath, "api", "-X", "PATCH", endpoint, "--input", tmpPath)
+		if err == nil {
+			return nil
 		}
 	}
 
+	// Fallback to CLI
+	var args []string
+	if state == "closed" {
+		args = []string{"issue", "close", strconv.Itoa(num)}
+	} else {
+		args = []string{"issue", "reopen", strconv.Itoa(num)}
+	}
+	if repo != "" {
+		args = append(args, "-R", repo)
+	}
 	_, err = r.runCommand(ctx, repoPath, ghPath, args...)
 	return err
 }
@@ -842,198 +920,197 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 		ghPath = "gh"
 	}
 
-	// 1. Update State (close / reopen)
+	// 1. Update State if provided
 	if status != nil {
-		if *status == models.StatusFinished || *status == models.StatusDone || *status == models.StatusToClose {
-			var args []string
-			if repo != "" {
-				args = []string{"issue", "close", strconv.Itoa(num), "-R", repo}
-			} else {
-				args = []string{"issue", "close", strconv.Itoa(num)}
+		_ = r.UpdateGithubIssueState(repo, repoPath, keyOrNumber, *status)
+	}
+
+	// 2. Update issue via REST API (PATCH repos/{owner}/{repo}/issues/{issue_number})
+	payload := make(map[string]interface{})
+	if title != nil && *title != "" {
+		payload["title"] = *title
+	}
+	if description != nil {
+		payload["body"] = *description
+	}
+	if len(labels) > 0 {
+		var filtered []string
+		for _, l := range labels {
+			cleanL := strings.TrimPrefix(strings.TrimSpace(l), "#")
+			if cleanL != "" {
+				filtered = append(filtered, cleanL)
 			}
-			output, err := r.runCommand(ctx, repoPath, ghPath, args...)
-			if err != nil {
-				log.Printf("[CLI] gh issue close %d failed: %v (output: %s)", num, err, output)
-			} else {
-				log.Printf("[CLI] Closed GitHub issue #%d in %s", num, repo)
-			}
-		} else {
-			var args []string
-			if repo != "" {
-				args = []string{"issue", "reopen", strconv.Itoa(num), "-R", repo}
-			} else {
-				args = []string{"issue", "reopen", strconv.Itoa(num)}
-			}
-			output, err := r.runCommand(ctx, repoPath, ghPath, args...)
-			if err != nil {
-				log.Printf("[CLI] gh issue reopen %d failed: %v (output: %s)", num, err, output)
-			} else {
-				log.Printf("[CLI] Reopened GitHub issue #%d in %s", num, repo)
-			}
+		}
+		if len(filtered) > 0 {
+			payload["labels"] = filtered
 		}
 	}
 
-	// 2. Query existing labels so we only remove labels that actually exist on GitHub
-	existingLabelsMap := make(map[string]bool)
-	var viewArgs []string
-	if repo != "" {
-		viewArgs = []string{"issue", "view", strconv.Itoa(num), "-R", repo, "--json", "labels"}
-	} else {
-		viewArgs = []string{"issue", "view", strconv.Itoa(num), "--json", "labels"}
-	}
-	if viewOut, err := r.runCommand(ctx, repoPath, ghPath, viewArgs...); err == nil {
-		var viewRes struct {
-			Labels []struct {
-				Name string `json:"name"`
-			} `json:"labels"`
-		}
-		if err := json.Unmarshal([]byte(viewOut), &viewRes); err == nil {
-			for _, l := range viewRes.Labels {
-				existingLabelsMap[strings.ToLower(l.Name)] = true
+	if len(payload) > 0 {
+		payloadBytes, _ := json.Marshal(payload)
+		tmpFile, tmpErr := os.CreateTemp("", "gh-edit-*.json")
+		if tmpErr == nil {
+			tmpPath := tmpFile.Name()
+			defer os.Remove(tmpPath)
+			_, _ = tmpFile.Write(payloadBytes)
+			_ = tmpFile.Close()
+
+			endpoint := fmt.Sprintf("repos/%s/issues/%d", repo, num)
+			_, err := r.runCommand(ctx, repoPath, ghPath, "api", "-X", "PATCH", endpoint, "--input", tmpPath)
+			if err == nil {
+				return nil
 			}
+			log.Printf("[API] gh api PATCH %s failed: %v, falling back to CLI", endpoint, err)
 		}
 	}
 
-	// 3. Edit title, body & labels
+	// Fallback gh issue edit CLI call
 	var args []string
 	if repo != "" {
 		args = []string{"issue", "edit", strconv.Itoa(num), "-R", repo}
 	} else {
 		args = []string{"issue", "edit", strconv.Itoa(num)}
 	}
-	needEdit := false
+	baseArgsLen := len(args)
+
 	if title != nil && *title != "" {
 		args = append(args, "--title", *title)
-		needEdit = true
 	}
 	if description != nil {
 		args = append(args, "--body", *description)
-		needEdit = true
 	}
-
-	// Handle workflow stage labels
-	allStages := []string{"new", "untouched", "clarified", "specified", "implemented", "reviewed", "finished"}
-	var activeStage string
-	if len(labels) > 0 {
-		for _, l := range labels {
-			cleanL := strings.TrimPrefix(strings.ToLower(l), "#")
-			for _, st := range allStages {
-				if cleanL == st {
-					activeStage = st
-					break
-				}
-			}
-		}
-
-		if activeStage != "" {
-			args = append(args, "--add-label", activeStage)
-			for _, st := range allStages {
-				if st != activeStage && existingLabelsMap[st] {
-					args = append(args, "--remove-label", st)
-				}
-			}
-			needEdit = true
-		}
-
-		// Also add other non-workflow labels
-		for _, l := range labels {
-			cleanL := strings.TrimPrefix(strings.ToLower(l), "#")
-			isStage := false
-			for _, st := range allStages {
-				if cleanL == st {
-					isStage = true
-					break
-				}
-			}
-			if !isStage && cleanL != "" {
-				args = append(args, "--add-label", cleanL)
-				needEdit = true
-			}
+	for _, l := range labels {
+		cleanL := strings.TrimLeft(strings.TrimSpace(l), "#")
+		if cleanL != "" {
+			args = append(args, "--add-label", cleanL)
 		}
 	}
-
-	// Remove explicitly removed labels only if they exist on the issue
 	for _, rl := range removedLabels {
-		cleanRl := strings.TrimPrefix(strings.ToLower(rl), "#")
-		if cleanRl != "" && (len(existingLabelsMap) == 0 || existingLabelsMap[cleanRl]) {
-			args = append(args, "--remove-label", cleanRl)
-			needEdit = true
+		cleanRL := strings.TrimLeft(strings.TrimSpace(rl), "#")
+		if cleanRL != "" {
+			args = append(args, "--remove-label", cleanRL)
 		}
 	}
 
-	if needEdit {
+	// Only invoke gh issue edit if there are actual fields/flags to edit
+	if len(args) > baseArgsLen {
 		output, err := r.runCommand(ctx, repoPath, ghPath, args...)
 		if err != nil {
-			log.Printf("[CLI] gh issue edit #%d failed: %v (output: %s), retrying without --remove-label...", num, err, output)
-			// Fallback: Retry without --remove-label flags
-			var fallbackArgs []string
-			if repo != "" {
-				fallbackArgs = []string{"issue", "edit", strconv.Itoa(num), "-R", repo}
-			} else {
-				fallbackArgs = []string{"issue", "edit", strconv.Itoa(num)}
-			}
-			if title != nil && *title != "" {
-				fallbackArgs = append(fallbackArgs, "--title", *title)
-			}
-			if description != nil {
-				fallbackArgs = append(fallbackArgs, "--body", *description)
-			}
-			if activeStage != "" {
-				fallbackArgs = append(fallbackArgs, "--add-label", activeStage)
-			}
-			if out2, err2 := r.runCommand(ctx, repoPath, ghPath, fallbackArgs...); err2 == nil {
-				log.Printf("[CLI] Successfully updated GitHub issue #%d in %s (fallback)", num, repo)
-			} else {
-				log.Printf("[CLI] Fallback gh issue edit #%d also failed: %v (output: %s)", num, err2, out2)
-				// Self-healing: if label was not found in repo, create it and retry
-				if activeStage != "" && (strings.Contains(output, "not found") || strings.Contains(out2, "not found")) {
-					labelColor := "1d76db"
-					switch activeStage {
-					case "new", "untouched":
-						labelColor = "0075ca"
-					case "clarified":
-						labelColor = "fbca04"
-					case "specified":
-						labelColor = "1d76db"
-					case "implemented":
-						labelColor = "5319e7"
-					case "reviewed":
-						labelColor = "6f42c1"
-					case "finished":
-						labelColor = "0e8a16"
-					}
-					var createArgs []string
-					if repo != "" {
-						createArgs = []string{"label", "create", activeStage, "--color", labelColor, "-R", repo}
-					} else {
-						createArgs = []string{"label", "create", activeStage, "--color", labelColor}
-					}
-					_, _ = r.runCommand(ctx, repoPath, ghPath, createArgs...)
-					if _, err3 := r.runCommand(ctx, repoPath, ghPath, fallbackArgs...); err3 == nil {
-						log.Printf("[CLI] Successfully updated GitHub issue #%d in %s after creating label '%s'", num, repo, activeStage)
-					} else {
-						// Final fallback: update title & body only without labels
-						var bodyOnlyArgs []string
-						if repo != "" {
-							bodyOnlyArgs = []string{"issue", "edit", strconv.Itoa(num), "-R", repo}
-						} else {
-							bodyOnlyArgs = []string{"issue", "edit", strconv.Itoa(num)}
-						}
-						if title != nil && *title != "" {
-							bodyOnlyArgs = append(bodyOnlyArgs, "--title", *title)
-						}
-						if description != nil {
-							bodyOnlyArgs = append(bodyOnlyArgs, "--body", *description)
-						}
-						_, _ = r.runCommand(ctx, repoPath, ghPath, bodyOnlyArgs...)
-					}
-				}
-			}
-		} else {
-			log.Printf("[CLI] Successfully updated GitHub issue #%d in %s", num, repo)
+			return fmt.Errorf("gh issue edit failed: %w (output: %s)", err, output)
 		}
 	}
+	return nil
+}
 
+// -------------------------------------------------------------
+// GITHUB MILESTONES (MACROS) INTEGRATION
+// -------------------------------------------------------------
+
+type GithubMilestoneItem struct {
+	Number      int    `json:"number"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	State       string `json:"state"`
+}
+
+func (r *Runner) CreateGithubMilestone(repo string, repoPath string, title string, description string) (int, error) {
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/milestones", repo)
+	output, err := r.runCommand(ctx, repoPath, ghPath, "api", endpoint, "-X", "POST", "-f", "title="+title, "-f", "description="+description)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create GitHub milestone: %w (output: %s)", err, output)
+	}
+
+	var res struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal([]byte(output), &res); err != nil {
+		return 0, nil
+	}
+	return res.Number, nil
+}
+
+func (r *Runner) DeleteGithubMilestone(repo string, repoPath string, milestoneNumber int) error {
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/milestones/%d", repo, milestoneNumber)
+	output, err := r.runCommand(ctx, repoPath, ghPath, "api", endpoint, "-X", "DELETE")
+	if err != nil {
+		return fmt.Errorf("failed to delete GitHub milestone: %w (output: %s)", err, output)
+	}
+	return nil
+}
+
+func (r *Runner) ListGithubMilestones(repo string, repoPath string) ([]GithubMilestoneItem, error) {
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/milestones?state=all&per_page=100", repo)
+	output, err := r.runCommand(ctx, repoPath, ghPath, "api", endpoint, "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list GitHub milestones: %w (output: %s)", err, output)
+	}
+
+	var items []GithubMilestoneItem
+	dec := json.NewDecoder(strings.NewReader(output))
+	for dec.More() {
+		var page []GithubMilestoneItem
+		if err := dec.Decode(&page); err != nil {
+			break
+		}
+		items = append(items, page...)
+	}
+	if len(items) == 0 && len(output) > 0 {
+		_ = json.Unmarshal([]byte(output), &items)
+	}
+	return items, nil
+}
+
+func (r *Runner) SetGithubIssueMilestone(repo string, repoPath string, issueNumber int, milestoneTitleOrNumber string) error {
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
+	}
+
+	var args []string
+	if strings.TrimSpace(milestoneTitleOrNumber) == "" {
+		args = []string{"issue", "edit", fmt.Sprintf("%d", issueNumber), "-R", repo, "--milestone", ""}
+	} else {
+		args = []string{"issue", "edit", fmt.Sprintf("%d", issueNumber), "-R", repo, "--milestone", strings.TrimSpace(milestoneTitleOrNumber)}
+	}
+	output, err := r.runCommand(ctx, repoPath, ghPath, args...)
+	if err != nil {
+		return fmt.Errorf("failed to set GitHub issue milestone: %w (output: %s)", err, output)
+	}
 	return nil
 }
 
@@ -1069,7 +1146,7 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	if source == "linear" {
@@ -1095,29 +1172,28 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 		if err != nil {
 			return fmt.Errorf("invalid github issue number: %s", key)
 		}
-		cleanNum := strconv.Itoa(num)
 
-		tmpFile, tmpErr := os.CreateTemp("", "gh-comment-*.md")
+		payloadBytes, _ := json.Marshal(map[string]string{
+			"body": body,
+		})
+
+		tmpFile, tmpErr := os.CreateTemp("", "gh-comment-*.json")
 		if tmpErr == nil {
 			tmpPath := tmpFile.Name()
 			defer os.Remove(tmpPath)
-			_, _ = tmpFile.WriteString(body)
+			_, _ = tmpFile.Write(payloadBytes)
 			_ = tmpFile.Close()
 
-			var args []string
-			if repo != "" {
-				args = []string{"issue", "comment", cleanNum, "-R", repo, "--body-file", tmpPath}
-			} else {
-				args = []string{"issue", "comment", cleanNum, "--body-file", tmpPath}
-			}
-			output, err := r.runCommand(ctx, repoPath, ghPath, args...)
+			endpoint := fmt.Sprintf("repos/%s/issues/%d/comments", repo, num)
+			output, err := r.runCommand(ctx, repoPath, ghPath, "api", "-X", "POST", endpoint, "--input", tmpPath)
 			if err == nil {
-				log.Printf("[CLI] Comment added to GitHub %s: %s", key, strings.TrimSpace(output))
+				log.Printf("[API] Comment added to GitHub %s via REST API: %s", key, strings.TrimSpace(output))
 				return nil
 			}
-			log.Printf("[CLI] gh issue comment --body-file failed: %v (output: %s), trying direct --body flag...", err, output)
+			log.Printf("[API] gh api comment failed: %v (output: %s), falling back to CLI...", err, output)
 		}
 
+		cleanNum := strconv.Itoa(num)
 		var args []string
 		if repo != "" {
 			args = []string{"issue", "comment", cleanNum, "-R", repo, "--body", body}
@@ -1272,7 +1348,7 @@ func (r *Runner) PrepareAI(settings *models.Settings, skillID string, task *mode
 		promptTemplate = settings.PromptSpecify
 		if promptTemplate == "" {
 			if NormalizeSpecFramework(settings.SpecFramework) == "openspec" {
-				promptTemplate = `Tu es le Lead Architecte pour Taskacao. Rédige une proposition de changement OpenSpec complète pour la tâche :
+				promptTemplate = `Tu es le Lead Architecte pour TaskFlow. Rédige une proposition de changement OpenSpec complète pour la tâche :
 Clé : {issueKey}
 Titre : {issueTitle}
 Description : {issueDesc}
@@ -1289,7 +1365,7 @@ openspec/changes/{issueKey}-<titre-slug>/ :
 
 Si le répertoire openspec/ est absent, signale-le au lieu de deviner la structure.`
 			} else {
-				promptTemplate = `Tu es le Product Owner & Architecte technique pour Taskacao. Rédige une spécification GitHub Spec Kit complète pour la tâche :
+				promptTemplate = `Tu es le Product Owner & Architecte technique pour TaskFlow. Rédige une spécification GitHub Spec Kit complète pour la tâche :
 Clé : {issueKey}
 Titre : {issueTitle}
 Description : {issueDesc}
@@ -1309,7 +1385,7 @@ clarifier au lieu de les deviner.`
 	case "implement":
 		promptTemplate = settings.PromptImplement
 		if promptTemplate == "" {
-			promptTemplate = `Tu es le développeur senior autonome pour Taskacao. Tu dois IMPLÉMENTER ET ÉCRIRE DIRECTEMENT les modifications de code dans le projet ({repoPath}) pour accomplir cette tâche.
+			promptTemplate = `Tu es le développeur senior autonome pour TaskFlow. Tu dois IMPLÉMENTER ET ÉCRIRE DIRECTEMENT les modifications de code dans le projet ({repoPath}) pour accomplir cette tâche.
 
 Contexte de la tâche :
 Clé : {issueKey}
@@ -1327,7 +1403,7 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 	case "create_pr":
 		promptTemplate = settings.PromptCreatePR
 		if promptTemplate == "" {
-			promptTemplate = `Tu es l'ingénieur DevOps & Release pour Taskacao. Tu dois finaliser la tâche, commiter et créer la Pull Request ou effectuer la fusion (merge) locale :
+			promptTemplate = `Tu es l'ingénieur DevOps & Release pour TaskFlow. Tu dois finaliser la tâche, commiter et créer la Pull Request ou effectuer la fusion (merge) locale :
 Clé : {issueKey}
 Titre : {issueTitle}
 Description : {issueDesc}
@@ -1346,7 +1422,7 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 5. Fournis un compte-rendu clair de l'action réalisée (Pull Request créée ou Merge local effectué sur la branche principale).`
 		}
 	case "handoff":
-		promptTemplate = `Tu es responsable de la clôture propre de la tâche pour Taskacao. Le code a été revu et fusionné : il reste à documenter le handoff et à nettoyer.
+		promptTemplate = `Tu es responsable de la clôture propre de la tâche pour TaskFlow. Le code a été revu et fusionné : il reste à documenter le handoff et à nettoyer.
 
 Clé : {issueKey}
 Titre : {issueTitle}
@@ -1363,7 +1439,7 @@ INSTRUCTIONS D'EXÉCUTION OBLIGATOIRES :
 	case "pick":
 		promptTemplate = settings.PromptPick
 		if promptTemplate == "" {
-			promptTemplate = "Tu es le routeur d'orchestration pour Taskacao. Analyse l'état de la tâche {issueKey} ({issueTitle}) et détermine la prochaine action requise dans le cycle SDLC."
+			promptTemplate = "Tu es le routeur d'orchestration pour TaskFlow. Analyse l'état de la tâche {issueKey} ({issueTitle}) et détermine la prochaine action requise dans le cycle SDLC."
 		}
 	}
 
@@ -2021,7 +2097,7 @@ func (r *Runner) SessionCommandLine(inv *AIInvocation) (string, func(), error) {
 		return "", func() {}, fmt.Errorf("invocation vide")
 	}
 
-	f, err := os.CreateTemp("", "taskacao-prompt-*.md")
+	f, err := os.CreateTemp("", "taskflow-prompt-*.md")
 	if err != nil {
 		return "", func() {}, err
 	}

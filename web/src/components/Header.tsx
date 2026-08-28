@@ -127,7 +127,7 @@ export const Header: React.FC = () => {
           )}
           {labelFilter && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shrink-0">
-              #{labelFilter}
+              #{labelFilter.replace(/^#+/, '')}
               <button onClick={() => setLabelFilter(null)} className="hover:opacity-75 cursor-pointer">
                 <X size={11} />
               </button>

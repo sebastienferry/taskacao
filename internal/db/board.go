@@ -1,11 +1,14 @@
 package db
 
 import (
+	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
 	"tasks/internal/models"
+	"tasks/internal/runner"
 )
 
 // Board columns are Jira-like: a column is a name plus the tracker statuses it
@@ -67,44 +70,133 @@ func (d *DB) GetProjectTrackerStatuses(projectID string) ([]string, error) {
 		return nil, fmt.Errorf("projet non trouvé")
 	}
 
-	d.mu.RLock()
-	rows, err := d.conn.Query(`
-		SELECT DISTINCT tracker_status FROM tasks
-		WHERE tracker_status != ''
-		  AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))
-		ORDER BY tracker_status ASC
-	`, proj.ID, proj.ID, proj.ID)
-	d.mu.RUnlock()
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	seen := map[string]bool{}
 	out := []string{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			continue
+
+	// If GitHub tracker, query GitHub ProjectsV2 columns / SingleSelectField options via GraphQL API
+	if proj.IssueTracker == "github" {
+		repo, repoPath := runner.ResolveGithubRepo(proj.GithubRepo, proj.RepoPath)
+		if repo != "" {
+			ghPath, _ := runner.FindCliTool("gh")
+			if ghPath == "" {
+				ghPath = "gh"
+			}
+
+			parts := strings.Split(repo, "/")
+			if len(parts) == 2 {
+				owner, repoName := parts[0], parts[1]
+				gqlQuery := fmt.Sprintf(`query {
+				  repository(owner: "%s", name: "%s") {
+				    projectsV2(first: 5) {
+				      nodes {
+				        title
+				        fields(first: 20) {
+				          nodes {
+				            ... on ProjectV2SingleSelectField {
+				              name
+				              options { name }
+				            }
+				          }
+				        }
+				      }
+				    }
+				  }
+				  user(login: "%s") {
+				    projectsV2(first: 5) {
+				      nodes {
+				        title
+				        fields(first: 20) {
+				          nodes {
+				            ... on ProjectV2SingleSelectField {
+				              name
+				              options { name }
+				            }
+				          }
+				        }
+				      }
+				    }
+				  }
+				}`, owner, repoName, owner)
+
+				cmd := exec.Command(ghPath, "api", "graphql", "-f", "query="+gqlQuery)
+				if repoPath != "" {
+					cmd.Dir = repoPath
+				}
+				if output, err := cmd.Output(); err == nil {
+					var gqlRes struct {
+						Data struct {
+							Repository struct {
+								ProjectsV2 struct {
+									Nodes []struct {
+										Fields struct {
+											Nodes []struct {
+												Name    string `json:"name"`
+												Options []struct {
+													Name string `json:"name"`
+												} `json:"options"`
+											} `json:"nodes"`
+										} `json:"fields"`
+									} `json:"nodes"`
+								} `json:"projectsV2"`
+							} `json:"repository"`
+							User struct {
+								ProjectsV2 struct {
+									Nodes []struct {
+										Fields struct {
+											Nodes []struct {
+												Name    string `json:"name"`
+												Options []struct {
+													Name string `json:"name"`
+												} `json:"options"`
+											} `json:"nodes"`
+										} `json:"fields"`
+									} `json:"nodes"`
+								} `json:"projectsV2"`
+							} `json:"user"`
+						} `json:"data"`
+					}
+					if json.Unmarshal(output, &gqlRes) == nil {
+						allProjects := append(gqlRes.Data.Repository.ProjectsV2.Nodes, gqlRes.Data.User.ProjectsV2.Nodes...)
+						for _, pNode := range allProjects {
+							for _, fNode := range pNode.Fields.Nodes {
+								if strings.EqualFold(fNode.Name, "Status") || strings.EqualFold(fNode.Name, "Statut") || len(fNode.Options) > 0 {
+									for _, opt := range fNode.Options {
+										name := strings.TrimSpace(opt.Name)
+										if name != "" && !seen[strings.ToLower(name)] {
+											seen[strings.ToLower(name)] = true
+											out = append(out, name)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 		}
-		name = strings.TrimSpace(name)
-		if name == "" || seen[name] {
-			continue
+
+		// Standard GitHub states if no board columns were found
+		if len(out) == 0 {
+			for _, s := range []string{"open", "closed"} {
+				if !seen[s] {
+					seen[s] = true
+					out = append(out, s)
+				}
+			}
 		}
-		seen[name] = true
-		out = append(out, name)
+	} else if proj.IssueTracker == "linear" && proj.LinearTeam != "" {
+		tasks, err := d.runner.SyncFromLinear(proj.LinearTeam)
+		if err == nil && len(tasks) > 0 {
+			for _, t := range tasks {
+				st := strings.TrimSpace(string(t.Status))
+				if st != "" && !seen[strings.ToLower(st)] {
+					seen[strings.ToLower(st)] = true
+					out = append(out, st)
+				}
+			}
+		}
 	}
 
-	for _, col := range proj.TrackerColumns {
-		for _, name := range col.Statuses {
-			name = strings.TrimSpace(name)
-			if name == "" || seen[name] {
-				continue
-			}
-			seen[name] = true
-			out = append(out, name)
-		}
-	}
 	return out, nil
 }
 
@@ -124,18 +216,30 @@ func (d *DB) MoveTaskToTrackerStatus(taskIDOrKey string, statusName string) (*mo
 		return nil, nil, fmt.Errorf("tâche non trouvée")
 	}
 
-	source := task.Source
-	if source == "" && task.ProjectID != "" {
-		if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
-			source = proj.IssueTracker
-		}
+	proj, _ := d.GetProjectByID(task.ProjectID)
+
+	// Determine workflow stage for this status/column
+	targetStage := ""
+	if proj != nil {
+		targetStage = StageForTrackerStatus(proj, statusName)
 	}
-	if source != "jira" {
-		return nil, nil, fmt.Errorf("le déplacement par colonne de tracker n'est disponible que sur un ticket Jira")
+	if targetStage == "" {
+		targetStage = GetStageLabelForStatus(models.Status(statusName))
+	}
+	if targetStage == "" {
+		targetStage = "new"
+	}
+
+	newLabels := SetWorkflowLabel(task.Labels, "#"+strings.TrimPrefix(targetStage, "#"))
+	labelsJSON, _ := json.Marshal(newLabels)
+
+	newStatus := task.Status
+	if internalSt, ok := InternalStatusForStage(targetStage); ok {
+		newStatus = internalSt
 	}
 
 	d.mu.Lock()
-	_, execErr := d.conn.Exec("UPDATE tasks SET tracker_status = ?, updated_at = ? WHERE id = ?", statusName, time.Now(), task.ID)
+	_, execErr := d.conn.Exec("UPDATE tasks SET tracker_status = ?, labels = ?, status = ?, updated_at = ? WHERE id = ?", statusName, string(labelsJSON), string(newStatus), time.Now(), task.ID)
 	d.mu.Unlock()
 	if execErr != nil {
 		return nil, nil, execErr
@@ -197,6 +301,10 @@ func StageForTrackerStatus(proj *models.Project, trackerStatus string) string {
 	}
 	column := ""
 	for _, col := range proj.TrackerColumns {
+		if strings.ToLower(col.Name) == trackerStatus {
+			column = col.Name
+			break
+		}
 		for _, st := range col.Statuses {
 			if strings.ToLower(st) == trackerStatus {
 				column = col.Name
@@ -208,18 +316,25 @@ func StageForTrackerStatus(proj *models.Project, trackerStatus string) string {
 		}
 	}
 	if column == "" {
-		return ""
+		// Fallback: check if trackerStatus matches a stage name directly
+		for _, stage := range workflowStageOrder {
+			if stage == trackerStatus || "#"+stage == trackerStatus {
+				return stage
+			}
+		}
+		// Fallback to keyword matching via GetStageLabelForStatus
+		return GetStageLabelForStatus(models.Status(trackerStatus))
 	}
 	// Plusieurs étapes sur une colonne : la moins avancée, celle qui reste à
 	// faire, comme côté interface.
 	for _, stage := range workflowStageOrder {
 		for _, name := range proj.StageColumns[stage] {
-			if name == column {
+			if strings.EqualFold(name, column) || strings.EqualFold(name, trackerStatus) {
 				return stage
 			}
 		}
 	}
-	return ""
+	return GetStageLabelForStatus(models.Status(trackerStatus))
 }
 
 // TrackerStatusForStage returns the tracker status a workflow stage lands on:

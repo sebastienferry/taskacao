@@ -21,13 +21,26 @@ export const WORKFLOW_ORDER: WorkflowStage[] = [
 
 /** Étape déduite des labels, puis du statut interne en repli. */
 export const stageFromLabels = (task: Task): WorkflowStage => {
-  const labels = (task.labels || []).map(l => l.toLowerCase())
+  const labels = (task.labels || []).map(l => l.toLowerCase().replace(/^#+/, ''))
   if (labels.includes('finished') || labels.includes('closed') || labels.includes('done')) return 'finished'
   if (labels.includes('reviewed')) return 'reviewed'
   if (labels.includes('implemented')) return 'implemented'
   if (labels.includes('specified')) return 'specified'
   if (labels.includes('clarified')) return 'clarified'
   if (labels.includes('new') || labels.includes('untouched')) return 'new'
+
+  // Match labels that contain keywords
+  if (labels.some(l => l.includes('progress') || l.includes('code') || l.includes('implement'))) return 'specified'
+  if (labels.some(l => l.includes('test') || l.includes('validat') || l.includes('qa'))) return 'implemented'
+  if (labels.some(l => l.includes('review') || l.includes('pr') || l.includes('mr'))) return 'reviewed'
+
+  const trackerSt = (task.trackerStatus || '').toLowerCase()
+  if (trackerSt === 'closed' || trackerSt === 'done' || trackerSt === 'terminé' || trackerSt === 'finished') return 'finished'
+  if (trackerSt.includes('review') || trackerSt.includes('pr')) return 'reviewed'
+  if (trackerSt.includes('test') || trackerSt.includes('validat')) return 'implemented'
+  if (trackerSt.includes('progress') || trackerSt.includes('code') || trackerSt.includes('implement')) return 'specified'
+  if (trackerSt.includes('specify') || trackerSt.includes('spec')) return 'clarified'
+  if (trackerSt === 'open' && (task.status === 'to_clarify' || !task.status)) return 'new'
 
   if (task.status === 'finished' || task.status === 'done') return 'finished'
   if (task.status === 'to_close') return 'reviewed'
@@ -42,7 +55,8 @@ export const columnOfTask = (task: Task, project?: Project | null): string | nul
   const status = (task.trackerStatus || '').toLowerCase()
   if (!status || !project?.trackerColumns?.length) return null
   const column = project.trackerColumns.find(col =>
-    col.statuses.some(st => st.toLowerCase() === status)
+    col.name.toLowerCase() === status ||
+    (col.statuses && col.statuses.some(st => st.toLowerCase() === status))
   )
   return column?.name || null
 }
@@ -62,9 +76,26 @@ export const stageFromColumn = (task: Task, project?: Project | null): WorkflowS
   return null
 }
 
-/** Étape retenue : la colonne d'abord, les labels en repli. */
+/**
+ * Étape retenue : les labels de workflow d'abord quand un label explicite est présent,
+ * puis la colonne du board quand le projet est configuré, puis le statut/mots-clés en repli.
+ */
 export const resolveTaskStage = (task: Task, project?: Project | null): WorkflowStage => {
-  return stageFromColumn(task, project) || stageFromLabels(task)
+  // 1. Les labels de workflow explicites ont priorité absolue dans la vue agentique
+  const labels = (task.labels || []).map(l => l.toLowerCase().replace(/^#+/, ''))
+  if (labels.includes('finished') || labels.includes('closed') || labels.includes('done')) return 'finished'
+  if (labels.includes('reviewed')) return 'reviewed'
+  if (labels.includes('implemented')) return 'implemented'
+  if (labels.includes('specified')) return 'specified'
+  if (labels.includes('clarified')) return 'clarified'
+  if (labels.includes('new') || labels.includes('untouched')) return 'new'
+
+  // 2. Colonne du board configurée pour le projet si pas de label explicite
+  const colStage = stageFromColumn(task, project)
+  if (colStage) return colStage
+
+  // 3. Repli sur les mots-clés de labels et le statut
+  return stageFromLabels(task)
 }
 
 /**

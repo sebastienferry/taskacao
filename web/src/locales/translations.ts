@@ -377,7 +377,7 @@ export interface TranslationSchema {
 export const translations: Record<'fr' | 'en', TranslationSchema> = {
   fr: {
     app: {
-      title: 'Taskacao',
+      title: 'TaskFlow',
       tagline: 'Gestionnaire de tâches agentique',
     },
     nav: {
@@ -390,7 +390,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       done: 'Terminé',
       views: 'Vues',
       board: 'Tableau Kanban',
-      list: 'Vue Liste',
+      list: 'Backlog',
       activities: 'Activités',
       sync: 'Synchronisation',
       filters: 'Filtres rapides',
@@ -751,7 +751,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
   },
   en: {
     app: {
-      title: 'Taskacao',
+      title: 'TaskFlow',
       tagline: 'Agentic Task Workflow Manager',
     },
     nav: {
@@ -764,7 +764,7 @@ export const translations: Record<'fr' | 'en', TranslationSchema> = {
       done: 'Done',
       views: 'Views',
       board: 'Kanban Board',
-      list: 'List View',
+      list: 'Backlog',
       activities: 'Activities',
       sync: 'Synchronization',
       filters: 'Quick Filters',

@@ -459,7 +459,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
               key={lbl}
               className="text-[9.5px] px-1.5 py-0.2 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)] border border-[var(--border-color)]/70 font-mono"
             >
-              #{lbl}
+              #{lbl.replace(/^#+/, '')}
             </span>
           ))}
           {task.labels && task.labels.length > 2 && (

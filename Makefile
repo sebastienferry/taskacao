@@ -19,11 +19,11 @@ build:
 	cd web && npm run build
 	@touch internal/webui/dist/.gitkeep
 	@echo "Building binary with the interface embedded..."
-	go build -o bin/taskacao ./cmd/server
-	@echo "Done: bin/taskacao"
+	go build -o bin/taskflow ./cmd/server
+	@echo "Done: bin/taskflow"
 
 run: build
-	./bin/taskacao
+	./bin/taskflow
 
 test:
 	go test ./internal/...
@@ -38,7 +38,7 @@ release:
 	@mkdir -p dist
 	@for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
-		out=dist/taskacao-$$os-$$arch; \
+		out=dist/taskflow-$$os-$$arch; \
 		if [ "$$os" = "windows" ]; then out=$$out.exe; fi; \
 		echo "  $$os/$$arch"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w" -o $$out ./cmd/server || exit 1; \
@@ -51,12 +51,16 @@ release:
 # rejouant son journal.
 reset-db:
 	rm -f tasks.db tasks.db-wal tasks.db-shm
+	rm -f "$${HOME}/Library/Application Support/taskflow/tasks.db" \
+	      "$${HOME}/Library/Application Support/taskflow/tasks.db-wal" \
+	      "$${HOME}/Library/Application Support/taskflow/tasks.db-shm"
 	rm -f "$${HOME}/Library/Application Support/taskacao/tasks.db" \
 	      "$${HOME}/Library/Application Support/taskacao/tasks.db-wal" \
 	      "$${HOME}/Library/Application Support/taskacao/tasks.db-shm"
-	@echo "Bases supprimées : répertoire courant et dossier de données."
+	@echo "Bases supprimées : répertoire courant et dossiers de données."
 
 clean:
 	rm -rf bin/ dist/ web/dist
 	rm -rf internal/webui/dist
 	@mkdir -p internal/webui/dist && touch internal/webui/dist/.gitkeep
+

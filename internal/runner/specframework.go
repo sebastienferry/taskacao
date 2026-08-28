@@ -15,7 +15,7 @@ import (
 // SPEC-DRIVEN DESIGN TOOLCHAIN INSTALLERS (Spec Kit / OpenSpec)
 // -------------------------------------------------------------
 //
-// Taskacao supports two Spec-Driven Design frameworks:
+// TaskFlow supports two Spec-Driven Design frameworks:
 //
 //   - speckit  : GitHub Spec Kit, a Python CLI named 'specify' distributed from
 //                git+https://github.com/github/spec-kit.git and normally run
@@ -59,7 +59,7 @@ func NormalizeSpecFramework(framework string) string {
 	}
 }
 
-// specKitIntegration maps a Taskacao AI provider onto the value accepted by
+// specKitIntegration maps a TaskFlow AI provider onto the value accepted by
 // `specify init --integration`. Spec Kit's own non-interactive default is
 // copilot, so that is the fallback for providers it does not know (including
 // the "custom" shell-template provider).
@@ -84,7 +84,7 @@ func specKitIntegration(aiAgent string) string {
 	}
 }
 
-// openSpecTools maps a Taskacao AI provider onto the value accepted by
+// openSpecTools maps a TaskFlow AI provider onto the value accepted by
 // `openspec init --tools`. This flag is what makes the initializer
 // non-interactive, so it is always passed.
 func openSpecTools(aiAgent string) string {

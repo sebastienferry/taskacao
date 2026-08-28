@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { BoardView } from './components/BoardView'
 import { ListView } from './components/ListView'
+import { TriageView } from './components/TriageView'
 import { RoadmapView } from './components/RoadmapView'
 import { TeamView } from './components/TeamView'
 import { TrackerSetup } from './components/TrackerSetup'
@@ -57,6 +58,8 @@ const MainContent: React.FC = () => {
               <BoardView />
             ) : activeView === 'list' ? (
               <ListView />
+            ) : activeView === 'triage' ? (
+              <TriageView />
             ) : activeView === 'roadmap' ? (
               <RoadmapView />
             ) : activeView === 'team' ? (

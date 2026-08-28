@@ -10,7 +10,7 @@ répertoire `specs/` du projet.
 
 ## Pré-requis
 Le projet doit être initialisé avec Spec Kit (répertoire `.specify/` présent).
-Sinon, lancer l'installation Spec Kit depuis la configuration du projet Taskacao,
+Sinon, lancer l'installation Spec Kit depuis la configuration du projet TaskFlow,
 ou exécuter `specify init --here` à la racine du dépôt.
 
 ## Instructions

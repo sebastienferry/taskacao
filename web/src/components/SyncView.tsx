@@ -30,13 +30,9 @@ export const SyncView: React.FC = () => {
     setActiveView,
     settings,
     updateSettings,
-    syncLinear,
-    syncGithub,
-    syncJira,
     syncCurrentProject,
     isSyncing,
     activeJobCount,
-    refreshTasks,
     t,
   } = useApp()
 
@@ -189,12 +185,12 @@ export const SyncView: React.FC = () => {
               <Zap size={14} className={isSyncing ? 'animate-spin' : ''} />
               <span>
                 {activeTracker === 'linear'
-                  ? `Synchroniser Linear (${currentProject?.linearTeam || 'Projet'})`
+                  ? 'Synchroniser Linear'
                   : activeTracker === 'github'
-                  ? `Synchroniser GitHub (${currentProject?.githubRepo || 'Projet'})`
+                  ? 'Synchroniser GitHub'
                   : activeTracker === 'jira'
-                  ? `Synchroniser Jira (${currentProject?.jiraProject || 'Projet'})`
-                  : 'Recharger tâches locales'}
+                  ? 'Synchroniser Jira'
+                  : 'Recharger les tâches'}
               </span>
             </button>
           </div>
@@ -279,31 +275,6 @@ export const SyncView: React.FC = () => {
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
               Synchronise les tickets assignés à l'équipe Linear de ce projet. Les nouvelles issues, changements de statut et commentaires sont synchronisés automatiquement.
             </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end pt-2">
-              <div className="sm:col-span-2">
-                <label className="block text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                  Équipe Linear pour ce projet
-                </label>
-                <input
-                  type="text"
-                  value={customLinearTeam}
-                  onChange={e => setCustomLinearTeam(e.target.value.toUpperCase())}
-                  placeholder="Ex: ENG, DEV, PROD"
-                  className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all uppercase"
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={() => syncLinear(customLinearTeam)}
-                disabled={isSyncing}
-                className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition-all disabled:opacity-50 shadow-xs cursor-pointer h-[34px]"
-              >
-                <RefreshCw size={13} className={isSyncing ? 'animate-spin' : ''} />
-                <span>Synchroniser Linear</span>
-              </button>
-            </div>
           </div>
         )}
 
@@ -332,31 +303,6 @@ export const SyncView: React.FC = () => {
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
               Synchronise les issues ouvertes et Pull Requests du dépôt GitHub associé à ce projet via la CLI GitHub officielle.
             </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end pt-2">
-              <div className="sm:col-span-2">
-                <label className="block text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                  Dépôt GitHub (owner/repo)
-                </label>
-                <input
-                  type="text"
-                  value={customGithubRepo}
-                  onChange={e => setCustomGithubRepo(e.target.value)}
-                  placeholder="Ex: owner/nom-du-depot"
-                  className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-purple-500 transition-all"
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={() => syncGithub(customGithubRepo)}
-                disabled={isSyncing}
-                className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white transition-all disabled:opacity-50 shadow-xs cursor-pointer h-[34px]"
-              >
-                <RefreshCw size={13} className={isSyncing ? 'animate-spin' : ''} />
-                <span>Synchroniser GitHub</span>
-              </button>
-            </div>
           </div>
         )}
 
@@ -385,31 +331,6 @@ export const SyncView: React.FC = () => {
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
               Synchronise les tickets et anomalies de votre projet Jira via la CLI Atlassian (acli).
             </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end pt-2">
-              <div className="sm:col-span-2">
-                <label className="block text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                  Clé du projet Jira
-                </label>
-                <input
-                  type="text"
-                  value={customJiraKey}
-                  onChange={e => setCustomJiraKey(e.target.value.toUpperCase())}
-                  placeholder="Ex: PROJ, CORE"
-                  className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-blue-500 transition-all uppercase"
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={() => syncJira(customJiraKey)}
-                disabled={isSyncing}
-                className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white transition-all disabled:opacity-50 shadow-xs cursor-pointer h-[34px]"
-              >
-                <RefreshCw size={13} className={isSyncing ? 'animate-spin' : ''} />
-                <span>Synchroniser Jira</span>
-              </button>
-            </div>
           </div>
         )}
 
@@ -438,20 +359,6 @@ export const SyncView: React.FC = () => {
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
               Ce projet est configuré pour fonctionner exclusivement en local. Les tâches, spécifications et activités sont stockées directement dans la base SQLite locale sans dépendance à un service externe.
             </p>
-
-            <div className="flex items-center justify-between pt-2">
-              <span className="text-xs text-[var(--text-muted)]">
-                Vous pouvez recharger les tâches depuis SQLite ou connecter un gestionnaire distant ci-dessous.
-              </span>
-              <button
-                type="button"
-                onClick={() => refreshTasks()}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-all cursor-pointer shadow-xs"
-              >
-                <RefreshCw size={13} />
-                <span>Recharger les tâches</span>
-              </button>
-            </div>
           </div>
         )}
 

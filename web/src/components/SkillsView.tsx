@@ -185,7 +185,7 @@ export const SkillsView: React.FC = () => {
                     onClick={() => run('reset', () => resetSkillContent(selected.id))}
                     disabled={busy !== null}
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-bold text-[var(--text-secondary)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:text-[var(--text-primary)] disabled:opacity-40 cursor-pointer"
-                    title="Revenir au modèle intégré de Taskacao"
+                    title="Revenir au modèle intégré de TaskFlow"
                   >
                     {busy === 'reset' ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
                     <span>Réinitialiser</span>
@@ -233,7 +233,7 @@ export const SkillsView: React.FC = () => {
               )}
               {selected.updatedAt && <span>modifiée le {new Date(selected.updatedAt).toLocaleString()}</span>}
               <span className="ml-auto">
-                {selected.isCustom ? 'contenu propre à ce projet' : 'modèle intégré de Taskacao'}
+                {selected.isCustom ? 'contenu propre à ce projet' : 'modèle intégré de TaskFlow'}
               </span>
             </div>
           </>

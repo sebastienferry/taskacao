@@ -449,6 +449,41 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 			projID = defaultProjID
 		}
 
+		// Calculate task.Status dynamically based on project's trackerColumns + stageColumns mapping
+		if proj, _ := d.getProjectByIDUnsafe(projID); proj != nil && len(proj.TrackerColumns) > 0 {
+			stName := strings.TrimSpace(t.TrackerStatus)
+			if stName == "" && len(t.Labels) > 0 {
+				stName = t.Labels[len(t.Labels)-1]
+			}
+			if stName != "" {
+				// Find which column contains this status
+				matchedCol := ""
+				for _, col := range proj.TrackerColumns {
+					for _, s := range col.Statuses {
+						if strings.EqualFold(strings.TrimSpace(s), stName) {
+							matchedCol = col.Name
+							break
+						}
+					}
+					if matchedCol != "" {
+						break
+					}
+				}
+
+				// If matched column found, find corresponding stage
+				if matchedCol != "" && proj.StageColumns != nil {
+					for stageID, cols := range proj.StageColumns {
+						for _, colName := range cols {
+							if strings.EqualFold(colName, matchedCol) {
+								t.Status = models.Status(stageID)
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+
 		if err == sql.ErrNoRows {
 			// Insert new task
 			newID := t.ID
@@ -518,6 +553,13 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 
 func (d *DB) computeExternalURLUnsafe(t *models.Task) *string {
 	if t.ExternalURL != nil && *t.ExternalURL != "" {
+		urlStr := *t.ExternalURL
+		if strings.HasPrefix(urlStr, "https://api.github.com/repos/") {
+			// Convert https://api.github.com/repos/{owner}/{repo}/issues/{num} -> https://github.com/{owner}/{repo}/issues/{num}
+			parts := strings.TrimPrefix(urlStr, "https://api.github.com/repos/")
+			converted := "https://github.com/" + parts
+			return &converted
+		}
 		return t.ExternalURL
 	}
 	var proj *models.Project
@@ -1167,13 +1209,13 @@ func (d *DB) EnsureGitIgnoreTasks(repoPath string) error {
 	data, err := os.ReadFile(gitignorePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return os.WriteFile(gitignorePath, []byte("# Taskacao worktrees\n.tasks/\n"), 0644)
+			return os.WriteFile(gitignorePath, []byte("# TaskFlow worktrees\n.tasks/\n"), 0644)
 		}
 		return nil
 	}
 	content := string(data)
 	if !strings.Contains(content, ".tasks") {
-		newContent := strings.TrimRight(content, "\r\n") + "\n\n# Taskacao parallel agent worktrees\n.tasks/\n"
+		newContent := strings.TrimRight(content, "\r\n") + "\n\n# TaskFlow parallel agent worktrees\n.tasks/\n"
 		return os.WriteFile(gitignorePath, []byte(newContent), 0644)
 	}
 	return nil
@@ -1311,7 +1353,7 @@ func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string,
 		}
 	}
 
-	// Symlink dependencies to speed up builds and avoid redundant node_modules downloads
+	// Symlink root node_modules if it exists in main repo and not in worktree
 	mainNodeModules := filepath.Join(mainRepoPath, "node_modules")
 	wtNodeModules := filepath.Join(worktreePath, "node_modules")
 	if fi, err := os.Stat(mainNodeModules); err == nil && fi.IsDir() {
@@ -1320,6 +1362,7 @@ func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string,
 		}
 	}
 
+	// Symlink web/node_modules if present
 	mainWebNodeModules := filepath.Join(mainRepoPath, "web", "node_modules")
 	wtWebNodeModules := filepath.Join(worktreePath, "web", "node_modules")
 	if fi, err := os.Stat(mainWebNodeModules); err == nil && fi.IsDir() {
@@ -1329,8 +1372,8 @@ func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string,
 		}
 	}
 
-	// Symlink / propagate skills and agent configurations (.agents, .gemini, .agy, .taskacao)
-	agentDirs := []string{".agents", ".gemini", ".agy", ".taskacao"}
+	// Symlink / propagate skills and agent configurations (.agents, .gemini, .agy, .taskflow, .taskacao)
+	agentDirs := []string{".agents", ".gemini", ".agy", ".taskflow", ".taskacao"}
 	for _, ad := range agentDirs {
 		mainAd := filepath.Join(mainRepoPath, ad)
 		wtAd := filepath.Join(worktreePath, ad)
@@ -1929,40 +1972,60 @@ func (d *DB) getNextGithubTaskKey() string {
 var WorkflowLabels = []string{"new", "clarified", "specified", "implemented", "reviewed", "finished", "untouched", "New", "Clarified", "Specified", "Implemented", "Reviewed", "Finished", "Untouched"}
 
 func GetStageLabelForStatus(status models.Status) string {
-	switch status {
-	case models.StatusToClarify, models.StatusBacklog:
+	clean := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(string(status), "-", "_")))
+	switch clean {
+	case "to_clarify", "backlog", "todo", "idea", "open", "new", "untouched":
 		return "new"
-	case models.StatusToSpecify, models.StatusSpecified:
+	case "to_specify", "clarified", "cadré", "cadre", "clarify":
 		return "clarified"
-	case models.StatusToImplement, models.StatusInProgress:
+	case "to_implement", "specified", "spec", "specced", "in_progress", "progress", "code", "coding", "dev", "doing":
 		return "specified"
-	case models.StatusToTest, models.StatusToValidate:
+	case "to_test", "to_validate", "implemented", "testing", "test", "validate", "validating", "qa":
 		return "implemented"
-	case models.StatusToClose:
+	case "to_close", "reviewed", "review", "in_review", "pr", "mr":
 		return "reviewed"
-	case models.StatusFinished, models.StatusDone:
+	case "finished", "done", "closed", "terminé", "termine", "completed":
 		return "finished"
 	default:
+		// Fallback keywords check
+		if strings.Contains(clean, "done") || strings.Contains(clean, "close") || strings.Contains(clean, "finish") || strings.Contains(clean, "termin") {
+			return "finished"
+		}
+		if strings.Contains(clean, "review") || strings.Contains(clean, "pr") {
+			return "reviewed"
+		}
+		if strings.Contains(clean, "test") || strings.Contains(clean, "validat") {
+			return "implemented"
+		}
+		if strings.Contains(clean, "progress") || strings.Contains(clean, "code") || strings.Contains(clean, "implement") {
+			return "specified"
+		}
+		if strings.Contains(clean, "specify") || strings.Contains(clean, "spec") || strings.Contains(clean, "clarif") {
+			return "clarified"
+		}
 		return "new"
 	}
 }
 
 // workflowLabelVariants est la liste des libellés d'étape, dans les casses que
-// Taskacao et les trackers utilisent. Jira distingue la casse, donc retirer un
+// TaskFlow et les trackers utilisent. Jira distingue la casse, donc retirer un
 // label exige de viser la bonne graphie — on les vise toutes.
 var workflowLabelVariants = []string{
 	"untouched", "new", "clarified", "specified", "implemented", "reviewed", "finished", "closed",
 	"Untouched", "New", "Clarified", "Specified", "Implemented", "Reviewed", "Finished",
+	"#untouched", "#new", "#clarified", "#specified", "#implemented", "#reviewed", "#finished", "#closed",
+	"#Untouched", "#New", "#Clarified", "#Specified", "#Implemented", "#Reviewed", "#Finished",
 }
 
 // StaleWorkflowLabels liste les labels d'étape à retirer côté tracker quand on
 // pose targetLabel. Sans ça, un ticket accumule clarified, specified,
-// implemented… dans Jira alors que Taskacao n'en montre qu'un.
+// implemented… dans Jira/GitHub alors que TaskFlow n'en montre qu'un.
 func StaleWorkflowLabels(targetLabel string) []string {
-	target := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(targetLabel), "#"))
+	target := strings.ToLower(strings.TrimLeft(strings.TrimSpace(targetLabel), "#"))
 	out := []string{}
 	for _, variant := range workflowLabelVariants {
-		if strings.EqualFold(variant, target) {
+		clean := strings.ToLower(strings.TrimLeft(strings.TrimSpace(variant), "#"))
+		if clean == target {
 			continue
 		}
 		out = append(out, variant)
@@ -1972,20 +2035,34 @@ func StaleWorkflowLabels(targetLabel string) []string {
 
 func SetWorkflowLabel(existingLabels []string, targetLabel string) []string {
 	var result []string
+	cleanTarget := strings.TrimLeft(strings.TrimSpace(targetLabel), "#")
 	for _, l := range existingLabels {
+		clean := strings.ToLower(strings.TrimLeft(strings.TrimSpace(l), "#"))
+		if clean == "" {
+			continue
+		}
 		isWorkflow := false
-		for _, wl := range []string{"untouched", "new", "clarified", "specified", "implemented", "reviewed", "finished", "closed", "New", "Clarified", "Specified", "Implemented", "Reviewed", "Finished", "Untouched"} {
-			if strings.EqualFold(l, wl) {
+		for _, wl := range []string{"untouched", "new", "clarified", "specified", "implemented", "reviewed", "finished", "closed"} {
+			if clean == wl {
 				isWorkflow = true
 				break
 			}
 		}
 		if !isWorkflow {
-			result = append(result, l)
+			origClean := strings.TrimLeft(strings.TrimSpace(l), "#")
+			if strings.HasPrefix(l, "#") {
+				result = append(result, "#"+origClean)
+			} else {
+				result = append(result, origClean)
+			}
 		}
 	}
-	if targetLabel != "" {
-		result = append(result, targetLabel)
+	if cleanTarget != "" {
+		if strings.HasPrefix(targetLabel, "#") {
+			result = append(result, "#"+cleanTarget)
+		} else {
+			result = append(result, cleanTarget)
+		}
 	}
 	return result
 }
@@ -2501,12 +2578,13 @@ func (d *DB) MoveTask(id string, newStatus models.Status, newPosition int) (*mod
 	newStage := GetStageLabelForStatus(newStatus)
 	var removedLabels []string
 	if oldStage != newStage {
-		removedLabels = append(removedLabels, oldStage)
+		removedLabels = append(removedLabels, oldStage, "#"+oldStage)
 	}
 
+	targetLabel := "#" + strings.TrimPrefix(newStage, "#")
 	existing.Status = newStatus
 	existing.Position = newPosition
-	existing.Labels = SetWorkflowLabel(existing.Labels, newStage)
+	existing.Labels = SetWorkflowLabel(existing.Labels, targetLabel)
 	existing.UpdatedAt = now
 
 	labelsJSON, _ := json.Marshal(existing.Labels)
@@ -3554,15 +3632,15 @@ func (d *DB) processSkillJob(job SkillJob) {
 		var commentHeader string
 		switch skill.ID {
 		case "clarify":
-			commentHeader = "### 💬 [Taskacao] Rapport de Clarification\n\n"
+			commentHeader = "### 💬 [TaskFlow] Rapport de Clarification\n\n"
 		case "specify":
-			commentHeader = "### 📋 [Taskacao] Spécification Technique & Plan d'Implémentation\n\n"
+			commentHeader = "### 📋 [TaskFlow] Spécification Technique & Plan d'Implémentation\n\n"
 		case "implement":
-			commentHeader = "### ⚡ [Taskacao] Rapport d'Implémentation\n\n"
+			commentHeader = "### ⚡ [TaskFlow] Rapport d'Implémentation\n\n"
 		case "create_pr", "review":
-			commentHeader = "### 🚀 [Taskacao] Revue de Code & Préparation PR\n\n"
+			commentHeader = "### 🚀 [TaskFlow] Revue de Code & Préparation PR\n\n"
 		default:
-			commentHeader = fmt.Sprintf("### 🤖 [Taskacao] Rapport d'exécution : %s\n\n", skill.Name)
+			commentHeader = fmt.Sprintf("### 🤖 [TaskFlow] Rapport d'exécution : %s\n\n", skill.Name)
 		}
 
 		commentBody := commentHeader + realAIOutput
@@ -3712,7 +3790,7 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 	case "sync_jira":
 		hasError = true
 		summary = "Support Jira retiré"
-		outputLines = append(outputLines, "Le support de Jira a été retiré de Taskacao. Utilisez GitHub.")
+		outputLines = append(outputLines, "Le support de Jira a été retiré de TaskFlow. Utilisez GitHub.")
 
 	case "sync_all":
 		steps = append(steps, "1. Starting global multi-tracker synchronization...")
@@ -5573,7 +5651,7 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string, overrides ...string) (
 	// Install skills into each target path (root repo and all worktrees)
 	for _, targetDir := range targetPaths {
 		for _, s := range skillsToInstall {
-			// La commande slash, en plus de la skill : c'est elle que Taskacao
+			// La commande slash, en plus de la skill : c'est elle que Taskflow
 			// invoque, et sans elle « /clarify-issue » n'est que du texte.
 			if cmdContent, ok := CommandContentFor(s.ID, specFramework); ok {
 				cmdPath := SkillCommandPath(targetDir, s.DirName)
@@ -5591,10 +5669,10 @@ func (d *DB) InstallProjectSkills(projectIDOrPath string, overrides ...string) (
 			}
 		}
 
-		// Create .taskacao/config.json in each worktree/root
-		taskacaoDir := filepath.Join(targetDir, ".taskacao")
-		_ = os.MkdirAll(taskacaoDir, 0755)
-		configFile := filepath.Join(taskacaoDir, "config.json")
+		// Create .taskflow/config.json in each worktree/root
+		taskflowDir := filepath.Join(targetDir, ".taskflow")
+		_ = os.MkdirAll(taskflowDir, 0755)
+		configFile := filepath.Join(taskflowDir, "config.json")
 		cfgData := map[string]interface{}{
 			"projectId":         projectID,
 			"projectName":       projectName,
@@ -5886,7 +5964,7 @@ func (d *DB) DetectTrackerStatuses(projectID, tracker, linearTeam, githubRepo st
 	return results, nil
 }
 
-// skillDirNames lists the installed skill directories, for .taskacao/config.json.
+// skillDirNames lists the installed skill directories, for .taskflow/config.json.
 func skillDirNames(skills []ProjectSkillTemplate) []string {
 	out := make([]string, 0, len(skills))
 	for _, s := range skills {

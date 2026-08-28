@@ -71,10 +71,14 @@ type TerminalSessionRunner interface {
 // signal; a duration ceiling would cut a long turn in half.
 const agentTurnQuietDefault = 45 * time.Second
 
-// AgentTurnQuiet reads the threshold, overridable by TASKACAO_AGENT_TURN_QUIET
+// AgentTurnQuiet reads the threshold, overridable by TASKFLOW_AGENT_TURN_QUIET
 // (a Go duration such as "90s"), because the right value depends on the engine.
 func AgentTurnQuiet() time.Duration {
-	if raw := strings.TrimSpace(os.Getenv("TASKACAO_AGENT_TURN_QUIET")); raw != "" {
+	raw := strings.TrimSpace(os.Getenv("TASKFLOW_AGENT_TURN_QUIET"))
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv("TASKACAO_AGENT_TURN_QUIET"))
+	}
+	if raw != "" {
 		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
 			return d
 		}

@@ -24,7 +24,7 @@ func TestRunCommandInSessionCapturesOutputAndExitCode(t *testing.T) {
 	if !strings.Contains(res.Output, "ligne un") || !strings.Contains(res.Output, "ligne deux") {
 		t.Fatalf("sortie incomplète: %q", res.Output)
 	}
-	if strings.Contains(res.Output, "__TASKACAO_") {
+	if strings.Contains(res.Output, "__TASKFLOW_") {
 		t.Fatalf("les marqueurs ne doivent pas rester dans la sortie: %q", res.Output)
 	}
 }

@@ -21,6 +21,8 @@ import {
   MessageSquare,
   Download,
   Terminal as TerminalIcon,
+  Map as MapIcon,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { accentTextStyle } from '../lib/accents'
@@ -173,12 +175,34 @@ export const CommandPalette: React.FC = () => {
     },
     {
       id: 'switch_list',
-      title: '📋 Vue Liste (Toutes les tâches)',
+      title: '📋 Vue Backlog (Toutes les tâches)',
       icon: <ListFilter size={16} className="text-blue-400" />,
       shortcut: 'L',
-      keywords: ['liste', 'list', 'table', 'lignes', 'taches', 'tasks', 'vue'],
+      keywords: ['backlog', 'liste', 'list', 'table', 'lignes', 'taches', 'tasks', 'vue'],
       action: () => {
         setActiveView('list')
+        setIsCommandPaletteOpen(false)
+      },
+    },
+    {
+      id: 'switch_triage',
+      title: '🎯 Vue Triage (Affectation Sprints & Macros)',
+      icon: <SlidersHorizontal size={16} className="text-violet-400" />,
+      shortcut: 'T',
+      keywords: ['triage', 'curation', 'sprint', 'macro', 'backlog', 'affectation', 'selection'],
+      action: () => {
+        setActiveView('triage')
+        setIsCommandPaletteOpen(false)
+      },
+    },
+    {
+      id: 'switch_roadmap',
+      title: '🗺️ Vue Roadmap (Macros : NOW / NEXT / FUTURE)',
+      icon: <MapIcon size={16} className="text-emerald-400" />,
+      shortcut: 'R',
+      keywords: ['roadmap', 'macros', 'macro', 'horizon', 'now', 'next', 'future', 'vue', 'plan'],
+      action: () => {
+        setActiveView('roadmap')
         setIsCommandPaletteOpen(false)
       },
     },

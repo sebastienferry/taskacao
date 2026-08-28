@@ -212,6 +212,7 @@ interface AppContextType {
   setTaskEpic: (taskId: string, epicKey: string) => Promise<Task | null>
   createStoryUnderEpic: (projectId: string, epicKey: string, title: string) => Promise<string>
   createEpic: (projectId: string, title: string, horizon?: EpicHorizon | '', fields?: Record<string, string>) => Promise<EpicMeta | null>
+  deleteEpic: (projectId: string, key: string) => Promise<boolean>
   /** Champs que le tracker impose pour créer un épic sur ce projet. */
   fetchEpicRequiredFields: (projectId: string) => Promise<EpicRequiredField[]>
   /** Met la découpe d'épic en file d'activités. Retourne true si la file a accepté. */
@@ -276,7 +277,7 @@ interface AppContextType {
  * Vues connues. Ce qui sort du stockage local n'est pas fiable : une vue retirée
  * d'une version à l'autre laisserait un écran vide au démarrage.
  */
-const VIEW_MODES: ViewMode[] = ['board', 'list', 'roadmap', 'activities', 'sync', 'digest', 'skills', 'team']
+const VIEW_MODES: ViewMode[] = ['board', 'list', 'triage', 'roadmap', 'activities', 'sync', 'digest', 'skills', 'team']
 
 const defaultSettings: UserSettings = {
   id: 1,
@@ -348,7 +349,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
    */
   const [activeView, setActiveViewState] = useState<ViewMode>(() => {
     try {
-      const stored = localStorage.getItem('taskacao_active_view')
+      const stored = localStorage.getItem('taskflow_active_view') ?? localStorage.getItem('taskacao_active_view')
       return stored && VIEW_MODES.includes(stored as ViewMode) ? (stored as ViewMode) : 'board'
     } catch {
       return 'board'
@@ -359,7 +360,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const defaultViewPending = useRef<boolean>(
     (() => {
       try {
-        return !localStorage.getItem('taskacao_active_view')
+        return !(localStorage.getItem('taskflow_active_view') ?? localStorage.getItem('taskacao_active_view'))
       } catch {
         return false
       }
@@ -370,7 +371,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setActiveViewState(view)
     defaultViewPending.current = false
     try {
-      localStorage.setItem('taskacao_active_view', view)
+      localStorage.setItem('taskflow_active_view', view)
     } catch {
       // stockage indisponible : la vue vaut pour cette session
     }
@@ -380,7 +381,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // workspace tool, not a transient modal.
   const [isTerminalPanelOpen, setIsTerminalPanelOpenState] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('taskacao_terminal_panel_open') === 'true'
+      const val = localStorage.getItem('taskflow_terminal_panel_open') ?? localStorage.getItem('taskacao_terminal_panel_open')
+      return val === 'true'
     } catch {
       return false
     }
@@ -389,7 +391,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setIsTerminalPanelOpen = useCallback((open: boolean) => {
     setIsTerminalPanelOpenState(open)
     try {
-      localStorage.setItem('taskacao_terminal_panel_open', String(open))
+      localStorage.setItem('taskflow_terminal_panel_open', String(open))
     } catch {
       // private mode / blocked storage: the panel just won't be remembered
     }
@@ -399,7 +401,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setIsTerminalPanelOpenState(prev => {
       const next = !prev
       try {
-        localStorage.setItem('taskacao_terminal_panel_open', String(next))
+        localStorage.setItem('taskflow_terminal_panel_open', String(next))
       } catch {
         // ignore
       }
@@ -408,16 +410,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [])
   const [boardGrouping, setBoardGroupingState] = useState<BoardGroupingMode>(() => {
     try {
-      return (localStorage.getItem('taskacao_board_grouping') as BoardGroupingMode) || 'workflow'
+      const val = (localStorage.getItem('taskflow_board_grouping') ?? localStorage.getItem('taskacao_board_grouping')) as BoardGroupingMode
+      return val || 'status'
     } catch {
-      return 'workflow'
+      return 'status'
     }
   })
 
   const persistBoardGrouping = useCallback((mode: BoardGroupingMode) => {
     setBoardGroupingState(mode)
     try {
-      localStorage.setItem('taskacao_board_grouping', mode)
+      localStorage.setItem('taskflow_board_grouping', mode)
     } catch {
       // stockage indisponible : le mode vaut pour cette session
     }
@@ -487,7 +490,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setTerminalSessionOverride(null)
       setIsTerminalPanelOpenState(true)
       try {
-        localStorage.setItem('taskacao_terminal_panel_open', 'true')
+        localStorage.setItem('taskflow_terminal_panel_open', 'true')
       } catch {}
     }
   }, [])
@@ -499,14 +502,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setTerminalSessionOverride(sessionId)
     setIsTerminalPanelOpenState(true)
     try {
-      localStorage.setItem('taskacao_terminal_panel_open', 'true')
+      localStorage.setItem('taskflow_terminal_panel_open', 'true')
     } catch {}
   }, [])
 
   const [diffTask, setDiffTask] = useState<Task | null>(null)
   const [hideDone, setHideDoneState] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('taskacao_hide_done') === 'true'
+      const val = localStorage.getItem('taskflow_hide_done') ?? localStorage.getItem('taskacao_hide_done')
+      return val === 'true'
     } catch {
       return false
     }
@@ -516,7 +520,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setHideDoneState(prev => {
       const next = typeof val === 'function' ? val(prev) : val
       try {
-        localStorage.setItem('taskacao_hide_done', String(next))
+        localStorage.setItem('taskflow_hide_done', String(next))
       } catch {}
       return next
     })
@@ -537,7 +541,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProjectId, setSelectedProjectIdState] = useState<string | 'all'>(() => {
     try {
-      return localStorage.getItem('taskacao_selected_project_id') || 'all'
+      return localStorage.getItem('taskflow_selected_project_id') || localStorage.getItem('taskacao_selected_project_id') || 'all'
     } catch {
       return 'all'
     }
@@ -545,18 +549,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setSelectedProjectId = useCallback((id: string | 'all') => {
     setSelectedProjectIdState(id)
     try {
-      localStorage.setItem('taskacao_selected_project_id', id)
+      localStorage.setItem('taskflow_selected_project_id', id)
     } catch {}
   }, [])
 
   // Les filtres sont mémorisés par projet : sprint et équipe n'ont de sens que
   // dans le projet où ils ont été choisis, et on retrouve son contexte de
   // travail en revenant sur un projet ou après un rechargement.
-  const filterStorageKey = (projectId: string) => `taskacao_filters_${projectId || 'all'}`
+  const filterStorageKey = (projectId: string) => `taskflow_filters_${projectId || 'all'}`
+  const legacyFilterStorageKey = (projectId: string) => `taskacao_filters_${projectId || 'all'}`
 
   const readStoredFilters = (projectId: string): Record<string, string | null> => {
     try {
-      return JSON.parse(localStorage.getItem(filterStorageKey(projectId)) || '{}') || {}
+      return JSON.parse(localStorage.getItem(filterStorageKey(projectId)) || localStorage.getItem(legacyFilterStorageKey(projectId)) || '{}') || {}
     } catch {
       return {}
     }
@@ -819,7 +824,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             return prev
           }
           try {
-            const stored = localStorage.getItem('taskacao_selected_project_id')
+            const stored = localStorage.getItem('taskflow_selected_project_id') || localStorage.getItem('taskacao_selected_project_id')
             if (stored === 'all') return 'all'
             if (stored && projectList.some(p => p.id === stored || p.slug === stored)) {
               return stored
@@ -830,7 +835,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const projWithTasks = projectList.find(p => (p.taskCount || 0) > 0)
           if (projWithTasks) {
             try {
-              localStorage.setItem('taskacao_selected_project_id', projWithTasks.id)
+              localStorage.setItem('taskflow_selected_project_id', projWithTasks.id)
             } catch {}
             return projWithTasks.id
           }
@@ -1673,6 +1678,51 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // part dans la file d'activités. Un refus du tracker apparaît alors comme une
   // activité en échec, et la synchronisation suivante remet la carte en place.
   const moveTaskToTrackerStatus = async (id: string, status: string): Promise<Task | null> => {
+    const task = tasks.find(t => t.id === id)
+    if (task) {
+      const cleanSt = status.toLowerCase()
+      let targetStage: WorkflowStage = 'new'
+      const proj = projects.find(p => p.id === task.projectId) || currentProject
+
+      // Resolve matching column name from tracker columns (e.g. "Code" status -> "In Progress" column)
+      const matchingCol = proj?.trackerColumns?.find(
+        c => c.name.toLowerCase() === cleanSt || (c.statuses && c.statuses.some(s => s.toLowerCase() === cleanSt))
+      )
+      const colName = matchingCol ? matchingCol.name.toLowerCase() : cleanSt
+
+      let foundStage: WorkflowStage | null = null
+      if (proj?.stageColumns) {
+        for (const [stg, cols] of Object.entries(proj.stageColumns)) {
+          if (cols.some(c => c.toLowerCase() === colName || c.toLowerCase() === cleanSt)) {
+            foundStage = stg as WorkflowStage
+            break
+          }
+        }
+      }
+
+      if (foundStage) {
+        targetStage = foundStage
+      } else if (cleanSt === 'closed' || cleanSt === 'done' || cleanSt === 'terminé' || cleanSt === 'finished') {
+        targetStage = 'finished'
+      } else if (cleanSt.includes('review') || cleanSt === 'to_close' || cleanSt.includes('pr')) {
+        targetStage = 'reviewed'
+      } else if (cleanSt.includes('test') || cleanSt === 'to_test' || cleanSt === 'to_validate' || cleanSt.includes('validate')) {
+        targetStage = 'implemented'
+      } else if (cleanSt.includes('progress') || cleanSt === 'to_implement' || cleanSt === 'in_progress' || cleanSt.includes('code') || cleanSt.includes('implement')) {
+        targetStage = 'specified'
+      } else if (cleanSt.includes('specify') || cleanSt === 'to_specify' || cleanSt.includes('spec')) {
+        targetStage = 'clarified'
+      } else if (cleanSt.includes('clarif') || cleanSt === 'to_clarify') {
+        targetStage = 'new'
+      }
+      const targetLabel = `#${targetStage.replace(/^#+/, '')}`
+      const cleanLabels = (task.labels || []).filter(
+        l => !['untouched', 'new', 'clarified', 'specified', 'implemented', 'reviewed', 'finished', 'closed'].includes(l.toLowerCase().replace(/^#+/, ''))
+      )
+      cleanLabels.push(targetLabel)
+      setTasks(prev => prev.map(t => (t.id === id ? { ...t, trackerStatus: status, labels: cleanLabels } : t)))
+    }
+
     try {
       const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/tracker-status`, {
         method: 'POST',
@@ -1695,6 +1745,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       fetchActivities()
       return updated
     } catch (err: any) {
+      fetchTasks()
       addToast({
         type: 'error',
         title: 'Déplacement impossible',
@@ -1806,7 +1857,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Méta-épics : l'horizon est une décision produit, la description et la TODO
   // du travail de cadrage. Rien de tout ça n'existe côté tracker pour un épic,
-  // donc Taskacao le porte.
+  // donc TaskFlow le porte.
   const fetchProjectEpics = async (projectId: string): Promise<EpicMeta[]> => {
     try {
       const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics`)
@@ -2078,11 +2129,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Création refusée')
-      addToast({ type: 'success', title: `Épic ${data.key} créé` })
+      addToast({ type: 'success', title: `Macro ${data.key} créée` })
       return data
     } catch (err: any) {
-      addToast({ type: 'error', title: 'Épic non créé', description: err.message })
+      addToast({ type: 'error', title: 'Macro non créée', description: err.message })
       return null
+    }
+  }
+
+  const deleteEpic = async (projectId: string, key: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/${encodeURIComponent(key)}`, {
+        method: 'DELETE',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Suppression échouée')
+      addToast({ type: 'success', title: `Macro ${key} supprimée` })
+      await fetchTasks()
+      return true
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Macro non supprimée', description: err.message })
+      return false
     }
   }
 
@@ -2448,10 +2515,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
 
   const moveTask = async (id: string, newStatus: Status, newPosition: number) => {
+    const targetStage = stageForInternalStatus(newStatus)
+    const targetLabel = `#${targetStage.replace(/^#+/, '')}`
+    const existingTask = tasks.find(t => t.id === id)
+    const cleanLabels = (existingTask?.labels || []).filter(
+      l => !['untouched', 'new', 'clarified', 'specified', 'implemented', 'reviewed', 'finished', 'closed'].includes(l.toLowerCase().replace(/^#+/, ''))
+    )
+    cleanLabels.push(targetLabel)
+
     setTasks(prev => {
       return prev.map(t => {
         if (t.id === id) {
-          return { ...t, status: newStatus, position: newPosition }
+          return { ...t, status: newStatus, position: newPosition, labels: cleanLabels }
         }
         return t
       })
@@ -2486,10 +2561,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (!task) return null
 
     const currentLabels = task.labels || []
+    const targetLabel = `#${targetStage.replace(/^#+/, '')}`
     const cleanLabels = currentLabels.filter(
-      l => !['untouched', 'new', 'clarified', 'specified', 'implemented', 'reviewed', 'finished', 'closed', 'New', 'Clarified', 'Specified', 'Implemented', 'Reviewed', 'Finished', 'Untouched'].some(wl => wl.toLowerCase() === l.toLowerCase())
+      l => !['untouched', 'new', 'clarified', 'specified', 'implemented', 'reviewed', 'finished', 'closed'].includes(l.toLowerCase().replace(/^#+/, ''))
     )
-    cleanLabels.push(targetStage)
+    cleanLabels.push(targetLabel)
 
     // Determine mapped status using project stageMapping if configured
     let mappedStatus: Status = task.status
@@ -2505,16 +2581,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       else if (targetStage === 'finished') mappedStatus = 'finished'
     }
 
+    // Determine target tracker status if project has stageColumns mapping
+    let mappedTrackerStatus = task.trackerStatus
+    if (proj?.stageColumns && proj.stageColumns[targetStage]?.length) {
+      const colName = proj.stageColumns[targetStage][0]
+      const col = proj.trackerColumns?.find(c => c.name === colName)
+      if (col?.statuses?.length) {
+        mappedTrackerStatus = col.statuses[0]
+      } else if (colName) {
+        mappedTrackerStatus = colName
+      }
+    }
+
     const updated = await updateTask(task.id, {
       labels: cleanLabels,
       status: mappedStatus,
+      ...(mappedTrackerStatus ? { trackerStatus: mappedTrackerStatus } : {}),
     })
 
     if (updated) {
       addToast({
         type: 'info',
         title: 'Étape Workflow Agentic mise à jour',
-        description: `${updated.key} ➔ #${targetStage}`,
+        description: `${updated.key} ➔ ${targetLabel}`,
       })
     }
     return updated
@@ -3264,6 +3353,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setTaskEpic,
         createStoryUnderEpic,
         createEpic,
+        deleteEpic,
         fetchEpicRequiredFields,
         moveTasksToEpic,
         advanceTask,

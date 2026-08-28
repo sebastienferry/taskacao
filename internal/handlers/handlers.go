@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"tasks/internal/db"
 	"tasks/internal/models"
+	"tasks/internal/runner"
 	"tasks/internal/terminal"
 )
 
@@ -65,7 +67,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "taskacao-api"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "taskflow-api"})
 }
 
 func (h *Handler) HandleCliStatus(w http.ResponseWriter, r *http.Request) {
@@ -420,6 +422,154 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		id = parts[0]
 	}
 
+	// Sub-action: /api/projects/detected-statuses — live status detection for draft project
+	if id == "detected-statuses" && r.Method == http.MethodGet {
+		tracker := r.URL.Query().Get("tracker")
+		repo := r.URL.Query().Get("repo")
+		repoPath := r.URL.Query().Get("repoPath")
+		team := r.URL.Query().Get("team")
+		projID := r.URL.Query().Get("projectId")
+
+		var statuses []string
+		if projID != "" {
+			statuses, _ = h.db.GetProjectTrackerStatuses(projID)
+		} else {
+			dummyProj := &models.Project{
+				IssueTracker: tracker,
+				GithubRepo:   repo,
+				RepoPath:     repoPath,
+				LinearTeam:   team,
+			}
+			// Temporary DB query for draft project
+			_ = dummyProj
+			// Use runner directly for draft
+			seen := map[string]bool{}
+			if tracker == "github" {
+				rRepo, rRepoPath := runner.ResolveGithubRepo(repo, repoPath)
+				if rRepo != "" {
+					ghPath, _ := runner.FindCliTool("gh")
+					if ghPath == "" {
+						ghPath = "gh"
+					}
+
+					parts := strings.Split(rRepo, "/")
+					if len(parts) == 2 {
+						owner, repoName := parts[0], parts[1]
+						gqlQuery := fmt.Sprintf(`query {
+						  repository(owner: "%s", name: "%s") {
+						    projectsV2(first: 5) {
+						      nodes {
+						        title
+						        fields(first: 20) {
+						          nodes {
+						            ... on ProjectV2SingleSelectField {
+						              name
+						              options { name }
+						            }
+						          }
+						        }
+						      }
+						    }
+						  }
+						  user(login: "%s") {
+						    projectsV2(first: 5) {
+						      nodes {
+						        title
+						        fields(first: 20) {
+						          nodes {
+						            ... on ProjectV2SingleSelectField {
+						              name
+						              options { name }
+						            }
+						          }
+						        }
+						      }
+						    }
+						  }
+						}`, owner, repoName, owner)
+
+						cmdGql := exec.Command(ghPath, "api", "graphql", "-f", "query="+gqlQuery)
+						if rRepoPath != "" {
+							cmdGql.Dir = rRepoPath
+						}
+						if output, err := cmdGql.Output(); err == nil {
+							var gqlRes struct {
+								Data struct {
+									Repository struct {
+										ProjectsV2 struct {
+											Nodes []struct {
+												Fields struct {
+													Nodes []struct {
+														Name    string `json:"name"`
+														Options []struct {
+															Name string `json:"name"`
+														} `json:"options"`
+													} `json:"nodes"`
+												} `json:"fields"`
+											} `json:"nodes"`
+										} `json:"projectsV2"`
+									} `json:"repository"`
+									User struct {
+										ProjectsV2 struct {
+											Nodes []struct {
+												Fields struct {
+													Nodes []struct {
+														Name    string `json:"name"`
+														Options []struct {
+															Name string `json:"name"`
+														} `json:"options"`
+													} `json:"nodes"`
+												} `json:"fields"`
+											} `json:"nodes"`
+										} `json:"projectsV2"`
+									} `json:"user"`
+								} `json:"data"`
+							}
+							if json.Unmarshal(output, &gqlRes) == nil {
+								allProjects := append(gqlRes.Data.Repository.ProjectsV2.Nodes, gqlRes.Data.User.ProjectsV2.Nodes...)
+								for _, pNode := range allProjects {
+									for _, fNode := range pNode.Fields.Nodes {
+										if strings.EqualFold(fNode.Name, "Status") || strings.EqualFold(fNode.Name, "Statut") || len(fNode.Options) > 0 {
+											for _, opt := range fNode.Options {
+												name := strings.TrimSpace(opt.Name)
+												if name != "" && !seen[strings.ToLower(name)] {
+													seen[strings.ToLower(name)] = true
+													statuses = append(statuses, name)
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				if len(statuses) == 0 {
+					for _, s := range []string{"open", "closed"} {
+						if !seen[s] {
+							seen[s] = true
+							statuses = append(statuses, s)
+						}
+					}
+				}
+			}
+		}
+
+		type StatusItem struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		var result []StatusItem
+		for idx, s := range statuses {
+			result = append(result, StatusItem{
+				ID:   fmt.Sprintf("st-%d", idx),
+				Name: s,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"statuses": result})
+		return
+	}
+
 	// Sub-action: /api/projects/{id}/epics/create — create an epic, the container
 	// a split needs as a target
 	if len(parts) >= 3 && parts[1] == "epics" && parts[2] == "create" && r.Method == http.MethodPost {
@@ -657,6 +807,23 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			writeJSON(w, http.StatusOK, map[string]interface{}{"epic": saved, "labelNote": labelNote})
+			return
+		case http.MethodDelete:
+			key := ""
+			if len(parts) >= 3 && parts[2] != "" {
+				if decoded, err := url.PathUnescape(parts[2]); err == nil {
+					key = decoded
+				}
+			}
+			if key == "" {
+				writeError(w, http.StatusBadRequest, "Clé de macro obligatoire")
+				return
+			}
+			if err := h.db.DeleteEpic(id, key); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"status": "deleted", "key": key})
 			return
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -1934,6 +2101,11 @@ func (h *Handler) HandleTerminalWs(w http.ResponseWriter, r *http.Request) {
 	if taskID != "" {
 		task, _ := h.db.GetTaskByID(taskID)
 		if task != nil {
+			envVars["TASKFLOW_TASK_ID"] = task.ID
+			envVars["TASKFLOW_TASK_KEY"] = task.Key
+			envVars["TASKFLOW_TASK_TITLE"] = task.Title
+			envVars["TASKFLOW_TASK_PROJECT"] = task.ProjectID
+			// Legacy compatibility
 			envVars["TASKACAO_TASK_ID"] = task.ID
 			envVars["TASKACAO_TASK_KEY"] = task.Key
 			envVars["TASKACAO_TASK_TITLE"] = task.Title
@@ -1945,6 +2117,10 @@ func (h *Handler) HandleTerminalWs(w http.ResponseWriter, r *http.Request) {
 			}
 			if task.ProjectID != "" {
 				if proj, _ := h.db.GetProjectByID(task.ProjectID); proj != nil {
+					envVars["TASKFLOW_PROJECT_NAME"] = proj.Name
+					envVars["TASKFLOW_GITHUB_REPO"] = proj.GithubRepo
+					envVars["TASKFLOW_LINEAR_TEAM"] = proj.LinearTeam
+					// Legacy compatibility
 					envVars["TASKACAO_PROJECT_NAME"] = proj.Name
 					envVars["TASKACAO_GITHUB_REPO"] = proj.GithubRepo
 					envVars["TASKACAO_LINEAR_TEAM"] = proj.LinearTeam
@@ -1952,13 +2128,16 @@ func (h *Handler) HandleTerminalWs(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Ensure the task worktree, unless the project opted out: then the
-			// shell simply opens in the clone, and TASKACAO_TASK_WORKTREE stays
+			// shell simply opens in the clone, and TASKFLOW_TASK_WORKTREE stays
 			// unset so a script can tell the two situations apart.
 			if baseRepo != "" {
 				wtPath, branch, err := h.db.EnsureTaskWorktree(baseRepo, task)
 				switch {
 				case err == nil && wtPath != "" && wtPath != baseRepo:
 					workDir = wtPath
+					envVars["TASKFLOW_TASK_WORKTREE"] = wtPath
+					envVars["TASKFLOW_TASK_BRANCH"] = branch
+					// Legacy compatibility
 					envVars["TASKACAO_TASK_WORKTREE"] = wtPath
 					envVars["TASKACAO_TASK_BRANCH"] = branch
 				case workDir == "":

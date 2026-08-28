@@ -19,17 +19,18 @@ import {
   Filter,
   Scissors,
   Search,
+  Clock,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField } from './LookupField'
 import { MarkdownEditor } from './Markdown'
+import { SprintTimelineView } from './SprintTimelineView'
 import { sprintLookup } from '../lib/lookups'
 import {
   buildEpicRows,
   placementIssues,
   placementOf,
   matchesEpicSearch,
-  belongsToProjectKey,
   HORIZON_META,
   MATURITY_META,
   PLACEMENT_META,
@@ -40,7 +41,7 @@ import {
   tasksBySprintOrder,
   sprintLabelOf,
 } from '../lib/roadmap'
-import type { EpicHorizon, EpicMeta, EpicTodo, EpicRequiredField } from '../types'
+import type { EpicHorizon, EpicMeta, EpicTodo } from '../types'
 
 /**
  * Roadmap des épics, d'après le design « Roadmap Epics.dc.html ».
@@ -69,17 +70,15 @@ export const RoadmapView: React.FC = () => {
   const {
     tasks,
     currentProject,
-    settings,
     setSelectedTask,
     setChatTask,
     fetchProjectEpics,
     saveEpicMeta,
     createStoryFromEpicTodo,
-    pendingHorizonPushes,
-    pushPendingHorizons,
     setTaskEpic,
     createStoryUnderEpic,
     createEpic,
+    deleteEpic,
     moveTasksToEpic,
     setTaskSprint,
     setTasksSprint,
@@ -95,49 +94,30 @@ export const RoadmapView: React.FC = () => {
     setPinnedOnly,
     searchQuery,
     setSearchQuery,
-    fetchEpicRequiredFields,
     activeJobCount,
     addToast,
   } = useApp()
 
+  const [roadmapMode, setRoadmapMode] = useState<'sprints' | 'epics'>('sprints')
   const [tab, setTab] = useState<HorizonTab>('now')
   const [epicMeta, setEpicMeta] = useState<EpicMeta[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [onlyIssues, setOnlyIssues] = useState(false)
-  // Les épics terminés et ceux d'un autre projet Jira sont écartés par défaut :
-  // une roadmap sert à décider de ce qui reste à faire chez soi.
   const [showClosed, setShowClosed] = useState(false)
-  const [onlyProjectKey, setOnlyProjectKey] = useState(true)
 
-  // Le cadrage n'est enregistré qu'à la demande : écrire à chaque frappe
-  // enverrait une requête par caractère.
+  // Le cadrage n'est enregistré qu'à la demande
   const [draftDescription, setDraftDescription] = useState('')
   const [draftDirty, setDraftDirty] = useState(false)
   const [newTodo, setNewTodo] = useState('')
   const [creatingTodoId, setCreatingTodoId] = useState<string | null>(null)
-  const [pendingPushes, setPendingPushes] = useState(0)
-  const [isPushing, setIsPushing] = useState(false)
-  const pendingTimer = useRef<number | null>(null)
-  // Prototypage de l'épic : créer une story a la volée, ou y pousser un ticket
-  // existant retrouvé par sa clé ou son titre.
+  // Prototypage de la macro : créer une story a la volée, ou y pousser un ticket existant
   const [newStory, setNewStory] = useState('')
   const [attachQuery, setAttachQuery] = useState('')
   const [busyKey, setBusyKey] = useState<string | null>(null)
-  // Découpe : les stories cochées partent vers un autre épic, existant ou créé
-  // pour l'occasion.
+  // Découpe : les stories cochées partent vers une autre macro
   const [checked, setChecked] = useState<Record<string, boolean>>({})
-  // Curseur de coupe : rang dans la liste ordonnée par sprint à partir duquel
-  // les tickets quittent l'épic. 0 veut dire « tout couper », la longueur de la
-  // liste veut dire « ne rien couper ».
   const [cutAt, setCutAt] = useState<number>(-1)
   const [draggingCut, setDraggingCut] = useState(false)
-  // Champs que l'instance impose pour créer un épic, et la valeur retenue. PE
-  // exige « Epic Type » : sans lui, Jira refuse la création en 400.
-  const [epicFields, setEpicFields] = useState<EpicRequiredField[]>([])
-  const [epicFieldValues, setEpicFieldValues] = useState<Record<string, string>>({})
-  // Les lignes de la liste, pour retrouver la frontière la plus proche du
-  // pointeur pendant le glissement. Les hauteurs varient avec les titres, donc
-  // un calcul par pas fixe se décalerait.
   const rowRefs = useRef<(HTMLDivElement | null)[]>([])
   const [moveTarget, setMoveTarget] = useState('')
   const [newEpicTitle, setNewEpicTitle] = useState('')
@@ -174,7 +154,7 @@ export const RoadmapView: React.FC = () => {
     }
     if (sprintFilter) chips.push({ label: sprintFilter, clear: () => setSprintFilter(null) })
     if (teamFilter) chips.push({ label: teamFilter, clear: () => setTeamFilter(null) })
-    if (labelFilter) chips.push({ label: `#${labelFilter.replace(/^#/, '')}`, clear: () => setLabelFilter(null) })
+    if (labelFilter) chips.push({ label: `#${labelFilter.replace(/^#+/, '')}`, clear: () => setLabelFilter(null) })
     if (pinnedOnly) chips.push({ label: 'épinglés seulement', clear: () => setPinnedOnly(false) })
     if (searchQuery) chips.push({ label: `« ${searchQuery} »`, clear: () => setSearchQuery('') })
     return chips
@@ -196,7 +176,7 @@ export const RoadmapView: React.FC = () => {
   const PANEL_MIN = 420
   const LIST_MIN = 280
   const [panelWidth, setPanelWidth] = useState<number>(() => {
-    const stored = Number(localStorage.getItem('taskacao_roadmap_panel_width') || '')
+    const stored = Number(localStorage.getItem('taskflow_roadmap_panel_width') || localStorage.getItem('taskacao_roadmap_panel_width') || '')
     return Number.isFinite(stored) && stored >= PANEL_MIN ? stored : 720
   })
   const splitRef = useRef<HTMLDivElement>(null)
@@ -220,7 +200,7 @@ export const RoadmapView: React.FC = () => {
       window.removeEventListener('pointerup', onUp)
       setPanelWidth(current => {
         try {
-          localStorage.setItem('taskacao_roadmap_panel_width', String(current))
+          localStorage.setItem('taskflow_roadmap_panel_width', String(current))
         } catch {
           // stockage indisponible : la largeur vaut pour cette session
         }
@@ -237,42 +217,28 @@ export const RoadmapView: React.FC = () => {
       return
     }
     fetchProjectEpics(currentProject.id).then(setEpicMeta)
-    pendingHorizonPushes(currentProject.id).then(list => setPendingPushes(list.length))
-    // activeJobCount en dépendance : les écritures Jira (rattachement, découpe,
-    // labels d'horizon) passent par la file, donc la liste des épics n'est à
-    // jour qu'une fois la file vidée.
-  }, [currentProject?.id, fetchProjectEpics, pendingHorizonPushes, activeJobCount])
+  }, [currentProject?.id, fetchProjectEpics, activeJobCount])
 
   const allRows = useMemo(() => buildEpicRows(tasks, currentProject, epicMeta), [tasks, currentProject, epicMeta])
-
-  const projectKey = (currentProject?.jiraProject || '').trim().toUpperCase()
 
   const rows = useMemo(() => {
     let list = allRows
     if (!showClosed) list = list.filter(r => !r.closed)
-    if (onlyProjectKey && projectKey) list = list.filter(r => belongsToProjectKey(r, projectKey))
-    // La recherche s'applique en dernier, et sur les épics : les compteurs des
-    // onglets ci-dessous suivent donc, ce qui montre dans quel horizon se
-    // trouve ce qu'on cherche.
     if (searchQuery.trim()) list = list.filter(r => matchesEpicSearch(r, searchQuery))
     return list
-  }, [allRows, showClosed, onlyProjectKey, projectKey, searchQuery])
+  }, [allRows, showClosed, searchQuery])
 
-  // Des correspondances écartées par les deux filtres d'affichage, à signaler :
-  // chercher un épic clos et ne rien voir, sans savoir pourquoi, est trompeur.
   const hiddenMatches = useMemo(() => {
     const q = searchQuery.trim()
     if (!q) return 0
     return allRows.filter(r => {
       if (!matchesEpicSearch(r, q)) return false
       if (!showClosed && r.closed) return true
-      if (onlyProjectKey && projectKey && !belongsToProjectKey(r, projectKey)) return true
       return false
     }).length
-  }, [allRows, searchQuery, showClosed, onlyProjectKey, projectKey])
+  }, [allRows, searchQuery, showClosed])
 
   const closedCount = allRows.filter(r => r.closed).length
-  const foreignCount = projectKey ? allRows.filter(r => !belongsToProjectKey(r, projectKey)).length : 0
 
   const counts = useMemo(
     () => ({
@@ -312,70 +278,7 @@ export const RoadmapView: React.FC = () => {
     if (target && target.id !== tab) setTab(target.id)
   }, [searchQuery, visibleRows.length, rows, tab])
 
-  useEffect(() => {
-    if (!currentProject?.id) {
-      setEpicFields([])
-      return
-    }
-    fetchEpicRequiredFields(currentProject.id).then(fields => {
-      setEpicFields(fields)
-      // Le dernier choix est réutilisé : le champ est métier, mais on ne va pas
-      // le redemander à chaque épic d'une même session de découpe.
-      const storeKey = `taskacao_epic_fields_${currentProject.id}`
-      let stored: Record<string, string> = {}
-      try {
-        stored = JSON.parse(localStorage.getItem(storeKey) || '{}') || {}
-      } catch {
-        stored = {}
-      }
-      const next: Record<string, string> = {}
-      fields.forEach(f => {
-        if (stored[f.id] && f.options.some(o => o.id === stored[f.id])) next[f.id] = stored[f.id]
-      })
-      setEpicFieldValues(next)
-    })
-  }, [currentProject?.id, fetchEpicRequiredFields])
 
-  const setEpicFieldValue = (fieldId: string, optionId: string) => {
-    const next = { ...epicFieldValues, [fieldId]: optionId }
-    setEpicFieldValues(next)
-    if (currentProject?.id) {
-      try {
-        localStorage.setItem(`taskacao_epic_fields_${currentProject.id}`, JSON.stringify(next))
-      } catch {
-        // stockage indisponible : le choix vaut pour cette session seulement
-      }
-    }
-  }
-
-  // Tous les champs imposés sont-ils renseignés ? Sinon la création échouera
-  // côté Jira, autant désactiver le bouton et le dire.
-  const missingEpicField = epicFields.find(f => !epicFieldValues[f.id])
-
-  // Les champs imposés par l'instance, rendus partout où un épic peut naître.
-  const epicFieldSelectors =
-    epicFields.length === 0 ? null : (
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {epicFields.map(field => (
-          <label key={field.id} className="flex items-center gap-1 text-[10px] text-[var(--text-muted)]">
-            <span>{field.name}</span>
-            <select
-              value={epicFieldValues[field.id] || ''}
-              onChange={e => setEpicFieldValue(field.id, e.target.value)}
-              className="px-1.5 py-1 text-[10px] rounded-lg bg-[var(--bg-primary)] border text-[var(--text-primary)] focus:outline-none cursor-pointer"
-              style={{
-                borderColor: epicFieldValues[field.id] ? 'var(--border-color)' : 'var(--status-danger)',
-              }}
-            >
-              <option value="">— à choisir —</option>
-              {field.options.map(opt => (
-                <option key={opt.id} value={opt.id}>{opt.value}</option>
-              ))}
-            </select>
-          </label>
-        ))}
-      </div>
-    )
 
   const selected: EpicRow | null = visibleRows.find(r => r.key === selectedKey) || visibleRows[0] || null
 
@@ -456,21 +359,8 @@ export const RoadmapView: React.FC = () => {
       .slice(0, 6)
   }, [attachQuery, tasks, selected])
 
-  const jiraBase = (currentProject?.trackerUrl || settings.jiraUrl || '').replace(/\/+$/, '')
-  const epicUrl = (key: string) => (jiraBase ? `${jiraBase}/browse/${key}` : undefined)
-
   const activeSprints = (currentProject?.sprints || []).filter(s => s.state === 'active')
   const futureSprints = (currentProject?.sprints || []).filter(s => s.state === 'future')
-
-  // Le compteur « à pousser » interroge Jira : on ne le rafraîchit pas à chaque
-  // clic, mais une fois le triage retombé.
-  const schedulePendingRefresh = () => {
-    if (pendingTimer.current) window.clearTimeout(pendingTimer.current)
-    pendingTimer.current = window.setTimeout(() => {
-      if (!currentProject?.id) return
-      pendingHorizonPushes(currentProject.id).then(list => setPendingPushes(list.length))
-    }, 4000)
-  }
 
   const persist = async (
     key: string,
@@ -480,14 +370,13 @@ export const RoadmapView: React.FC = () => {
       addToast({
         type: 'error',
         title: 'Aucun projet sélectionné',
-        description: 'Choisis un projet pour classer ses épics.',
+        description: 'Choisis un projet pour classer ses macros.',
       })
       return
     }
     const saved = await saveEpicMeta(currentProject.id, key, patch)
     if (saved) {
       setEpicMeta(prev => [...prev.filter(m => m.key !== saved.key), saved])
-      if (patch.horizon !== undefined) schedulePendingRefresh()
     }
   }
 
@@ -502,8 +391,46 @@ export const RoadmapView: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      {/* Barre d'outils : classification, et en mode opérationnel les sprints visés */}
-      <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]/50 shrink-0">
+      {/* Sub-View Mode Switcher (Timeline Sprints vs Épics Horizons) */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] shrink-0">
+        <div className="flex items-center gap-1.5 bg-[var(--bg-tertiary)] p-0.5 rounded-lg border border-[var(--border-color)]">
+          <button
+            type="button"
+            onClick={() => setRoadmapMode('sprints')}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+              roadmapMode === 'sprints'
+                ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <Clock size={13} />
+            <span>Timeline</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setRoadmapMode('epics')}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+              roadmapMode === 'epics'
+                ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <Route size={13} />
+            <span>Macros & Horizons (NOW/NEXT)</span>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
+          <span className="font-mono">{currentProject?.name || 'Projet Actif'}</span>
+        </div>
+      </div>
+
+      {roadmapMode === 'sprints' ? (
+        <SprintTimelineView />
+      ) : (
+        <>
+          {/* Barre d'outils : classification, et en mode opérationnel les sprints visés */}
+          <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]/50 shrink-0">
         <div className="flex items-center gap-3 flex-wrap min-w-0">
           <div className="flex items-center p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
             {TABS.map(t => {
@@ -520,7 +447,7 @@ export const RoadmapView: React.FC = () => {
                     background: active ? meta?.color || 'var(--text-muted)' : 'transparent',
                     color: active ? '#fff' : 'var(--text-secondary)',
                   }}
-                  title={meta ? meta.hint : 'Épics pas encore arbitrés'}
+                  title={meta ? meta.hint : 'Macros pas encore arbitrées'}
                 >
                   {t.icon}
                   <span>{t.label}</span>
@@ -538,30 +465,6 @@ export const RoadmapView: React.FC = () => {
             })}
           </div>
 
-          {pendingPushes > 0 && (
-            <button
-              type="button"
-              disabled={isPushing}
-              onClick={async () => {
-                if (!currentProject?.id) return
-                setIsPushing(true)
-                await pushPendingHorizons(currentProject.id)
-                const rest = await pendingHorizonPushes(currentProject.id)
-                setPendingPushes(rest.length)
-                setIsPushing(false)
-              }}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer border disabled:opacity-50"
-              style={{
-                background: 'rgb(var(--status-warn-rgb) / 0.14)',
-                borderColor: 'rgb(var(--status-warn-rgb) / 0.34)',
-                color: 'var(--status-warn)',
-              }}
-              title="Ces épics sont classés dans Taskacao mais leur épic Jira ne porte pas encore le label roadmap"
-            >
-              {isPushing ? 'Poussée…' : `${pendingPushes} à pousser vers Jira`}
-            </button>
-          )}
-
           {closedCount > 0 && (
             <button
               type="button"
@@ -572,33 +475,14 @@ export const RoadmapView: React.FC = () => {
                 borderColor: showClosed ? 'rgb(var(--accent-rgb) / 0.4)' : 'var(--border-color)',
                 color: showClosed ? 'var(--accent-color)' : 'var(--text-secondary)',
               }}
-              title={`${closedCount} épics terminés côté tracker`}
+              title={`${closedCount} macros terminées côté tracker`}
             >
               {showClosed ? <Eye size={12} /> : <EyeOff size={12} />}
-              {showClosed ? `${closedCount} terminés affichés` : `${closedCount} terminés masqués`}
+              {showClosed ? `${closedCount} terminées affichées` : `${closedCount} terminées masquées`}
             </button>
           )}
 
-          {projectKey && foreignCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setOnlyProjectKey(v => !v)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer border font-mono"
-              style={{
-                background: onlyProjectKey ? 'rgb(var(--status-info-rgb) / 0.12)' : 'var(--bg-tertiary)',
-                borderColor: onlyProjectKey ? 'rgb(var(--status-info-rgb) / 0.32)' : 'var(--border-color)',
-                color: onlyProjectKey ? 'var(--status-info)' : 'var(--text-secondary)',
-              }}
-              title={`${foreignCount} épics venant d'un autre projet Jira, portés par des tickets ${projectKey}`}
-            >
-              {onlyProjectKey ? `${projectKey}- uniquement` : `tous projets (+${foreignCount})`}
-            </button>
-          )}
-
-          {/* Les filtres globaux amputent aussi cette vue, puisqu'elle est bâtie sur
-              la même liste de tickets que le board. Sans les afficher ici, un
-              filtre resté actif ailleurs fait « disparaître » des tickets sans
-              explication : cette vue n'a pas de barre de filtres à elle. */}
+          {/* Les filtres globaux */}
           {activeFilterChips.length > 0 && (
             <div className="flex items-center gap-1.5 flex-wrap">
               {activeFilterChips.map(chip => (
@@ -622,20 +506,17 @@ export const RoadmapView: React.FC = () => {
             </div>
           )}
 
-          {epicFieldSelectors}
-
           <button
             type="button"
-            disabled={busyKey === 'epic' || !currentProject?.id || Boolean(missingEpicField)}
+            disabled={busyKey === 'epic' || !currentProject?.id}
             onClick={async () => {
-              const title = window.prompt('Titre du nouvel épic ?')
+              const title = window.prompt('Titre de la nouvelle macro ?')
               if (!title?.trim() || !currentProject?.id) return
               setBusyKey('epic')
               const created = await createEpic(
                 currentProject.id,
                 title.trim(),
-                tab === 'unclassified' || tab === 'hidden' ? '' : (tab as EpicHorizon),
-                epicFieldValues
+                tab === 'unclassified' || tab === 'hidden' ? '' : (tab as EpicHorizon)
               )
               if (created) {
                 setEpicMeta(prev => [...prev.filter(m => m.key !== created.key), created])
@@ -644,13 +525,9 @@ export const RoadmapView: React.FC = () => {
               setBusyKey(null)
             }}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold text-white accent-bg cursor-pointer disabled:opacity-40"
-            title={
-              missingEpicField
-                ? `${missingEpicField.name} est obligatoire sur ce projet : choisis une valeur d'abord`
-                : 'Créer un épic vide, utilisable comme cible pour découper un épic trop gros'
-            }
+            title="Créer une macro vide, utilisable comme cible pour découper une macro trop grosse"
           >
-            <Plus size={12} /> Épic
+            <Plus size={12} /> Macro
           </button>
 
           {operational && (
@@ -663,7 +540,7 @@ export const RoadmapView: React.FC = () => {
                 borderColor: onlyIssues ? 'rgb(var(--status-danger-rgb) / 0.4)' : 'var(--border-color)',
                 color: onlyIssues ? 'var(--status-danger)' : 'var(--text-secondary)',
               }}
-              title="Ne garder que les épics ayant un ticket non terminé sans sprint, ou resté dans un sprint passé"
+              title="Ne garder que les macros ayant un ticket non terminé sans sprint, ou resté dans un sprint passé"
             >
               <AlertTriangle size={12} />
               À corriger
@@ -682,7 +559,7 @@ export const RoadmapView: React.FC = () => {
               }}
             >
               <Search size={11} />
-              {rows.length} épic{rows.length > 1 ? 's' : ''} sur « {searchQuery.trim()} »
+              {rows.length} macro{rows.length > 1 ? 's' : ''} sur « {searchQuery.trim()} »
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
@@ -711,26 +588,26 @@ export const RoadmapView: React.FC = () => {
       </div>
 
       <div className="flex-1 flex min-h-0 min-w-0 overflow-hidden" ref={splitRef}>
-        {/* Épics de l'horizon courant */}
+        {/* Macros de l'horizon courant */}
         <div className="flex-1 overflow-y-auto p-3 min-w-0 space-y-2">
           {visibleRows.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center gap-2 text-center px-6">
               <Compass size={26} className="text-[var(--text-muted)]" />
               <p className="text-sm font-semibold">
-                {searchQuery.trim() ? `Aucun épic ne correspond à « ${searchQuery.trim()} »` : 'Aucun épic ici'}
+                {searchQuery.trim() ? `Aucune macro ne correspond à « ${searchQuery.trim()} »` : 'Aucune macro ici'}
               </p>
               <p className="text-[11px] text-[var(--text-muted)] max-w-sm">
                 {searchQuery.trim()
                   ? hiddenMatches > 0
-                    ? `${hiddenMatches} épic(s) correspondent mais sont écartés par les filtres d'affichage : affiche les épics clos ou ceux d'un autre projet pour les voir.`
-                    : 'La recherche porte sur la clé, le titre et l’équipe de l’épic, ainsi que sur les clés et titres de ses tickets.'
+                    ? `${hiddenMatches} macro(s) correspondent mais sont écartées par les filtres d'affichage : affiche les macros closes ou celles d'un autre projet pour les voir.`
+                    : 'La recherche porte sur la clé, le titre et l’équipe de la macro, ainsi que sur les clés et titres de ses tickets.'
                   : tab === 'hidden'
-                  ? 'Aucun épic masqué. Classe en HIDDEN le tout-venant qui n’a pas vocation à apparaître dans la roadmap.'
+                  ? 'Aucune macro masquée. Classe en HIDDEN le tout-venant qui n’a pas vocation à apparaître dans la roadmap.'
                   : tab === 'unclassified'
-                  ? 'Tous les épics sont classés. Les nouveaux apparaîtront ici après une synchro.'
+                  ? 'Toutes les macros sont classées. Les nouvelles apparaîtront ici après une synchro.'
                   : onlyIssues
                     ? 'Aucune anomalie de placement sur cet horizon.'
-                    : 'Classe des épics depuis l’onglet « Non classés » pour les voir apparaître ici.'}
+                    : 'Classe des macros depuis l’onglet « Non classés » pour les voir apparaître ici.'}
               </p>
             </div>
           ) : (
@@ -868,24 +745,46 @@ export const RoadmapView: React.FC = () => {
                     {HORIZON_META[selected.horizon].label}
                   </span>
                 )}
-                {epicUrl(selected.key) && (
-                  <a href={epicUrl(selected.key)} target="_blank" rel="noreferrer"
-                    className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors"
-                    style={{
-                      color: 'var(--status-info)',
-                      background: 'rgb(var(--status-info-rgb) / 0.12)',
-                      border: '1px solid rgb(var(--status-info-rgb) / 0.32)',
+                <div className="ml-auto flex items-center gap-1.5">
+                  {selected.tasks[0]?.externalUrl && (
+                    <a href={selected.tasks[0].externalUrl} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-colors"
+                      style={{
+                        color: 'var(--status-info)',
+                        background: 'rgb(var(--status-info-rgb) / 0.12)',
+                        border: '1px solid rgb(var(--status-info-rgb) / 0.32)',
+                      }}
+                      title={`Ouvrir ${selected.key} dans le tracker distant`}>
+                      <ExternalLink size={13} />
+                      <span>Lien</span>
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    disabled={busyKey === 'delete'}
+                    onClick={async () => {
+                      if (!confirm(`Supprimer la macro ${selected.key} (${selected.title}) ?\n(Les tickets associés seront détachés)`)) return
+                      if (!currentProject?.id) return
+                      setBusyKey('delete')
+                      const ok = await deleteEpic(currentProject.id, selected.key)
+                      if (ok) {
+                        setEpicMeta(prev => prev.filter(m => m.key !== selected.key))
+                        setSelectedKey(null)
+                      }
+                      setBusyKey(null)
                     }}
-                    title={`Ouvrir ${selected.key} dans Jira`}>
-                    <ExternalLink size={13} />
-                    <span>Jira</span>
-                  </a>
-                )}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-[var(--text-muted)] hover:text-rose-400 cursor-pointer border border-[var(--border-color)] hover:border-rose-500/30 transition-colors disabled:opacity-50"
+                    title={`Supprimer la macro ${selected.key} (et le milestone GitHub si applicable)`}
+                  >
+                    <Trash2 size={12} />
+                    <span>Supprimer</span>
+                  </button>
+                </div>
               </div>
               <h2 className="text-[16px] font-bold leading-[1.25]">{selected.title}</h2>
               {selected.meta?.status && (
                 <div className="mt-1.5 text-[10px] font-mono" style={{ color: selected.closed ? 'var(--status-ok)' : 'var(--text-muted)' }}>
-                  Épic {selected.closed ? 'terminé' : 'ouvert'} · {selected.meta.status}
+                  Macro {selected.closed ? 'terminée' : 'ouverte'} · {selected.meta.status}
                 </div>
               )}
             </div>
@@ -894,10 +793,10 @@ export const RoadmapView: React.FC = () => {
               {operational ? (
                 <>
                   {/* Prototypage : ajouter une story a la volée, ou pousser un
-                      ticket existant dans l'épic. */}
+                      ticket existant dans la macro. */}
                   <div>
                     <div className="text-[10px] font-bold uppercase tracking-[.08em] text-[var(--text-muted)] mb-1.5">
-                      Composer l'épic
+                      Composer la macro
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -960,7 +859,7 @@ export const RoadmapView: React.FC = () => {
                               </span>
                               <span className="text-[11px] truncate flex-1 text-[var(--text-secondary)]">{candidate.title}</span>
                               {candidate.parentKey && (
-                                <span className="text-[9px] font-mono shrink-0 text-[var(--text-muted)]" title="Épic actuel, qui sera remplacé">
+                                <span className="text-[9px] font-mono shrink-0 text-[var(--text-muted)]" title="Macro actuelle, qui sera remplacée">
                                   {candidate.parentKey} →
                                 </span>
                               )}
@@ -998,7 +897,7 @@ export const RoadmapView: React.FC = () => {
                     <div className="flex flex-col gap-1.5">
                       {selected.open.length === 0 && (
                         <p className="text-[11px] text-[var(--text-muted)]">
-                          Aucune story ouverte : cet épic ressemble plutôt à du LATER.
+                          Aucune story ouverte : cette macro ressemble plutôt à du LATER.
                         </p>
                       )}
                       {orderedOpen.map((task, index) => {
@@ -1076,7 +975,7 @@ export const RoadmapView: React.FC = () => {
                                   background: checked[task.id] ? 'var(--accent-color)' : 'transparent',
                                   border: `1px solid ${checked[task.id] ? 'var(--accent-color)' : 'var(--border-color)'}`,
                                 }}
-                                title="Sélectionner pour déplacer vers un autre épic"
+                                title="Sélectionner pour déplacer vers une autre macro"
                               >
                                 {checked[task.id] && <Check size={10} className="text-white" />}
                               </button>
@@ -1116,7 +1015,7 @@ export const RoadmapView: React.FC = () => {
                                   setBusyKey(null)
                                 }}
                                 className="p-0.5 rounded text-[var(--text-muted)] hover:text-rose-400 cursor-pointer shrink-0 disabled:opacity-50"
-                                title={`Retirer ${task.key} de l'épic`}>
+                                title={`Retirer ${task.key} de la macro`}>
                                 <X size={12} />
                               </button>
                             </div>
@@ -1209,7 +1108,7 @@ export const RoadmapView: React.FC = () => {
                   )}
 
                   {/* Découpe : les stories cochées, ou celles au delà du
-                      curseur, quittent l'épic pour un autre. */}
+                      curseur, quittent la macro pour une autre. */}
                   {cutIds.length > 0 && (
                     <div className="p-2.5 rounded-xl border" style={{ background: 'var(--accent-light)', borderColor: 'rgb(var(--accent-rgb) / 0.4)' }}>
                       <div className="text-[10px] font-bold uppercase tracking-[.08em] mb-1.5" style={{ color: 'var(--accent-color)' }}>
@@ -1220,9 +1119,9 @@ export const RoadmapView: React.FC = () => {
                           <LookupField
                             value={moveTarget}
                             icon={<Target size={11} />}
-                            placeholder="épic existant..."
+                            placeholder="macro existante..."
                             allowClear={false}
-                            emptyHint="Aucun épic ne correspond."
+                            emptyHint="Aucune macro ne correspond."
                             onSearch={async query => {
                               const q = query.trim().toLowerCase()
                               return allRows
@@ -1249,46 +1148,32 @@ export const RoadmapView: React.FC = () => {
                           Déplacer
                         </button>
                       </div>
-                      {epicFieldSelectors && <div className="mt-2">{epicFieldSelectors}</div>}
                       <div className="flex items-center gap-2 mt-2">
                         <input
                           type="text"
                           value={newEpicTitle}
                           onChange={e => setNewEpicTitle(e.target.value)}
-                          placeholder="…ou vers un nouvel épic : son titre"
+                          placeholder="…ou vers une nouvelle macro : son titre"
                           className="flex-1 px-2 py-1.5 text-[11px] rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
                         />
                         <button
                           type="button"
-                          disabled={!newEpicTitle.trim() || busyKey === 'move' || Boolean(missingEpicField)}
+                          disabled={!newEpicTitle.trim() || busyKey === 'move'}
                           onClick={async () => {
                             setBusyKey('move')
-                            // La découpe est mise en file : l'épic est créé par
-                            // l'activité, donc la liste se recharge quand la
-                            // file se vide, pas ici.
-                            await moveTasksToEpic(currentProject!.id, cutIds, '', newEpicTitle.trim(), epicFieldValues)
+                            await moveTasksToEpic(currentProject!.id, cutIds, '', newEpicTitle.trim())
                             setChecked({})
                             setCutAt(-1)
                             setNewEpicTitle('')
                             setBusyKey(null)
                           }}
-                          title={
-                            missingEpicField
-                              ? `Jira impose « ${missingEpicField.name} » à la création d'un épic : choisissez une valeur ci-dessus.`
-                              : 'Créer l\'épic cible et y déplacer les tickets sélectionnés'
-                          }
+                          title="Créer la macro cible et y déplacer les tickets sélectionnés"
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer shrink-0 disabled:opacity-40"
                           style={{ color: 'var(--status-info)', background: 'rgb(var(--status-info-rgb) / 0.12)', border: '1px solid rgb(var(--status-info-rgb) / 0.32)' }}
                         >
                           {busyKey === 'move' ? '…' : 'Créer et couper'}
                         </button>
                       </div>
-                      {missingEpicField && (
-                        <p className="mt-1 text-[9.5px] leading-snug" style={{ color: 'var(--status-danger)' }}>
-                          Jira impose « {missingEpicField.name} » pour créer un épic : sans valeur, la création est
-                          refusée en 400.
-                        </p>
-                      )}
                     </div>
                   )}
 
@@ -1319,7 +1204,7 @@ export const RoadmapView: React.FC = () => {
                         setDraftDirty(true)
                       }}
                       minHeight={160}
-                      placeholder="Le problème, le périmètre, ce qui est hors périmètre… Ce cadrage vit dans Taskacao."
+                      placeholder="Le problème, le périmètre, ce qui est hors périmètre… Ce cadrage vit dans TaskFlow."
                     />
                   </div>
 
@@ -1454,6 +1339,8 @@ export const RoadmapView: React.FC = () => {
           </aside>
         )}
       </div>
+        </>
+      )}
     </div>
   )
 }

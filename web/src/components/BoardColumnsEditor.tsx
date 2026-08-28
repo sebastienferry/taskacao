@@ -1,19 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Plus, X, ArrowUp, ArrowDown, RefreshCw, Kanban, Tag, GitPullRequest, Eye, EyeOff } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { Project, TrackerBoard, TrackerColumn, WorkflowStage } from '../types'
+import type { Project, TrackerColumn, WorkflowStage } from '../types'
 
 /**
- * Éditeur des colonnes du board, sur le modèle de Jira : des colonnes, les
- * statuts du tracker qu'on y dépose, et — l'ajout de Taskacao — les étapes du
- * workflow agentique déposées de la même façon.
- *
- * Tout se fait au glisser-déposer, y compris pour déplacer un statut déjà placé
- * d'une colonne à l'autre : un menu « ajouter » ne permettait que de placer les
- * statuts encore libres, donc rien après un import qui les affecte tous.
- *
- * Un statut n'appartient qu'à une colonne, sinon un ticket apparaîtrait deux
- * fois sur le board. Une étape du workflow, elle, peut viser plusieurs colonnes.
+ * Éditeur des colonnes du board : des colonnes, les statuts du tracker qu'on y dépose,
+ * et les étapes du workflow agentique déposées de la même façon.
  */
 
 const WORKFLOW_STAGES: { id: WorkflowStage; label: string }[] = [
@@ -25,8 +17,8 @@ const WORKFLOW_STAGES: { id: WorkflowStage; label: string }[] = [
   { id: 'finished', label: '#finished' },
 ]
 
-const DRAG_STATUS = 'application/x-taskacao-status'
-const DRAG_STAGE = 'application/x-taskacao-stage'
+const DRAG_STATUS = 'application/x-taskflow-status'
+const DRAG_STAGE = 'application/x-taskflow-stage'
 
 interface Props {
   project: Project | null
@@ -34,6 +26,10 @@ interface Props {
   onColumnsChange: (columns: TrackerColumn[]) => void
   stageColumns: Record<string, string[]>
   onStageColumnsChange: (mapping: Record<string, string[]>) => void
+  issueTracker?: string
+  githubRepo?: string
+  repoPath?: string
+  linearTeam?: string
 }
 
 type DragPayload =
@@ -47,26 +43,24 @@ export const BoardColumnsEditor: React.FC<Props> = ({
   onColumnsChange,
   stageColumns,
   onStageColumnsChange,
+  issueTracker,
+  githubRepo,
+  repoPath,
+  linearTeam,
 }) => {
-  const { listProjectBoards, importProjectBoardColumns, fetchProjectTrackerStatuses } = useApp()
+  const { fetchProjectTrackerStatuses, addToast } = useApp()
 
-  const [boards, setBoards] = useState<TrackerBoard[]>([])
-  const [selectedBoard, setSelectedBoard] = useState(project?.boardId || '')
   const [statuses, setStatuses] = useState<string[]>([])
   const [newColumnName, setNewColumnName] = useState('')
-  const [isImporting, setIsImporting] = useState(false)
   const [dragging, setDragging] = useState<DragPayload>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!project?.id) return
-    fetchProjectTrackerStatuses(project.id).then(setStatuses)
-    listProjectBoards(project.id).then(list => {
-      setBoards(list)
-      if (!project.boardId && list.length > 0) {
-        setSelectedBoard((list.find(b => b.type === 'scrum') || list[0]).id)
-      }
-    })
+    if (project?.id) {
+      fetchProjectTrackerStatuses(project.id).then(setStatuses)
+    } else {
+      handleDetect()
+    }
   }, [project?.id])
 
   const assignedStatuses = useMemo(
@@ -75,14 +69,68 @@ export const BoardColumnsEditor: React.FC<Props> = ({
   )
   const freeStatuses = statuses.filter(st => !assignedStatuses.has(st.toLowerCase()))
 
-  const refreshFromBoard = async () => {
-    if (!project?.id || !selectedBoard) return
-    setIsImporting(true)
-    const updated = await importProjectBoardColumns(project.id, selectedBoard)
-    setIsImporting(false)
-    if (updated?.trackerColumns) {
-      onColumnsChange(updated.trackerColumns)
-      fetchProjectTrackerStatuses(project.id).then(setStatuses)
+  // ...
+  const [isDetecting, setIsDetecting] = useState(false)
+
+  const handleDetect = async () => {
+    setIsDetecting(true)
+    try {
+      const params = new URLSearchParams()
+      if (project?.id) params.append('projectId', project.id)
+      if (issueTracker) params.append('tracker', issueTracker)
+      if (githubRepo) params.append('repo', githubRepo)
+      if (linearTeam) params.append('team', linearTeam)
+      if (repoPath) params.append('repoPath', repoPath)
+
+      let detectedList: string[] = []
+      const res = await fetch(`/api/projects/detected-statuses?${params.toString()}`)
+      if (res.ok) {
+        const data: { statuses: { name: string }[] } = await res.json()
+        if (data.statuses) {
+          detectedList = data.statuses.map(s => s.name)
+        }
+      }
+
+      if (detectedList.length > 0) {
+        setStatuses(detectedList)
+
+        // Build new columns array directly from detected board column names/statuses
+        const existingColNames = new Set(columns.map(c => c.name.toLowerCase()))
+        const newCols: TrackerColumn[] = [...columns]
+
+        for (const statusName of detectedList) {
+          const cleanName = statusName.trim()
+          if (cleanName && !existingColNames.has(cleanName.toLowerCase())) {
+            existingColNames.add(cleanName.toLowerCase())
+            newCols.push({
+              name: cleanName,
+              statuses: [cleanName],
+            })
+          }
+        }
+
+        onColumnsChange(newCols)
+
+        addToast({
+          type: 'success',
+          title: 'Colonnes & statuts détectés !',
+          description: `${detectedList.length} colonne(s) créée(s) depuis le board distant.`,
+        })
+      } else {
+        addToast({
+          type: 'info',
+          title: 'Aucune colonne trouvée',
+          description: 'Vérifiez la configuration du tracker.',
+        })
+      }
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Erreur de détection',
+        description: err.message || 'Détection impossible',
+      })
+    } finally {
+      setIsDetecting(false)
     }
   }
 
@@ -173,13 +221,16 @@ export const BoardColumnsEditor: React.FC<Props> = ({
 
   const removeColumn = (index: number) => {
     const removed = columns[index]
-    onColumnsChange(columns.filter((_, idx) => idx !== index))
-    const cleaned: Record<string, string[]> = {}
-    Object.entries(stageColumns).forEach(([stage, cols]) => {
-      const kept = (cols || []).filter(c => c !== removed.name)
-      if (kept.length > 0) cleaned[stage] = kept
-    })
-    onStageColumnsChange(cleaned)
+    const updated = columns.filter((_, idx) => idx !== index)
+    onColumnsChange(updated)
+    if (removed) {
+      const cleaned: Record<string, string[]> = {}
+      Object.entries(stageColumns).forEach(([stage, cols]) => {
+        const kept = (cols || []).filter(c => c !== removed.name)
+        if (kept.length > 0) cleaned[stage] = kept
+      })
+      onStageColumnsChange(cleaned)
+    }
   }
 
   const moveColumn = (index: number, delta: number) => {
@@ -204,6 +255,8 @@ export const BoardColumnsEditor: React.FC<Props> = ({
   const stagesOfColumn = (columnName: string): WorkflowStage[] =>
     WORKFLOW_STAGES.filter(st => (stageColumns[st.id] || []).includes(columnName)).map(st => st.id)
 
+
+
   const chipBase =
     'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-grab active:cursor-grabbing select-none'
 
@@ -213,28 +266,16 @@ export const BoardColumnsEditor: React.FC<Props> = ({
         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
           Colonnes du board
         </label>
-        <div className="flex items-center gap-1.5">
-          <select
-            value={selectedBoard}
-            onChange={e => setSelectedBoard(e.target.value)}
-            className="text-[11px] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-[var(--border-color)] rounded-md px-2 py-1 focus:outline-none focus:border-[var(--accent-color)] cursor-pointer max-w-[170px]"
-          >
-            <option value="">Board du tracker…</option>
-            {boards.map(b => (
-              <option key={b.id} value={b.id}>{b.name} ({b.type})</option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={refreshFromBoard}
-            disabled={!selectedBoard || isImporting}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold text-[var(--text-primary)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-color)]/50 disabled:opacity-40 transition-colors cursor-pointer"
-            title="Reprendre les colonnes de ce board. La synchro le fait aussi automatiquement."
-          >
-            <RefreshCw size={11} className={isImporting ? 'animate-spin' : ''} />
-            <span>{isImporting ? 'Lecture…' : 'Détecter'}</span>
-          </button>
-        </div>
+        <button
+          type="button"
+          disabled={isDetecting}
+          onClick={handleDetect}
+          className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] hover:border-[var(--accent-color)] hover:bg-[var(--accent-light)] transition-all cursor-pointer disabled:opacity-50"
+          title="Détecter les statuts depuis le tracker (GitHub / Linear / Base)"
+        >
+          <RefreshCw size={10} className={isDetecting ? 'animate-spin text-[var(--accent-color)]' : 'text-cyan-400'} />
+          <span>{isDetecting ? 'Détection...' : 'Détecter les statuts'}</span>
+        </button>
       </div>
 
       <p className="text-[10px] text-[var(--text-muted)] -mt-1">
@@ -305,7 +346,7 @@ export const BoardColumnsEditor: React.FC<Props> = ({
             const isTarget = dropTarget === col.name
             return (
               <div
-                key={`${col.name}-${index}`}
+                key={index}
                 onDragOver={e => { e.preventDefault(); setDropTarget(col.name) }}
                 onDragLeave={() => setDropTarget(prev => (prev === col.name ? null : prev))}
                 onDrop={e => dropOnColumn(e, col.name)}

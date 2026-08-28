@@ -21,12 +21,12 @@ type BasicWriter struct {
 
 // NewLinearWriter describes what Linear answers to.
 func NewLinearWriter() *BasicWriter {
-	return &BasicWriter{name: "linear", capabilities: []Capability{CapTransition, CapLabels, CapComment}}
+	return &BasicWriter{name: "linear", capabilities: []Capability{CapLabels, CapComment}}
 }
 
 // NewGithubWriter describes what GitHub Issues answers to.
 func NewGithubWriter() *BasicWriter {
-	return &BasicWriter{name: "github", capabilities: []Capability{CapTransition, CapLabels, CapComment, CapAssign}}
+	return &BasicWriter{name: "github", capabilities: []Capability{CapLabels, CapComment, CapAssign}}
 }
 
 func (w *BasicWriter) Name() string { return w.name }

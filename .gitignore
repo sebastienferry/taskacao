@@ -27,7 +27,7 @@ Thumbs.db
 tmp/
 scratch/
 
-# Taskacao parallel agent worktrees
+# TaskFlow parallel agent worktrees
 .tasks/
 
 # Interface compilée, embarquée dans le binaire au moment du build

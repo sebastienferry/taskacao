@@ -164,7 +164,7 @@ func (d *DB) pushStageToTracker(task *models.Task, stageLabel, statusTarget, tra
 	stale := StaleWorkflowLabels(stageLabel)
 	body := ""
 	if strings.TrimSpace(note) != "" {
-		body = "### 💬 [Taskacao] Rapport de session interactive\n\n" + note
+		body = "### 💬 [TaskFlow] Rapport de session interactive\n\n" + note
 	}
 
 	go func(src, repo, rPath, key string, st models.Status, lbls, staleLbls []string, target, url, comment string) {

@@ -160,16 +160,16 @@ export const TaskDetailModal: React.FC = () => {
   }
 
   const currentStage: WorkflowStage =
-    (trackerStatus && stageOfStatus(trackerStatus)) ||
-    (labels.map(l => l.toLowerCase().replace('#', '')).find(l =>
+    (labels.map(l => l.toLowerCase().replace(/^#+/, '')).find(l =>
       (WORKFLOW_ORDER as string[]).includes(l)
     ) as WorkflowStage | undefined) ||
+    (trackerStatus && stageOfStatus(trackerStatus)) ||
     'new'
 
   const applyStage = (stage: WorkflowStage) => {
     // L'étape remplace le label de workflow existant et emmène le statut avec
     // elle quand le projet dit vers quelle colonne aller.
-    const others = labels.filter(l => !(WORKFLOW_ORDER as string[]).includes(l.toLowerCase().replace('#', '')))
+    const others = labels.filter(l => !(WORKFLOW_ORDER as string[]).includes(l.toLowerCase().replace(/^#+/, '')))
     setLabels([...others, stage])
     const target = statusOfStage(stage)
     if (target) setTrackerStatus(target)
@@ -481,8 +481,8 @@ export const TaskDetailModal: React.FC = () => {
   }
 
   const handleAddLabel = async () => {
-    const clean = newLabelInput.replace(/^#/, '').trim()
-    if (clean && !labels.includes(clean)) {
+    const clean = newLabelInput.replace(/^#+/, '').trim()
+    if (clean && !labels.some(l => l.replace(/^#+/, '').toLowerCase() === clean.toLowerCase())) {
       const nextLabels = [...labels, clean]
       setLabels(nextLabels)
       setNewLabelInput('')
@@ -493,7 +493,8 @@ export const TaskDetailModal: React.FC = () => {
   }
 
   const handleRemoveLabel = async (tagToRemove: string) => {
-    const nextLabels = labels.filter(l => l !== tagToRemove)
+    const cleanTarget = tagToRemove.replace(/^#+/, '').toLowerCase()
+    const nextLabels = labels.filter(l => l.replace(/^#+/, '').toLowerCase() !== cleanTarget)
     setLabels(nextLabels)
     if (selectedTask) {
       await updateTask(selectedTask.id, { labels: nextLabels })
@@ -1523,7 +1524,7 @@ export const TaskDetailModal: React.FC = () => {
                 key={lbl}
                 className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md ${badgeStyle}`}
               >
-                #{lbl}
+                #{lbl.replace(/^#+/, '')}
                 <button
                   type="button"
                   onClick={() => handleRemoveLabel(lbl)}

@@ -1,12 +1,12 @@
 # Architecture & System Design
 
-This document details the software architecture, design patterns, internal subsystems, and data flows of **Taskacao**.
+This document details the software architecture, design patterns, internal subsystems, and data flows of **TaskFlow**.
 
 ---
 
 ## 1. High-Level Architecture
 
-Taskacao is designed as a lightweight, single-binary capable full-stack application consisting of:
+TaskFlow is designed as a lightweight, single-binary capable full-stack application consisting of:
 1. **Backend Go Server (`cmd/server`)**: High-performance HTTP REST API, background task queue worker, Git worktree manager, and WebSocket PTY pseudo-terminal server.
 2. **Frontend React SPA (`web/`)**: Modern TypeScript Single Page Application featuring Kanban drag-and-drop, interactive list views, Git diff inspection, chat drawer, and embedded Xterm.js terminal emulator.
 3. **Embedded SQLite Database (`tasks.db`)**: Zero-configuration, ACID-compliant local database storing projects, tasks, activities, comments, and settings.
@@ -64,7 +64,7 @@ The `db.DB` struct manages concurrent read and write operations against SQLite u
 
 ### 2.2 Dynamic Binary & Environment Resolution
 
-Taskacao does **not** hardcode user home directories or fixed binary paths. `internal/runner/runner.go` provides:
+TaskFlow does **not** hardcode user home directories or fixed binary paths. `internal/runner/runner.go` provides:
 - `GetDynamicCustomPath()`: Dynamically discovers the user's home directory and compiles standard executable paths:
   `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`, `~/go/bin`, `~/.cargo/bin`.
 - `FindCliTool(tool string)`: Dynamically searches `PATH` and fallback directories for `agy`, `claude`, `vibe`, `git`, etc.
@@ -88,7 +88,7 @@ When a task requires execution (via AI skill or Interactive Terminal), `EnsureTa
 
 To make the worktree fully functional immediately without re-downloading dependencies or losing project configurations, the engine automatically symlinks:
 - `.env*` (execution environement).
-- `.agents/` (agent configurations, skills, and memory).
+- `.agents/`, `.taskflow/` (agent configurations, skills, and memory).
 - Automatically writes default skill files (`clarify-issue`, `specify-issue`, `code-issue`, `create-pr`, `pick-issue`) `.agents/skills/` within the worktree.
 
 ---
@@ -101,10 +101,10 @@ The terminal subsystem (`internal/terminal/terminal.go`) gives the browser a tru
    - Spawns the user's login shell (`$SHELL` or `/bin/zsh -l`).
    - Sets the working directory (`Dir`) to the task's worktree.
    - Injects contextual environment variables:
-     - `TASKACAO_TASK_ID`: Unique task UUID.
-     - `TASKACAO_TASK_KEY`: Task human key (e.g. `TASK-1`).
-     - `TASKACAO_TASK_BRANCH`: Active task branch.
-     - `TASKACAO_TASK_WORKTREE`: Absolute worktree path.
+     - `TASKFLOW_TASK_ID` (and legacy `TASKACAO_TASK_ID`): Unique task UUID.
+     - `TASKFLOW_TASK_KEY` (and legacy `TASKACAO_TASK_KEY`): Task human key (e.g. `TASK-1`).
+     - `TASKFLOW_TASK_BRANCH` (and legacy `TASKACAO_TASK_BRANCH`): Active task branch.
+     - `TASKFLOW_TASK_WORKTREE` (and legacy `TASKACAO_TASK_WORKTREE`): Absolute worktree path.
 2. **Circular Output Buffer**:
    - Maintains a 64KB circular replay buffer per session so that reconnecting browser tabs immediately see the latest terminal output.
 3. **Bi-directional WebSocket Streaming (`/ws/terminal?taskId=...`)**:
@@ -118,7 +118,7 @@ The terminal subsystem (`internal/terminal/terminal.go`) gives the browser a tru
 
 ## 5. Background Queue Worker
 
-Taskacao includes an autonomous in-process background worker:
+TaskFlow includes an autonomous in-process background worker:
 - Monitored via a Go channel `d.queueChan`.
 - Fetches `queued` activities from SQLite in FIFO order.
 - Executes the designated AI skill or script in the task worktree.

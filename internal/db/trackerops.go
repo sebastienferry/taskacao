@@ -496,10 +496,86 @@ func (d *DB) runTransitionOp(op TrackerOp, steps *[]string) (string, error) {
 
 	writer, err := d.writerForTask(task)
 	if err != nil {
-		return "", err
+		// Aucun writer distant : la valeur locale est déjà mise à jour.
+		*steps = append(*steps, fmt.Sprintf("✅ %s déplacé vers « %s » en local", task.Key, op.TargetStatus))
+		return fmt.Sprintf("%s déplacé vers « %s » en local", task.Key, op.TargetStatus), nil
 	}
+
 	if !writer.Supports(tracker.CapTransition) {
-		return "", tracker.Unsupported(writer.Name(), tracker.CapTransition)
+		// Linear tracker handler: update state via linear CLI
+		if task.Source == "linear" {
+			var statusVal models.Status = models.Status(strings.ToLower(strings.ReplaceAll(op.TargetStatus, " ", "_")))
+			if err := d.runner.UpdateLinearIssueState(task.Key, statusVal); err != nil {
+				*steps = append(*steps, fmt.Sprintf("⚠️ Synchro distante Linear échouée pour %s: %v, statut gardé en local", task.Key, err))
+			} else {
+				*steps = append(*steps, fmt.Sprintf("✅ Ticket Linear %s mis à jour vers « %s »", task.Key, op.TargetStatus))
+			}
+			return fmt.Sprintf("%s transitionné vers « %s »", task.Key, op.TargetStatus), nil
+		}
+
+		// GitHub Issues tracker handler: update labels/state directly via runner if GitHub
+		if task.Source == "github" || (task.ExternalURL != nil && strings.Contains(*task.ExternalURL, "github.com")) {
+			repo := ""
+			repoPath := ""
+			if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
+				repo = proj.GithubRepo
+				repoPath = proj.RepoPath
+			}
+
+			cleanStatus := strings.TrimSpace(op.TargetStatus)
+			cleanStatusLower := strings.ToLower(cleanStatus)
+
+			var projObj *models.Project
+			if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
+				projObj = proj
+			}
+
+			// Resolve stage and internal status
+			resolvedStage := ""
+			if projObj != nil {
+				resolvedStage = StageForTrackerStatus(projObj, cleanStatus)
+			}
+
+			var statusVal models.Status = models.StatusToClarify
+			if cleanStatusLower == "closed" || cleanStatusLower == "done" || cleanStatusLower == "terminé" || cleanStatusLower == "finished" {
+				statusVal = models.StatusDone
+			} else if resolvedStage != "" {
+				if internalSt, ok := InternalStatusForStage(resolvedStage); ok {
+					statusVal = internalSt
+				}
+			}
+
+			// Clean existing workflow/status labels and compute target label
+			targetLabel := cleanStatus
+			if resolvedStage != "" {
+				targetLabel = "#" + resolvedStage
+			} else if !strings.HasPrefix(targetLabel, "#") && (strings.EqualFold(targetLabel, "new") || strings.EqualFold(targetLabel, "clarified") || strings.EqualFold(targetLabel, "specified") || strings.EqualFold(targetLabel, "implemented") || strings.EqualFold(targetLabel, "reviewed") || strings.EqualFold(targetLabel, "finished")) {
+				targetLabel = "#" + strings.ToLower(targetLabel)
+			} else if strings.EqualFold(cleanStatus, "open") || strings.EqualFold(cleanStatus, "todo") || strings.EqualFold(cleanStatus, "backlog") {
+				targetLabel = "#new"
+			}
+
+			var labels []string
+			for _, l := range task.Labels {
+				cleanL := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(l), "#"))
+				if cleanL != "new" && cleanL != "clarified" && cleanL != "specified" && cleanL != "implemented" && cleanL != "reviewed" && cleanL != "finished" && cleanL != "closed" && !strings.EqualFold(l, targetLabel) {
+					labels = append(labels, l)
+				}
+			}
+			if !strings.EqualFold(cleanStatus, "closed") && targetLabel != "" {
+				labels = append(labels, targetLabel)
+			}
+
+			if err := d.runner.UpdateGithubIssue(repo, repoPath, task.Key, nil, nil, &statusVal, labels, StaleWorkflowLabels(targetLabel)); err != nil {
+				*steps = append(*steps, fmt.Sprintf("⚠️ Synchro distante GitHub échouée pour %s: %v, statut gardé en local", task.Key, err))
+			} else {
+				*steps = append(*steps, fmt.Sprintf("✅ Ticket GitHub %s mis à jour avec le label « %s » (état: %s)", task.Key, targetLabel, statusVal))
+			}
+			return fmt.Sprintf("%s transitionné vers « %s »", task.Key, op.TargetStatus), nil
+		}
+
+		*steps = append(*steps, fmt.Sprintf("ℹ️ %s : statut distant non géré (%v), gardé en local", task.Key, tracker.Unsupported(writer.Name(), tracker.CapTransition)))
+		return fmt.Sprintf("%s déplacé vers « %s » en local", task.Key, op.TargetStatus), nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

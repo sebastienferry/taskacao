@@ -250,7 +250,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   const handleLaunchAgent = async () => {
     if (task) {
       // Un agent déjà présent est relancé explicitement : c'est le cas où on l'a
-      // quitté à la main et où Taskacao le croit encore vivant.
+      // quitté à la main et où TaskFlow le croit encore vivant.
       await startTaskAgent(task.id, Boolean(agentRunning))
       return
     }

@@ -54,8 +54,8 @@ type ProjectTab = 'general' | 'git' | 'agent' | 'tracker' | 'skills'
 const TABS: { id: ProjectTab; label: string; icon: React.FC<{ size?: number; className?: string }> }[] = [
   { id: 'general', label: 'Général', icon: Folder },
   { id: 'git', label: 'Git & Worktrees', icon: GitBranch },
-  { id: 'agent', label: 'Agent IA & CLI', icon: Bot },
   { id: 'tracker', label: 'Tracker', icon: Sliders },
+  { id: 'agent', label: 'Agent IA & CLI', icon: Bot },
   { id: 'skills', label: 'Compétences IA & SDD', icon: Sparkles },
 ]
 
@@ -1260,194 +1260,6 @@ export const ProjectModal: React.FC = () => {
                   </div>
                 </div>
               )}
-            </div>
-          )}
-
-          {/* ========================================================= */}
-          {/* SECTION 4: TRACKER (Linear, GitHub, Jira, Stage Mapping) */}
-          {/* ========================================================= */}
-          {activeTab === 'tracker' && (
-            <div className="space-y-3.5 animate-in fade-in duration-150">
-              {/* Tracker Type Radio Pills */}
-              <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
-                  Type de Tracker d'Issues
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { id: 'linear', label: 'Linear', icon: '⚡' },
-                    { id: 'github', label: 'GitHub Issues', icon: '🐙' },
-                    { id: 'local', label: 'Local Uniquement', icon: '💾' },
-                  ].map(tItem => {
-                    const isSel = issueTracker === tItem.id
-                    return (
-                      <button
-                        key={tItem.id}
-                        type="button"
-                        onClick={() => {
-                          const newTrk = tItem.id as IssueTracker
-                          setIssueTracker(newTrk)
-                          fetchDetectedStatuses(undefined, newTrk)
-                        }}
-                        className={`p-2 rounded-xl border text-center font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                          isSel
-                            ? 'bg-[var(--accent-light)] border-[var(--accent-color)] accent-text shadow-xs'
-                            : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                        }`}
-                      >
-                        <span>{tItem.icon}</span>
-                        <span>{tItem.label}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* Team Key & Github Repo inputs */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {issueTracker === 'linear' && (
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                      Préfixe / Équipe Linear
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={linearTeam}
-                        onChange={e => {
-                          const val = e.target.value.toUpperCase()
-                          setLinearTeam(val)
-                          fetchDetectedStatuses(val)
-                        }}
-                        placeholder="Ex: ENG, PROD, API..."
-                        className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono uppercase focus:outline-none focus:border-[var(--accent-color)]"
-                      />
-                      <Key size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
-                    </div>
-                  </div>
-                )}
-
-                {issueTracker === 'github' && (
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                      Dépôt GitHub (owner/repo)
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={githubRepo}
-                        onChange={e => {
-                          setGithubRepo(e.target.value)
-                          fetchDetectedStatuses(undefined, 'github', e.target.value)
-                        }}
-                        placeholder="owner/nom-du-repo"
-                        className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--accent-color)]"
-                      />
-                      <Globe size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
-                    </div>
-                  </div>
-                )}
-
-                {issueTracker === 'jira' && (
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                      Projet Jira (clé)
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={jiraProject}
-                        onChange={e => {
-                          const val = e.target.value.toUpperCase()
-                          setJiraProject(val)
-                          fetchDetectedStatuses(undefined, 'jira')
-                        }}
-                        placeholder="Ex: PE, ENG, OPS..."
-                        className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono uppercase focus:outline-none focus:border-[var(--accent-color)]"
-                      />
-                      <Key size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
-                    </div>
-                    <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
-                      Passée à <code className="text-cyan-400">acli jira workitem --project</code>. La CLI Atlassian doit être authentifiée (<code className="text-cyan-400">acli jira auth login</code>).
-                    </span>
-                  </div>
-                )}
-
-                {issueTracker === 'jira' && (
-                  <div className="col-span-2">
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                      Types de tickets importés
-                    </label>
-                    {isLoadingIssueTypes ? (
-                      <span className="text-[10px] text-[var(--text-muted)]">Lecture des types du projet…</span>
-                    ) : availableIssueTypes.length === 0 ? (
-                      <span className="text-[10px] text-[var(--text-muted)]">
-                        Types indisponibles : enregistrez le projet avec sa clé Jira, puis rouvrez cette fiche.
-                      </span>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        {availableIssueTypes.map(type => {
-                          const isDefault = type === 'Task' || type === 'Story'
-                          const isActive = issueTypes.length === 0 ? isDefault : issueTypes.includes(type)
-                          return (
-                            <button
-                              key={type}
-                              type="button"
-                              onClick={() => {
-                                // Le premier clic fige la sélection courante : sans
-                                // cela, décocher « Task » sur un projet resté aux
-                                // valeurs par défaut ne changerait rien.
-                                const current = issueTypes.length === 0
-                                  ? availableIssueTypes.filter(t2 => t2 === 'Task' || t2 === 'Story')
-                                  : issueTypes
-                                setIssueTypes(
-                                  current.includes(type)
-                                    ? current.filter(t2 => t2 !== type)
-                                    : [...current, type]
-                                )
-                              }}
-                              className="px-2 py-1 rounded-lg text-[10.5px] font-semibold border cursor-pointer transition-colors"
-                              style={{
-                                color: isActive ? 'var(--accent-color)' : 'var(--text-secondary)',
-                                background: isActive ? 'var(--accent-light)' : 'var(--bg-tertiary)',
-                                borderColor: isActive ? 'rgb(var(--accent-rgb) / 0.4)' : 'var(--border-color)',
-                              }}
-                            >
-                              {type}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    )}
-                    <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
-                      Rien de sélectionné vaut Task et Story. Un projet dont le tracker n'expose que
-                      son propre type (un type maison, par exemple) n'importe aucun ticket tant
-                      qu'il n'est pas coché ici.
-                    </span>
-                  </div>
-                )}
-
-                <div className={issueTracker === 'local' ? 'col-span-2' : ''}>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                    {issueTracker === 'jira' ? 'URL Jira (base)' : 'URL du Tracker'}
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={trackerUrl}
-                      onChange={e => setTrackerUrl(e.target.value)}
-                      placeholder={issueTracker === 'jira' ? 'https://mon-org.atlassian.net' : 'https://linear.app/team/project/...'}
-                      className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
-                    />
-                    <Globe size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
-                  </div>
-                  {issueTracker === 'jira' && (
-                    <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
-                      Sert à construire les liens <code className="text-cyan-400">/browse/&lt;KEY&gt;</code> des tickets.
-                    </span>
-                  )}
-                </div>
-              </div>
 
               {/* Stage Mapping Table Card */}
               <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-2.5">
@@ -1610,7 +1422,7 @@ export const ProjectModal: React.FC = () => {
                                   </optgroup>
                                 )}
 
-                                <optgroup label="📋 Statuts Taskacao">
+                                <optgroup label="📋 Statuts TaskFlow">
                                   {STATUS_OPTIONS.map(opt => (
                                     <option key={opt.id} value={opt.id}>
                                       {opt.label}
@@ -1641,17 +1453,345 @@ export const ProjectModal: React.FC = () => {
                   })}
                 </div>
               </div>
+            </div>
+          )}
 
-              {/* Colonnes du board : sa place est ici, avec le tracker dont
-                  elles viennent. Colonnes, statuts affectés, et étapes du
-                  workflow agentique par colonne. */}
+          {/* ========================================================= */}
+          {/* SECTION 4: TRACKER (Linear, GitHub, Jira, Stage Mapping) */}
+          {/* ========================================================= */}
+          {activeTab === 'tracker' && (
+            <div className="space-y-3.5 animate-in fade-in duration-150">
+              {/* Tracker Type Radio Pills */}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                  Type de Tracker d'Issues
+                </label>
+                <select
+                  value={issueTracker}
+                  onChange={e => {
+                    const newTrk = e.target.value as IssueTracker
+                    setIssueTracker(newTrk)
+                    fetchDetectedStatuses(undefined, newTrk)
+                  }}
+                  className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] font-medium cursor-pointer"
+                >
+                  <option value="local">TaskFlow (Local)</option>
+                  <option value="github">GitHub Issues</option>
+                  <option value="linear">Linear</option>
+                </select>
+              </div>
+
+              {/* Panneau d'information & fonctionnalités supportées par le tracker */}
+              <div className="p-3 rounded-xl bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] space-y-2.5 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
+                    <Info size={13} className="text-[var(--accent-color)]" />
+                    <span>
+                      {issueTracker === 'local' && 'TaskFlow (Stockage Local)'}
+                      {issueTracker === 'github' && 'GitHub Issues'}
+                      {issueTracker === 'linear' && 'Linear'}
+                      {issueTracker === 'jira' && 'Jira'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-muted)]">
+                    {issueTracker === 'local' && '⚡ 100% Hors-ligne'}
+                    {issueTracker === 'github' && '🐙 CLI gh'}
+                    {issueTracker === 'linear' && '📐 CLI linear'}
+                    {issueTracker === 'jira' && '📋 Jira API'}
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                  {issueTracker === 'local' &&
+                    'Stockage direct en base SQLite locale. Idéal pour travailler hors-ligne avec toutes les capacités des agents et de gestion de branches.'}
+                  {issueTracker === 'github' &&
+                    'Synchronisation bidirectionnelle via la CLI GitHub. Les statuts du workflow sont reflétés par des labels (#new, #clarified, #specified, etc.) et l’état Open/Closed.'}
+                  {issueTracker === 'linear' &&
+                    'Intégration complète avec vos équipes et statuts Linear via la CLI Linear (transitions natives, labels et assignations).'}
+                  {issueTracker === 'jira' &&
+                    'Intégration avec les projets Jira Software via l’API Atlassian.'}
+                </p>
+
+                {/* Grille des fonctionnalités supportées */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-2 border-t border-[var(--border-color)]/50">
+                  {issueTracker === 'local' && (
+                    <>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Workflow 6 étapes</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Kanban personnalisé</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Branches Git & Diff</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Labels & Sous-tâches</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Priorités & Échéances</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Zéro latence / Offline</span>
+                      </div>
+                    </>
+                  )}
+
+                  {issueTracker === 'github' && (
+                    <>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Sync Issues (Titre/Corps)</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Labels d'étape (#new, etc.)</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Ouverture / Clôture</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Assignation de membres</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Pull Requests liées</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-amber-400 font-medium" title="GitHub Issues n'a pas de colonnes de statut natives (uniquement Open/Closed). TaskFlow utilise les labels d'étapes.">
+                        <Info size={11} className="shrink-0" />
+                        <span>Statuts via Labels</span>
+                      </div>
+                    </>
+                  )}
+
+                  {issueTracker === 'linear' && (
+                    <>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Sync Tickets & Équipes</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Transitions de statuts</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Labels & Tags d'équipe</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Assignations</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Cycles & Projets</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Commentaires</span>
+                      </div>
+                    </>
+                  )}
+
+                  {issueTracker === 'jira' && (
+                    <>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Sync Workitems</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Transitions de Workflow</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Labels & Composants</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Assignations</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Sprints & Epics</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
+                        <CheckCircle2 size={11} className="shrink-0" />
+                        <span>Commentaires Jira</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Team Key & Github Repo inputs */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {issueTracker === 'linear' && (
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                      Préfixe / Équipe Linear
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={linearTeam}
+                        onChange={e => {
+                          const val = e.target.value.toUpperCase()
+                          setLinearTeam(val)
+                          fetchDetectedStatuses(val)
+                        }}
+                        placeholder="Ex: ENG, PROD, API..."
+                        className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono uppercase focus:outline-none focus:border-[var(--accent-color)]"
+                      />
+                      <Key size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
+                    </div>
+                  </div>
+                )}
+
+                {issueTracker === 'github' && (
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                      Dépôt GitHub (owner/repo)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={githubRepo}
+                        onChange={e => {
+                          setGithubRepo(e.target.value)
+                          fetchDetectedStatuses(undefined, 'github', e.target.value)
+                        }}
+                        placeholder="owner/nom-du-repo"
+                        className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--accent-color)]"
+                      />
+                      <Globe size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
+                    </div>
+                  </div>
+                )}
+
+                {issueTracker === 'jira' && (
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                      Projet Jira (clé)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={jiraProject}
+                        onChange={e => {
+                          const val = e.target.value.toUpperCase()
+                          setJiraProject(val)
+                          fetchDetectedStatuses(undefined, 'jira')
+                        }}
+                        placeholder="Ex: PE, ENG, OPS..."
+                        className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono uppercase focus:outline-none focus:border-[var(--accent-color)]"
+                      />
+                      <Key size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
+                    </div>
+                    <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
+                      Passée à <code className="text-cyan-400">acli jira workitem --project</code>. La CLI Atlassian doit être authentifiée (<code className="text-cyan-400">acli jira auth login</code>).
+                    </span>
+                  </div>
+                )}
+
+                {issueTracker === 'jira' && (
+                  <div className="col-span-2">
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                      Types de tickets importés
+                    </label>
+                    {isLoadingIssueTypes ? (
+                      <span className="text-[10px] text-[var(--text-muted)]">Lecture des types du projet…</span>
+                    ) : availableIssueTypes.length === 0 ? (
+                      <span className="text-[10px] text-[var(--text-muted)]">
+                        Types indisponibles : enregistrez le projet avec sa clé Jira, puis rouvrez cette fiche.
+                      </span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {availableIssueTypes.map(type => {
+                          const isDefault = type === 'Task' || type === 'Story'
+                          const isActive = issueTypes.length === 0 ? isDefault : issueTypes.includes(type)
+                          return (
+                            <button
+                              key={type}
+                              type="button"
+                              onClick={() => {
+                                // Le premier clic fige la sélection courante : sans
+                                // cela, décocher « Task » sur un projet resté aux
+                                // valeurs par défaut ne changerait rien.
+                                const current = issueTypes.length === 0
+                                  ? availableIssueTypes.filter(t2 => t2 === 'Task' || t2 === 'Story')
+                                  : issueTypes
+                                setIssueTypes(
+                                  current.includes(type)
+                                    ? current.filter(t2 => t2 !== type)
+                                    : [...current, type]
+                                )
+                              }}
+                              className="px-2 py-1 rounded-lg text-[10.5px] font-semibold border cursor-pointer transition-colors"
+                              style={{
+                                color: isActive ? 'var(--accent-color)' : 'var(--text-secondary)',
+                                background: isActive ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                                borderColor: isActive ? 'rgb(var(--accent-rgb) / 0.4)' : 'var(--border-color)',
+                              }}
+                            >
+                              {type}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                    <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
+                      Rien de sélectionné vaut Task et Story. Un projet dont le tracker n'expose que
+                      son propre type (un type maison, par exemple) n'importe aucun ticket tant
+                      qu'il n'est pas coché ici.
+                    </span>
+                  </div>
+                )}
+
+                <div className={issueTracker === 'local' ? 'col-span-2' : ''}>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                    {issueTracker === 'jira' ? 'URL Jira (base)' : 'URL du Tracker'}
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={trackerUrl}
+                      onChange={e => setTrackerUrl(e.target.value)}
+                      placeholder={issueTracker === 'jira' ? 'https://mon-org.atlassian.net' : 'https://linear.app/team/project/...'}
+                      className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+                    />
+                    <Globe size={14} className="absolute left-2.5 top-2.5 text-[var(--accent-color)]" />
+                  </div>
+                  {issueTracker === 'jira' && (
+                    <span className="text-[9px] text-[var(--text-muted)] mt-1 block">
+                      Sert à construire les liens <code className="text-cyan-400">/browse/&lt;KEY&gt;</code> des tickets.
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Colonnes du board */}
               <div className="pt-3 border-t border-[var(--border-color)]">
                 <BoardColumnsEditor
                   project={editingProject}
                   columns={trackerColumns}
-                  onColumnsChange={setTrackerColumns}
+                  onColumnsChange={newCols => {
+                    setTrackerColumns(newCols)
+                  }}
                   stageColumns={stageColumns}
                   onStageColumnsChange={setStageColumns}
+                  issueTracker={issueTracker}
+                  githubRepo={githubRepo}
+                  repoPath={repoPath}
+                  linearTeam={linearTeam}
                 />
               </div>
             </div>

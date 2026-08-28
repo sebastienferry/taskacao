@@ -97,15 +97,16 @@ export const QuickAddModal: React.FC = () => {
   }
 
   const handleAddLabel = () => {
-    const clean = labelInput.replace(/^#/, '').trim()
-    if (clean && !labels.includes(clean)) {
+    const clean = labelInput.replace(/^#+/, '').trim()
+    if (clean && !labels.some(l => l.replace(/^#+/, '').toLowerCase() === clean.toLowerCase())) {
       setLabels([...labels, clean])
       setLabelInput('')
     }
   }
 
   const removeLabel = (tag: string) => {
-    setLabels(labels.filter(l => l !== tag))
+    const cleanTarget = tag.replace(/^#+/, '').toLowerCase()
+    setLabels(labels.filter(l => l.replace(/^#+/, '').toLowerCase() !== cleanTarget))
   }
 
   return (
@@ -195,7 +196,7 @@ export const QuickAddModal: React.FC = () => {
               {([
                 { id: 'linear', label: 'Linear', icon: '🟣', hint: activeProject?.linearTeam || 'équipe non configurée' },
                 { id: 'github', label: 'GitHub', icon: '🐙', hint: activeProject?.githubRepo || 'dépôt non configuré' },
-                { id: 'local', label: 'Local', icon: '📁', hint: 'SQLite' },
+                { id: 'local', label: 'TaskFlow', icon: '📁', hint: 'SQLite' },
               ] as { id: TaskSource; label: string; icon: string; hint: string }[]).map(opt => (
                 <button
                   key={opt.id}
@@ -272,7 +273,7 @@ export const QuickAddModal: React.FC = () => {
                     key={l}
                     className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md ${badgeStyle}`}
                   >
-                    #{l}
+                    #{l.replace(/^#+/, '')}
                     <button
                       type="button"
                       onClick={() => removeLabel(l)}

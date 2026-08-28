@@ -104,6 +104,29 @@ func (d *DB) GetProjectEpics(projectID string) ([]models.EpicMeta, error) {
 	d.ensureEpicsTable()
 	d.mu.Unlock()
 
+	proj, _ := d.GetProjectByID(projectID)
+	if proj != nil && (proj.IssueTracker == "github" || proj.GithubRepo != "") {
+		if milestones, err := d.runner.ListGithubMilestones(proj.GithubRepo, proj.RepoPath); err == nil && len(milestones) > 0 {
+			d.mu.Lock()
+			for _, m := range milestones {
+				key := fmt.Sprintf("M-%d", m.Number)
+				closedVal := 0
+				if strings.EqualFold(m.State, "closed") {
+					closedVal = 1
+				}
+				_, _ = d.conn.Exec(`
+					INSERT INTO epics (project_id, key, title, description, status, closed, updated_at)
+					VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+					ON CONFLICT(project_id, key) DO UPDATE SET
+						title = excluded.title,
+						status = excluded.status,
+						closed = excluded.closed
+				`, projectID, key, m.Title, m.Description, m.State, closedVal)
+			}
+			d.mu.Unlock()
+		}
+	}
+
 	d.mu.RLock()
 	rows, err := d.conn.Query(`
 		SELECT project_id, key, horizon, description, todos, title, status, closed, updated_at
@@ -343,30 +366,191 @@ func (d *DB) PushPendingHorizons(projectID string) (int, []string, error) {
 	return 0, nil, nil
 }
 
-// SetTaskEpic queues the attachment of a ticket to an epic.
+// SetTaskEpic queues the attachment of a ticket to a macro.
 func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, *models.TaskActivity, error) {
-	return nil, nil, fmt.Errorf("le rattachement à un épic Jira n'est plus supporté")
+	task, err := d.GetTaskByID(taskIDOrKey)
+	if err != nil || task == nil {
+		return nil, nil, fmt.Errorf("tâche introuvable")
+	}
+	cleanEpicKey := strings.TrimSpace(epicKey)
+	if err := d.writeTaskParentLocally(task, cleanEpicKey); err != nil {
+		return nil, nil, err
+	}
+	act, err := d.EnqueueTrackerOp(TrackerOp{
+		Kind:      TrackerOpSetParent,
+		ProjectID: task.ProjectID,
+		TaskID:    task.ID,
+		TaskKey:   task.Key,
+		EpicKey:   cleanEpicKey,
+	})
+	return task, act, err
 }
 
-// applyTaskEpic performs the attachment.
+// applyTaskEpic performs the attachment of a task to a macro (milestone).
 func (d *DB) applyTaskEpic(taskIDOrKey string, epicKey string, steps *[]string) (*models.Task, error) {
-	return nil, fmt.Errorf("le rattachement à un épic Jira n'est plus supporté")
+	task, err := d.GetTaskByID(taskIDOrKey)
+	if err != nil || task == nil {
+		return nil, fmt.Errorf("tâche introuvable")
+	}
+	cleanEpicKey := strings.TrimSpace(epicKey)
+	if err := d.writeTaskParentLocally(task, cleanEpicKey); err != nil {
+		return nil, err
+	}
+
+	proj, _ := d.GetProjectByID(task.ProjectID)
+	if proj != nil && (proj.IssueTracker == "github" || task.Source == "github") {
+		cleanKey := strings.TrimPrefix(task.Key, "#")
+		var issueNum int
+		_, _ = fmt.Sscanf(cleanKey, "%d", &issueNum)
+		if issueNum > 0 {
+			milestoneTarget := ""
+			if cleanEpicKey != "" {
+				var mTitle string
+				d.mu.RLock()
+				_ = d.conn.QueryRow("SELECT title FROM epics WHERE project_id = ? AND key = ?", task.ProjectID, cleanEpicKey).Scan(&mTitle)
+				d.mu.RUnlock()
+				if mTitle != "" {
+					milestoneTarget = mTitle
+				} else if strings.HasPrefix(strings.ToUpper(cleanEpicKey), "M-") {
+					var num int
+					_, _ = fmt.Sscanf(strings.ToUpper(cleanEpicKey), "M-%d", &num)
+					milestoneTarget = fmt.Sprintf("%d", num)
+				} else {
+					milestoneTarget = cleanEpicKey
+				}
+			}
+			if err := d.runner.SetGithubIssueMilestone(proj.GithubRepo, proj.RepoPath, issueNum, milestoneTarget); err != nil {
+				*steps = append(*steps, fmt.Sprintf("⚠️ Synchro milestone GitHub échouée pour %s: %v, gardé en local", task.Key, err))
+			} else {
+				if milestoneTarget == "" {
+					*steps = append(*steps, fmt.Sprintf("✅ %s retiré du milestone GitHub", task.Key))
+				} else {
+					*steps = append(*steps, fmt.Sprintf("✅ %s rattaché au milestone GitHub « %s »", task.Key, milestoneTarget))
+				}
+			}
+		}
+	} else {
+		*steps = append(*steps, fmt.Sprintf("✅ %s macro mise à jour en local", task.Key))
+	}
+
+	return task, nil
 }
 
 // writeTaskParentLocally mirrors the attachment in the local database.
 func (d *DB) writeTaskParentLocally(task *models.Task, epicKey string) error {
-	return nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	parentTitle := ""
+	if epicKey != "" {
+		_ = d.conn.QueryRow("SELECT title FROM epics WHERE project_id = ? AND key = ?", task.ProjectID, epicKey).Scan(&parentTitle)
+		if parentTitle == "" {
+			parentTitle = epicKey
+		}
+	}
+	_, err := d.conn.Exec("UPDATE tasks SET parent_key = ?, parent_title = ?, parent_type = 'macro', updated_at = ? WHERE id = ?", epicKey, parentTitle, time.Now(), task.ID)
+	return err
 }
 
 func (d *DB) CreateStoryUnderEpic(projectID string, epicKey string, title string) (*models.Task, error) {
-	return nil, fmt.Errorf("création de story sous un épic Jira non supportée")
+	proj, err := d.GetProjectByID(projectID)
+	if err != nil || proj == nil {
+		return nil, fmt.Errorf("projet non trouvé")
+	}
+
+	parentTitle := ""
+	d.mu.RLock()
+	_ = d.conn.QueryRow("SELECT title FROM epics WHERE project_id = ? AND key = ?", projectID, epicKey).Scan(&parentTitle)
+	d.mu.RUnlock()
+	if parentTitle == "" {
+		parentTitle = epicKey
+	}
+
+	task, err := d.CreateTask(models.CreateTaskRequest{
+		ProjectID: projectID,
+		Title:     title,
+		Priority:  models.PriorityMedium,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	_ = d.writeTaskParentLocally(task, epicKey)
+	task.ParentKey = epicKey
+	task.ParentTitle = parentTitle
+	task.ParentType = "macro"
+
+	if proj.IssueTracker == "github" || task.Source == "github" {
+		var issueNum int
+		_, _ = fmt.Sscanf(strings.TrimPrefix(task.Key, "#"), "%d", &issueNum)
+		if issueNum > 0 {
+			_ = d.runner.SetGithubIssueMilestone(proj.GithubRepo, proj.RepoPath, issueNum, parentTitle)
+		}
+	}
+	return task, nil
 }
 
-// CreateEpic creates the epic in the tracker and records it locally so it shows
-// up in the roadmap immediately, before any sync — that is what makes it usable
-// as a target for a split.
+// CreateEpic creates the macro in the tracker (e.g. GitHub milestone) and records it locally.
 func (d *DB) CreateEpic(projectID string, title string, horizon string, fields map[string]string) (*models.EpicMeta, error) {
-	return nil, fmt.Errorf("création d'épic Jira non supportée")
+	projectID = strings.TrimSpace(projectID)
+	title = strings.TrimSpace(title)
+	if projectID == "" || title == "" {
+		return nil, fmt.Errorf("projet et titre de la macro obligatoires")
+	}
+
+	proj, err := d.GetProjectByID(projectID)
+	if err != nil || proj == nil {
+		return nil, fmt.Errorf("projet non trouvé")
+	}
+
+	key := ""
+	if proj.IssueTracker == "github" || proj.GithubRepo != "" {
+		num, err := d.runner.CreateGithubMilestone(proj.GithubRepo, proj.RepoPath, title, "")
+		if err != nil {
+			return nil, fmt.Errorf("erreur création milestone GitHub: %w", err)
+		}
+		if num > 0 {
+			key = fmt.Sprintf("M-%d", num)
+		}
+	}
+
+	if key == "" {
+		key = fmt.Sprintf("MACRO-%d", time.Now().Unix()%100000)
+	}
+
+	status := "open"
+	closed := false
+	h := horizon
+	if h == "" {
+		h = HorizonNow
+	}
+	return d.saveEpicMetaFull(projectID, key, &h, nil, nil, &title, &status, &closed)
+}
+
+// DeleteEpic deletes a macro (and its GitHub milestone if applicable) and detaches its child tasks.
+func (d *DB) DeleteEpic(projectID string, key string) error {
+	projectID = strings.TrimSpace(projectID)
+	key = strings.TrimSpace(key)
+	if projectID == "" || key == "" {
+		return fmt.Errorf("projet et clé de macro obligatoires")
+	}
+
+	proj, _ := d.GetProjectByID(projectID)
+	if proj != nil && (proj.IssueTracker == "github" || proj.GithubRepo != "") {
+		var num int
+		if strings.HasPrefix(strings.ToUpper(key), "M-") {
+			_, _ = fmt.Sscanf(strings.ToUpper(key), "M-%d", &num)
+		}
+		if num > 0 {
+			_ = d.runner.DeleteGithubMilestone(proj.GithubRepo, proj.RepoPath, num)
+		}
+	}
+
+	d.mu.Lock()
+	d.ensureEpicsTable()
+	_, err := d.conn.Exec("DELETE FROM epics WHERE project_id = ? AND key = ?", projectID, key)
+	_, _ = d.conn.Exec("UPDATE tasks SET parent_key = '', parent_title = '' WHERE project_id = ? AND (parent_key = ? OR parent_title = ?)", projectID, key, key)
+	d.mu.Unlock()
+	return err
 }
 
 // MoveTasksToEpic queues the epic split: a batch of tickets moved to another

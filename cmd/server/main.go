@@ -23,7 +23,7 @@ import (
 
 // loadDotEnv reads KEY=VALUE lines from a .env file next to the binary's working
 // directory. A real environment variable always wins, so exporting a value in
-// the shell overrides the file. Secrets such as TASKACAO_JIRA_API_TOKEN can then
+// the shell overrides the file. Secrets such as TASKFLOW_JIRA_API_TOKEN can then
 // live outside the database and outside git, .env being already gitignored.
 func loadDotEnv(paths ...string) {
 	for _, path := range paths {
@@ -70,7 +70,7 @@ func appDataDir() string {
 	if err != nil || strings.TrimSpace(dir) == "" {
 		return ""
 	}
-	appDir := filepath.Join(dir, "taskacao")
+	appDir := filepath.Join(dir, "taskflow")
 	if err := os.MkdirAll(appDir, 0o755); err != nil {
 		return ""
 	}
@@ -93,15 +93,24 @@ func resolveDBPath(explicit string) (path string, origin string) {
 	}
 
 	appDir := appDataDir()
-	if appDir == "" {
-		// Pas de dossier utilisateur lisible : le répertoire courant reste un
-		// endroit valable, et vaut mieux qu'un démarrage refusé.
-		return "tasks.db", "répertoire courant, dossier de données indisponible"
+	if appDir != "" {
+		taskflowDB := filepath.Join(appDir, "tasks.db")
+		if _, err := os.Stat(taskflowDB); err == nil {
+			return taskflowDB, "dossier de données"
+		}
+		// Fallback to legacy taskacao directory if it exists
+		if userDir, err := os.UserConfigDir(); err == nil && userDir != "" {
+			legacyDB := filepath.Join(userDir, "taskacao", "tasks.db")
+			if _, err := os.Stat(legacyDB); err == nil {
+				return legacyDB, "dossier de données (legacy taskacao)"
+			}
+		}
+		return taskflowDB, "dossier de données"
 	}
-	return filepath.Join(appDir, "tasks.db"), "dossier de données"
+	return "tasks.db", "répertoire courant, dossier de données indisponible"
 }
 
-// alreadyServing reports whether the port is held by another Taskacao rather than
+// alreadyServing reports whether the port is held by another TaskFlow rather than
 // by an unrelated program. The health endpoint is the only honest way to know,
 // and it decides between "your window is already open" and "something else is on
 // this port".
@@ -119,7 +128,8 @@ func alreadyServing(baseURL string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(body), "taskacao")
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "taskflow") || strings.Contains(lower, "taskacao")
 }
 
 // openBrowser opens the interface once the server listens. It is best effort by
@@ -281,9 +291,9 @@ func main() {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
-<head><title>Taskacao API</title></head>
+<head><title>TaskFlow API</title></head>
 <body style="font-family: system-ui; padding: 2rem; background: #0f172a; color: #f8fafc;">
-  <h2>Taskacao Go API is running!</h2>
+  <h2>TaskFlow Go API is running!</h2>
   <p>To run the frontend with hot-reloading, run <code>cd web && npm run dev</code></p>
   <p>Or build the bundle via <code>make build</code>, which compiles the interface into the binary.</p>
   <p>API endpoints available at <a href="/api/tasks" style="color: #818cf8;">/api/tasks</a>, <a href="/api/skills" style="color: #818cf8;">/api/skills</a> and <a href="/api/settings" style="color: #818cf8;">/api/settings</a>.</p>
@@ -302,28 +312,55 @@ func main() {
 	// l'écoute échouait ensuite : lancer l'application une seconde fois
 	// rechargeait l'onglet de la première, puis mourait sur « address already in
 	// use ».
+	shouldOpenBrowser := func() bool {
+		noBrowserEnv := strings.ToLower(strings.TrimSpace(os.Getenv("TASKFLOW_NO_BROWSER")))
+		if noBrowserEnv == "" {
+			noBrowserEnv = strings.ToLower(strings.TrimSpace(os.Getenv("TASKACAO_NO_BROWSER")))
+		}
+		if noBrowserEnv == "1" || noBrowserEnv == "true" || noBrowserEnv == "yes" {
+			return false
+		}
+
+		openBrowserEnv := strings.ToLower(strings.TrimSpace(os.Getenv("TASKFLOW_OPEN_BROWSER")))
+		if openBrowserEnv == "" {
+			openBrowserEnv = strings.ToLower(strings.TrimSpace(os.Getenv("TASKACAO_OPEN_BROWSER")))
+		}
+		if openBrowserEnv == "0" || openBrowserEnv == "false" || openBrowserEnv == "no" {
+			return false
+		}
+		if openBrowserEnv == "1" || openBrowserEnv == "true" || openBrowserEnv == "yes" {
+			return true
+		}
+
+		appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+		if appEnv == "dev" || appEnv == "development" || appEnv == "debug" {
+			return false
+		}
+
+		// Désactivé en dev quand le front n'est pas embarqué (ex: Vite tourne à côté)
+		if !uiEmbedded {
+			return false
+		}
+
+		return true
+	}()
+
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		// Une instance qui tourne déjà n'est pas une erreur : c'est la fenêtre
-		// que l'utilisateur cherchait. On la lui ouvre et on s'efface.
 		if alreadyServing(url) {
-			log.Printf("Taskacao tourne déjà sur %s : ouverture de la fenêtre existante.", url)
-			if os.Getenv("TASKACAO_NO_BROWSER") == "" {
+			log.Printf("TaskFlow tourne déjà sur %s : ouverture de la fenêtre existante.", url)
+			if shouldOpenBrowser {
 				openBrowser(url)
 			}
 			return
 		}
-		log.Fatalf("Port %s indisponible et occupé par autre chose que Taskacao: %v", addr, err)
+		log.Fatalf("Port %s indisponible et occupé par autre chose que TaskFlow: %v", addr, err)
 	}
 
-	log.Printf("🚀 Taskacao Server listening on %s", url)
+	log.Printf("🚀 TaskFlow Server listening on %s", url)
 	log.Printf("   base : %s (%s)", dbPath, dbOrigin)
 
-	// Ouverture du navigateur : ce que fait une application quand on la lance.
-	// TASKACAO_NO_BROWSER=1 l'en empêche, pour un serveur ou un lancement par un
-	// gestionnaire de services. Le port est déjà pris à ce stade, donc la page
-	// répondra.
-	if os.Getenv("TASKACAO_NO_BROWSER") == "" && uiEmbedded {
+	if shouldOpenBrowser {
 		go openBrowser(url)
 	}
 

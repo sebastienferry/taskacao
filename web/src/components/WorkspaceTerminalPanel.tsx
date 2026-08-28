@@ -4,14 +4,15 @@ import { InteractiveTerminal } from './InteractiveTerminal'
 import type { TerminalSession } from '../types'
 import { useApp } from '../context/AppContext'
 
-const WIDTH_KEY = 'taskacao_terminal_panel_width'
+const WIDTH_KEY = 'taskflow_terminal_panel_width'
+const LEGACY_WIDTH_KEY = 'taskacao_terminal_panel_width'
 const MIN_WIDTH = 340
 const MAX_WIDTH = 1000
 const DEFAULT_WIDTH = 480
 
 const readStoredWidth = (): number => {
   try {
-    const raw = Number(localStorage.getItem(WIDTH_KEY))
+    const raw = Number(localStorage.getItem(WIDTH_KEY) || localStorage.getItem(LEGACY_WIDTH_KEY))
     if (Number.isFinite(raw) && raw >= MIN_WIDTH) return Math.min(raw, MAX_WIDTH)
   } catch {
     // blocked storage: fall back to the default width

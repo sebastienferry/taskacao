@@ -1,18 +1,18 @@
 # Core Capabilities & Workflows
 
-This document outlines the functional capabilities, workflow engines, and AI orchestration pipelines provided by **Taskacao**.
+This document outlines the functional capabilities, workflow engines, and AI orchestration pipelines provided by **TaskFlow**.
 
 ---
 
 ## 1. Multi-Project Workspace Management
 
-Taskacao supports multiple concurrent software repositories and projects from a single unified dashboard:
+TaskFlow supports multiple concurrent software repositories and projects from a single unified dashboard:
 
 - **Isolated Project Configurations**:
   - `repo_path`: Local filesystem path to the project repository.
   - `git_remote_url`: Remote Git repository URL.
   - `issue_tracker`: Tracker provider (`linear`, `github`, `jira`, or `local`).
-  - `stage_mapping`: Custom mapping between Taskacao workflow stages and external tracker states.
+  - `stage_mapping`: Custom mapping between TaskFlow workflow stages and external tracker states.
   - `skill_overrides`: Project-specific prompt template overrides.
 
 - **Dynamic Workspace Switcher**:
@@ -23,7 +23,7 @@ Taskacao supports multiple concurrent software repositories and projects from a 
 
 ## 2. Issue Tracker Abstraction Layer
 
-Taskacao provides a unified domain model over four issue sources
+TaskFlow provides a unified domain model over four issue sources
 
 - Local (SQLite) : native SQLite storage for full offline support.
 - Linear : through the `linear` CLI (https://github.com/schpet/linear-cli)
@@ -35,8 +35,10 @@ Each project carries its own tracker configuration: `linearTeam` for Linear,
 `acli --project`) plus `trackerUrl` (the Jira base URL used to build
 `/browse/<KEY>` links) for Jira.
 
-All four sources support the same operations, so the board behaves identically
-whichever tracker backs a task:
+Stage and status synchronisation is bidirectional: moving a card in
+TaskFlow translates into `linear issue update --state`, `gh issue
+close/reopen` or `acli jira workitem transition --state`. Comments from
+skill runs are posted back to the remote issue.
 
 | Operation | Linear | GitHub | Jira |
 |---|---|---|---|
@@ -53,7 +55,7 @@ so a failing CLI call is reported rather than silently dropped.
 
 ## 3. Autonomous AI Skill Pipeline
 
-Taskacao orchestrates tasks through a five-stage progressive development lifecycle:
+TaskFlow orchestrates tasks through a five-stage progressive development lifecycle:
 
 ```mermaid
 flowchart LR
@@ -76,7 +78,7 @@ flowchart LR
 
 ## 2b. Spec-Driven Design Toolchains (Spec Kit / OpenSpec)
 
-Taskacao does not merely reference an SDD framework — it installs it. Two are
+TaskFlow does not merely reference an SDD framework — it installs it. Two are
 supported, selectable per project and as a global default:
 
 | | GitHub Spec Kit | OpenSpec |
@@ -131,7 +133,7 @@ framework value; the database migrates that value to `openspec` on startup.
 For hands-on pair programming and manual debugging:
 - Spawns an interactive login shell (`/bin/zsh -l`) in the task's dedicated worktree directory.
 - Features Xterm.js emulation with full ANSI colors, cursor control, and keyboard navigation.
-- Injects task context variables (`$TASKACAO_TASK_KEY`, `$TASKACAO_TASK_WORKTREE`).
+- Injects task context variables (`$TASKFLOW_TASK_KEY`, `$TASKFLOW_TASK_WORKTREE`).
 - Action toolbar provides one-click triggers:
   - **`⚡ Run agent`**: Starts interactive conversation with the chosen agent.
   - **`/clarify`**, **`/specify`**, **`/code`**, **`/create-pr`**: Executes prompt skills natively in shell.

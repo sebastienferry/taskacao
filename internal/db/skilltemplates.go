@@ -17,7 +17,7 @@ import (
 //
 // The files are written in English on purpose: the agents reason on them, and
 // the repositories they land in are read by people who do not all speak French.
-// The Taskacao interface stays in French.
+// The TaskFlow interface stays in French.
 type StageSkill struct {
 	ID          string // internal id, shared by the catalogue and the job queue
 	Name        string
@@ -26,13 +26,13 @@ type StageSkill struct {
 	FromStage   string
 	ToStage     string
 	Interactive bool
-	Description string // shown in the Taskacao interface, in French
+	Description string // shown in the TaskFlow interface, in French
 	Icon        string
 	Color       string
 	Steps       []string // the step list the interface displays
 
 	// Body of the SKILL.md. The renderer adds the header, the stage line and the
-	// contract with Taskacao. title is the English heading of the file, kept
+	// contract with TaskFlow. title is the English heading of the file, kept
 	// apart from Name, which the French interface displays.
 	title           string
 	frontmatterDesc string
@@ -62,7 +62,7 @@ var StageSkills = []StageSkill{
 			"Lecture du ticket et du code concerné",
 			"Détection des ambiguïtés et des dépendances",
 			"Questions de cadrage posées en session interactive",
-			"Label 'clarified' et transition posés par Taskacao",
+			"Label 'clarified' et transition posés par TaskFlow",
 		},
 		title:           "Clarify Issue",
 		frontmatterDesc: "Analyse a ticket against the code, surface what is genuinely undecided, and ask the few questions that unblock specification.",
@@ -104,7 +104,7 @@ would be expensive to reverse later, not for a list of everything unknown.`,
 			"Lecture des principes et des specs existantes",
 			"Création de la branche de travail",
 			"Rédaction de la spécification et de la checklist",
-			"Label 'specified' et transition posés par Taskacao",
+			"Label 'specified' et transition posés par TaskFlow",
 		},
 		title:           "Specify Issue",
 		frontmatterDesc: "Write the executable specification of a ticket in the project's Spec-Driven Design framework, before any code.",
@@ -134,7 +134,7 @@ and the two kept in separate files.`,
 			"Lecture de la spécification et des tâches",
 			"Implémentation sur la branche du ticket",
 			"Construction, analyse statique et tests au vert",
-			"Label 'implemented' et transition posés par Taskacao",
+			"Label 'implemented' et transition posés par TaskFlow",
 		},
 		title:           "Implement Code",
 		frontmatterDesc: "Implement the ticket from its specification and prove it works with the project's own build, linters and tests.",
@@ -171,7 +171,7 @@ already there, with the project's checks green.`,
 			"Relecture du diff complet",
 			"Commit conventionnel et poussée de la branche",
 			"Ouverture de la merge request, fusion laissée à l'utilisateur",
-			"Label 'reviewed' et transition posés par Taskacao",
+			"Label 'reviewed' et transition posés par TaskFlow",
 		},
 		title:           "Review and Pull Request",
 		frontmatterDesc: "Review the branch like a peer would, fix what the review finds, then open the merge request and leave the merge to the user.",
@@ -208,7 +208,7 @@ found and fixed, the risky parts pointed out, the test plan written down.`,
 			"Vérification que la branche est fusionnée",
 			"Compte-rendu de passation et vérifications de recette",
 			"Nettoyage du worktree et de la branche locale",
-			"Label 'finished' et transition posés par Taskacao",
+			"Label 'finished' et transition posés par TaskFlow",
 		},
 		title:           "Handoff and Close",
 		frontmatterDesc: "Close the ticket properly: confirm the merge, write the handover and the acceptance checklist, then clean the local workspace.",
@@ -259,69 +259,63 @@ const tick = "`"
 func specifyFrameworkName(specFramework string) string {
 	if strings.EqualFold(strings.TrimSpace(specFramework), "openspec") {
 		return "Specify Issue (OpenSpec SDD)"
+	} else if strings.EqualFold(strings.TrimSpace(specFramework), "speckit") {
+		return "Specify Issue (Spec Kit SDD)"
 	}
-	return "Specify Issue (Spec Kit SDD)"
+	return "Specify Issue (Spec-Driven Design)"
 }
 
-// specifyFrameworkBody is the one body that depends on the project: the SDD
-// framework decides which files the specification is written into. The exact
-// paths are spelled out on purpose, so the agent never has to guess the layout.
+// specifyFrameworkBody produces the specification instructions, supporting explicit
+// {sdd_framework} parameterization (openspec / speckit) as well as auto-detection.
 func specifyFrameworkBody(specFramework string) (readFirst, steps string) {
-	if strings.EqualFold(strings.TrimSpace(specFramework), "openspec") {
-		readFirst = `- The clarification outcome on the ticket: the decisions are already made, apply them.
-- ` + tick + `openspec/project.md` + tick + `, plus the specs already written under ` + tick + `openspec/specs/` + tick + `,
-  so you know which capabilities are described already.
-- This project must be initialised with OpenSpec. If ` + tick + `openspec/` + tick + ` is missing, say so
-  and stop: install OpenSpec from the Taskacao project settings, or run
-  ` + tick + `openspec init` + tick + ` at the repository root.`
-		steps = `1. Create or switch to the work branch, named <KEY>-<title-slug>. Never write on the
-   default branch.
-2. Create the change folder ` + tick + `openspec/changes/<KEY>-<title-slug>/` + tick + ` and write:
-   - ` + tick + `proposal.md` + tick + `: the why. Problem, value, what is in scope and what is not.
-   - ` + tick + `design.md` + tick + `: the technical decisions, and the alternatives you rejected.
-   - ` + tick + `tasks.md` + tick + `: the ordered, individually verifiable implementation checklist.
-   - ` + tick + `specs/<capability>/spec.md` + tick + `: the behaviour deltas, as ` + tick + `## ADDED` + tick + ` /
-     ` + tick + `## MODIFIED` + tick + ` / ` + tick + `## REMOVED` + tick + ` requirements with Given / When / Then
-     scenarios.
-3. Validate with ` + tick + `openspec validate <change-id> --strict` + tick + ` and fix everything it reports.
-4. Use the agent's OpenSpec commands if it exposes any, rather than writing the
-   files by hand.`
-		return readFirst, steps
-	}
-
 	readFirst = `- The clarification outcome on the ticket: the decisions are already made, apply them.
-- ` + tick + `.specify/memory/constitution.md` + tick + `, so the specification respects the project's
-  own principles, plus the specifications already written under ` + tick + `specs/` + tick + `.
-- This project must be initialised with Spec Kit. If ` + tick + `.specify/` + tick + ` is missing, say so
-  and stop: install Spec Kit from the Taskacao project settings, or run
-  ` + tick + `specify init --here` + tick + ` at the repository root.`
-	steps = `1. Create or switch to the work branch, named <KEY>-<title-slug>. Never write on the
-   default branch.
-2. Write ` + tick + `specs/<KEY>-<title-slug>/spec.md` + tick + `: the what and the why, with no
-   implementation choices. Context, prioritised user stories, explicit out of scope,
-   numbered functional requirements, and Given / When / Then acceptance criteria.
-3. Write ` + tick + `plan.md` + tick + `: the how. Stack, architecture, data contracts, target files,
-   and a Mermaid flow diagram when the flow is not obvious from the text.
-4. Write ` + tick + `tasks.md` + tick + `: the ordered, individually verifiable implementation
-   checklist, with the test plan attached to each item.
-5. Use ` + tick + `/speckit.specify` + tick + `, ` + tick + `/speckit.plan` + tick + ` then ` + tick + `/speckit.tasks` + tick + ` if the
-   agent exposes the Spec Kit commands, rather than writing the files by hand.`
+- If {sdd_framework} or --framework=<name> is provided, use it. Otherwise, auto-detect:
+  - If ` + tick + `openspec/` + tick + ` exists -> use OpenSpec SDD.
+  - If ` + tick + `.specify/` + tick + ` or ` + tick + `specs/` + tick + ` exists -> use Spec Kit SDD.
+- Ensure the project SDD directory is initialized before writing specifications.`
+
+	steps = `1. Create or switch to the work branch, named <KEY>-<title-slug>. Never write on the default branch.
+2. Select the SDD framework from {sdd_framework} argument, flag, or project detection:
+
+   **If using OpenSpec SDD:**
+   - Create change directory ` + tick + `openspec/changes/<KEY>-<title-slug>/` + tick + `
+   - Write ` + tick + `proposal.md` + tick + ` (problem, value, in/out scope)
+   - Write ` + tick + `design.md` + tick + ` (technical decisions, rejected alternatives)
+   - Write ` + tick + `tasks.md` + tick + ` (ordered implementation checklist)
+   - Write ` + tick + `specs/<capability>/spec.md` + tick + ` (requirements with Given/When/Then)
+   - Validate with ` + tick + `openspec validate <change-id> --strict` + tick + `
+
+   **If using Spec Kit SDD:**
+   - Write ` + tick + `specs/<KEY>-<title-slug>/spec.md` + tick + ` (prioritised user stories, functional requirements, Given/When/Then)
+   - Write ` + tick + `plan.md` + tick + ` (stack, architecture, data contracts, target files)
+   - Write ` + tick + `tasks.md` + tick + ` (ordered implementation checklist with test plan)
+   - Use ` + tick + `/speckit.specify` + tick + `, ` + tick + `/speckit.plan` + tick + `, ` + tick + `/speckit.tasks` + tick + ` if available.`
+
 	return readFirst, steps
 }
 
-// taskacaoContract is appended to every skill. It is the point of the
-// unification: the agent produces the work and the report, Taskacao owns the
-// ticket. Without it, a skill either tried to move the ticket itself or assumed
-// somebody else would, and nobody did.
-const taskacaoContract = `## Contract with Taskacao
-Taskacao owns the ticket. Do not change its status, labels, or parent, and do not
-post comments on it: the report above is published by Taskacao when the step ends.
-Work in the current directory, which Taskacao already picked for this ticket.
-Never delete anything remote and never merge a branch unless asked. Report
-faithfully: a failing check is reported with its output, a skipped step is stated.`
+// renderTicketTransitionContract generates the autonomous ticket transition instructions
+// for the skill based on its from/to stages in the sequence:
+// new -> clarified -> specified -> implemented -> reviewed -> finished
+func renderTicketTransitionContract(s StageSkill) string {
+	var b strings.Builder
+	b.WriteString("## Ticket Transition & Status Update\n")
+	b.WriteString("The agent executing this skill is responsible for advancing the ticket to the next agentic status upon completion:\n")
+	if s.ToStage == "finished" {
+		fmt.Fprintf(&b, "- **Stage Transition**: Advance ticket from `%s` to `%s`.\n", s.FromStage, s.ToStage)
+		fmt.Fprintf(&b, "- **GitHub CLI**: `gh issue edit <NUMBER> --add-label \"%s\" --remove-label \"%s\"` then `gh issue close <NUMBER>`\n", s.ToStage, s.FromStage)
+		fmt.Fprintf(&b, "- **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label \"%s\" --remove-label \"%s\" --state \"Done\"`\n", s.ToStage, s.FromStage)
+	} else {
+		fmt.Fprintf(&b, "- **Stage Transition**: Advance ticket from `%s` to `%s`.\n", s.FromStage, s.ToStage)
+		fmt.Fprintf(&b, "- **GitHub CLI**: `gh issue edit <NUMBER> --add-label \"%s\" --remove-label \"%s\"`\n", s.ToStage, s.FromStage)
+		fmt.Fprintf(&b, "- **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label \"%s\" --remove-label \"%s\"`\n", s.ToStage, s.FromStage)
+	}
+	b.WriteString("- **Comments**: Post the stage summary report as a comment on the ticket via `gh issue comment <NUMBER> --body \"...\"` or `linear issue comment add <ISSUE_KEY> --body \"...\"`.\n")
+	b.WriteString("- **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).\n")
+	return b.String()
+}
 
-// RenderSkillContent builds the SKILL.md of one skill. Same sections in the same
-// order for the five, which is what makes them reviewable side by side.
+// RenderSkillContent builds the SKILL.md of one skill.
 func RenderSkillContent(s StageSkill, specFramework string) string {
 	name := s.title
 	if name == "" {
@@ -353,8 +347,7 @@ func RenderSkillContent(s StageSkill, specFramework string) string {
 		fmt.Fprintf(&b, "## %s\n%s\n\n", s.guardTitle, s.guard)
 	}
 	fmt.Fprintf(&b, "## Report\n%s\n\n", s.report)
-	b.WriteString(taskacaoContract)
-	b.WriteString("\n")
+	b.WriteString(renderTicketTransitionContract(s))
 	return b.String()
 }
 
@@ -399,7 +392,7 @@ func SkillDirsFor(root, dirName string) []string {
 // Une skill et une commande ne sont pas la même chose : une skill sous
 // .claude/skills/<nom>/SKILL.md est choisie par le modèle quand il la juge
 // pertinente, alors qu'une commande sous .claude/commands/<nom>.md est
-// invocable par « /<nom> ». Taskacao appelle ses étapes par leur commande, donc
+// invocable par « /<nom> ». TaskFlow appelle ses étapes par leur commande, donc
 // il faut écrire les deux, sinon « claude -p "/clarify-issue PROJ-123" » se
 // contente de recopier le texte.
 func SkillCommandPath(root, dirName string) string {
