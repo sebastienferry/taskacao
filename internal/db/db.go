@@ -160,7 +160,7 @@ func (d *DB) initSchema() error {
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id TEXT PRIMARY KEY,
 			project_id TEXT NOT NULL DEFAULT 'default',
-			key TEXT NOT NULL UNIQUE,
+			key TEXT NOT NULL,
 			title TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'backlog',
@@ -184,7 +184,8 @@ func (d *DB) initSchema() error {
 			source TEXT NOT NULL DEFAULT 'local',
 			external_url TEXT,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(project_id, key)
 		);`,
 		`CREATE TABLE IF NOT EXISTS task_activities (
 			id TEXT PRIMARY KEY,
@@ -270,6 +271,7 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_key);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_pinned ON tasks(pinned);")
+	d.migrateTasksKeyUnique()
 	d.migratePinnedTasks()
 	_, _ = d.conn.Exec(`CREATE TABLE IF NOT EXISTS daily_digests (
 		id TEXT PRIMARY KEY,
@@ -344,6 +346,70 @@ func (d *DB) initSchema() error {
 	}
 
 	return nil
+}
+
+func (d *DB) migrateTasksKeyUnique() {
+	var sqlSchema string
+	_ = d.conn.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'").Scan(&sqlSchema)
+	if strings.Contains(sqlSchema, "key TEXT NOT NULL UNIQUE") || (strings.Contains(sqlSchema, "key TEXT NOT NULL") && !strings.Contains(sqlSchema, "UNIQUE(project_id, key)")) {
+		_, err := d.conn.Exec(`
+			PRAGMA foreign_keys=OFF;
+			CREATE TABLE IF NOT EXISTS tasks_new (
+				id TEXT PRIMARY KEY,
+				project_id TEXT NOT NULL DEFAULT 'default',
+				key TEXT NOT NULL,
+				title TEXT NOT NULL,
+				description TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL DEFAULT 'backlog',
+				priority TEXT NOT NULL DEFAULT 'medium',
+				labels TEXT NOT NULL DEFAULT '[]',
+				pinned INTEGER NOT NULL DEFAULT 0,
+				assignee TEXT NOT NULL DEFAULT '',
+				assignee_avatar TEXT NOT NULL DEFAULT '',
+				position INTEGER NOT NULL DEFAULT 0,
+				due_date TEXT,
+				branch_name TEXT,
+				pr_url TEXT,
+				repo_path TEXT NOT NULL DEFAULT '',
+				sprint TEXT NOT NULL DEFAULT '',
+				team TEXT NOT NULL DEFAULT '',
+				team_id TEXT NOT NULL DEFAULT '',
+				tracker_created_at DATETIME,
+				tracker_updated_at DATETIME,
+				status_changed_at DATETIME,
+				tracker_status TEXT NOT NULL DEFAULT '',
+				source TEXT NOT NULL DEFAULT 'local',
+				external_url TEXT,
+				issue_type TEXT NOT NULL DEFAULT '',
+				parent_key TEXT NOT NULL DEFAULT '',
+				parent_title TEXT NOT NULL DEFAULT '',
+				parent_type TEXT NOT NULL DEFAULT '',
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(project_id, key)
+			);
+			INSERT OR REPLACE INTO tasks_new (
+				id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_created_at, tracker_updated_at, status_changed_at, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+			)
+			SELECT
+				id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, branch_name, pr_url, repo_path, sprint, team, team_id, tracker_created_at, tracker_updated_at, status_changed_at, tracker_status, source, external_url, issue_type, parent_key, parent_title, parent_type, created_at, updated_at
+			FROM tasks;
+			DROP TABLE tasks;
+			ALTER TABLE tasks_new RENAME TO tasks;
+			CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+			CREATE INDEX IF NOT EXISTS idx_tasks_position ON tasks(status, position);
+			CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+			CREATE INDEX IF NOT EXISTS idx_tasks_team ON tasks(team);
+			CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);
+			CREATE INDEX IF NOT EXISTS idx_tasks_sprint ON tasks(sprint);
+			CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_key);
+			CREATE INDEX IF NOT EXISTS idx_tasks_pinned ON tasks(pinned);
+			PRAGMA foreign_keys=ON;
+		`)
+		if err != nil {
+			log.Printf("[migrateTasksKeyUnique] failed: %v", err)
+		}
+	}
 }
 
 func (d *DB) seedIfEmpty() error {
@@ -425,8 +491,18 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 			pinnedVal = 1
 		}
 
+		projID := t.ProjectID
+		if projID == "" {
+			var defaultProjID string
+			_ = d.conn.QueryRow("SELECT id FROM projects WHERE is_default = 1 LIMIT 1").Scan(&defaultProjID)
+			if defaultProjID == "" {
+				defaultProjID = "default"
+			}
+			projID = defaultProjID
+		}
+
 		var existingID string
-		err := d.conn.QueryRow("SELECT id FROM tasks WHERE key = ? OR id = ?", t.Key, t.ID).Scan(&existingID)
+		err := d.conn.QueryRow("SELECT id FROM tasks WHERE project_id = ? AND (key = ? OR id = ?)", projID, t.Key, t.ID).Scan(&existingID)
 
 		src := t.Source
 		if src == "" {
@@ -437,16 +513,6 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 			} else {
 				src = "local"
 			}
-		}
-
-		projID := t.ProjectID
-		if projID == "" {
-			var defaultProjID string
-			_ = d.conn.QueryRow("SELECT id FROM projects WHERE is_default = 1 LIMIT 1").Scan(&defaultProjID)
-			if defaultProjID == "" {
-				defaultProjID = "default"
-			}
-			projID = defaultProjID
 		}
 
 		// Calculate task.Status dynamically based on project's trackerColumns + stageColumns mapping
@@ -489,6 +555,8 @@ func (d *DB) ImportOrUpdateTasks(syncedTasks []models.Task) error {
 			newID := t.ID
 			if newID == "" {
 				newID = uuid.New().String()
+			} else if projID != "default" && !strings.Contains(newID, projID) && (strings.HasPrefix(newID, "gh-") || strings.HasPrefix(t.Key, "#")) {
+				newID = fmt.Sprintf("gh-%s-%s", projID, strings.TrimPrefix(t.Key, "#"))
 			}
 			if isPinned {
 				_, _ = d.conn.Exec(`
@@ -1909,13 +1977,20 @@ func (d *DB) DeleteGitBranch(projectIDOrPath string, branchName string, deleteRe
 	return nil
 }
 
-func (d *DB) getNextTaskKey(prefix string) (string, error) {
+func (d *DB) getNextTaskKey(projectID string, prefix string) (string, error) {
 	if prefix == "" {
 		prefix = "TASK"
 	}
 	prefix = strings.ToUpper(strings.TrimSpace(prefix))
 
-	rows, err := d.conn.Query("SELECT key FROM tasks WHERE UPPER(key) LIKE ?", prefix+"-%")
+	query := "SELECT key FROM tasks WHERE UPPER(key) LIKE ?"
+	args := []interface{}{prefix + "-%"}
+	if projectID != "" {
+		query = "SELECT key FROM tasks WHERE project_id = ? AND UPPER(key) LIKE ?"
+		args = []interface{}{projectID, prefix + "-%"}
+	}
+
+	rows, err := d.conn.Query(query, args...)
 	if err != nil {
 		return fmt.Sprintf("%s-1", prefix), nil
 	}
@@ -1941,8 +2016,16 @@ func (d *DB) getNextTaskKey(prefix string) (string, error) {
 	return fmt.Sprintf("%s-%d", prefix, maxNum+1), nil
 }
 
-func (d *DB) getNextGithubTaskKey() string {
-	rows, err := d.conn.Query("SELECT key FROM tasks WHERE key LIKE '#%' OR key LIKE 'GH-%'")
+func (d *DB) getNextGithubTaskKey(projectID string) string {
+	query := "SELECT key FROM tasks WHERE key LIKE '#%' OR key LIKE 'GH-%'"
+	var rows *sql.Rows
+	var err error
+	if projectID != "" {
+		query = "SELECT key FROM tasks WHERE project_id = ? AND (key LIKE '#%' OR key LIKE 'GH-%')"
+		rows, err = d.conn.Query(query, projectID)
+	} else {
+		rows, err = d.conn.Query(query)
+	}
 	if err != nil {
 		return "#1"
 	}
@@ -2171,17 +2254,26 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 			extURL = created.ExternalURL
 		} else {
 			log.Printf("[DB.CreateTask] Warning: Linear issue creation failed: %v. Using fallback key.", err)
-			key, _ = d.getNextTaskKey(prefix)
+			key, _ = d.getNextTaskKey(projID, prefix)
 		}
 	} else if req.Source == "github" {
 		created, err := d.runner.CreateGithubIssue(githubRepo, repoPath, req.Title, req.Description, req.Labels)
 		if err == nil && created != nil {
-			id = created.ID
+			if projID != "default" {
+				id = fmt.Sprintf("gh-%s-%s", projID, strings.TrimPrefix(created.Key, "#"))
+			} else {
+				id = created.ID
+			}
 			key = created.Key
 			extURL = created.ExternalURL
 		} else {
 			log.Printf("[DB.CreateTask] Warning: GitHub issue creation failed: %v. Using fallback key.", err)
-			key = d.getNextGithubTaskKey()
+			key = d.getNextGithubTaskKey(projID)
+			if projID != "default" {
+				id = fmt.Sprintf("gh-%s-%s", projID, strings.TrimPrefix(key, "#"))
+			} else {
+				id = fmt.Sprintf("gh-%s", strings.TrimPrefix(key, "#"))
+			}
 			if githubRepo != "" && strings.HasPrefix(key, "#") {
 				cleanNum := strings.TrimPrefix(key, "#")
 				url := fmt.Sprintf("https://github.com/%s/issues/%s", runner.CleanGithubRepo(githubRepo), cleanNum)
@@ -2190,7 +2282,7 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 		}
 	} else {
 		// Local project tracker
-		key, _ = d.getNextTaskKey(prefix)
+		key, _ = d.getNextTaskKey(projID, prefix)
 	}
 
 	if req.ExternalURL != nil && *req.ExternalURL != "" {
@@ -3819,6 +3911,9 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 			if job.ProjectID != "" {
 				for i := range tasks {
 					tasks[i].ProjectID = job.ProjectID
+					if job.ProjectID != "default" {
+						tasks[i].ID = fmt.Sprintf("gh-%s-%s", job.ProjectID, strings.TrimPrefix(tasks[i].Key, "#"))
+					}
 				}
 			}
 			if impErr := d.ImportOrUpdateTasks(tasks); impErr != nil {
@@ -3901,6 +3996,9 @@ func (d *DB) processSyncJob(ctx context.Context, job SkillJob, settings *models.
 					} else {
 						for i := range ghTasks {
 							ghTasks[i].ProjectID = p.ID
+							if p.ID != "default" {
+								ghTasks[i].ID = fmt.Sprintf("gh-%s-%s", p.ID, strings.TrimPrefix(ghTasks[i].Key, "#"))
+							}
 						}
 						if impErr := d.ImportOrUpdateTasks(ghTasks); impErr != nil {
 							hasError = true
