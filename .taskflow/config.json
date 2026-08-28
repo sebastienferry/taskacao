@@ -1,18 +1,18 @@
 {
-  "aiCommandTemplate": "agy -p \"{prompt}\" --yolo",
+  "aiCommandTemplate": "agy -p \"{prompt}\"",
   "aiProvider": "agy",
   "githubRepo": "",
   "issueTracker": "local",
-  "linearTeam": "TASK",
-  "projectId": "tasks",
-  "projectName": "TaskFlow",
+  "linearTeam": "",
+  "projectId": "/Users/sferry/Sources/taskacao",
+  "projectName": "/Users/sferry/Sources/taskacao",
   "skills": [
     "clarify-issue",
     "specify-issue",
     "code-issue",
     "create-pr",
-    "pick-issue"
+    "handoff-issue"
   ],
-  "specFramework": "speckit",
-  "updatedAt": "2026-08-28T08:00:00+02:00"
+  "specFramework": "openspec",
+  "updatedAt": "2026-08-28T21:02:46+02:00"
 }

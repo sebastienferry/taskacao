@@ -57,6 +57,7 @@ export const TaskDetailModal: React.FC = () => {
     runningSkillId,
     skills,
     projects,
+    tasks,
     activities: globalActivities,
     gitStatus,
     checkoutTaskBranch,
@@ -109,6 +110,7 @@ export const TaskDetailModal: React.FC = () => {
   const [prUrl, setPrUrl] = useState('')
   const [repoPath, setRepoPath] = useState('')
   const [trackerStatus, setTrackerStatus] = useState('')
+  const [sprint, setSprint] = useState('')
   const [labels, setLabels] = useState<string[]>([])
   const [newLabelInput, setNewLabelInput] = useState('')
   const [assignee, setAssignee] = useState('')
@@ -210,6 +212,7 @@ export const TaskDetailModal: React.FC = () => {
       setPrUrl(selectedTask.prUrl || '')
       setRepoPath(selectedTask.repoPath || '')
       setTrackerStatus(selectedTask.trackerStatus || '')
+      setSprint(selectedTask.sprint || '')
       setLabels(selectedTask.labels || [])
       setAssignee(selectedTask.assignee || '')
       setAssigneeAccountId('')
@@ -268,14 +271,26 @@ export const TaskDetailModal: React.FC = () => {
     [selectedTask, searchAssignableUsers, assignee, assigneeAccountId]
   )
 
-  // Sprints du board du projet du ticket : cherchés au clavier plutôt que
-  // déroulés, comme les épics et les équipes, pour que tous ces champs se
-  // manipulent de la même façon.
+  // Sprints du projet ou extraits des tickets : cherchés au clavier avec auto-complétion
   const taskSprints = React.useMemo(() => {
     const proj = projects.find(p => p.id === (selectedTask?.projectId || taskProjectId))
-    return (proj?.sprints || []).filter(sp => sp.id && sp.state !== 'closed')
-  }, [projects, selectedTask?.projectId, taskProjectId])
-  const sprintOptions = taskSprints
+    const projSprints = (proj?.sprints || []).filter(sp => sp.name && sp.state !== 'closed')
+    const distinctTaskSprints = Array.from(
+      new Set(
+        tasks
+          .filter(t => !selectedTask?.projectId || t.projectId === selectedTask.projectId)
+          .map(t => (t.sprint || '').trim())
+          .filter(Boolean)
+      )
+    )
+    const combined = [...projSprints]
+    for (const name of distinctTaskSprints) {
+      if (!combined.some(s => s.name.toLowerCase() === name.toLowerCase() || (s.id && s.id.toLowerCase() === name.toLowerCase()))) {
+        combined.push({ id: name, name, state: 'future' })
+      }
+    }
+    return combined
+  }, [projects, selectedTask?.projectId, taskProjectId, tasks])
   const searchSprint = React.useMemo(() => sprintLookup(taskSprints), [taskSprints])
 
   const searchTeam = React.useCallback(
@@ -312,6 +327,7 @@ export const TaskDetailModal: React.FC = () => {
         prUrl.trim() !== (selectedTask.prUrl || '').trim() ||
         repoPath.trim() !== (selectedTask.repoPath || '').trim() ||
         trackerStatus.trim() !== (selectedTask.trackerStatus || '').trim() ||
+        sprint.trim() !== (selectedTask.sprint || '').trim() ||
         assignee.trim() !== (selectedTask.assignee || '').trim() ||
         (dueDate || '') !== (selectedTask.dueDate || '') ||
         JSON.stringify(labels) !== JSON.stringify(selectedTask.labels || [])
@@ -326,6 +342,7 @@ export const TaskDetailModal: React.FC = () => {
           labels,
           assignee: assignee.trim(),
           assigneeAccountId,
+          sprint: sprint.trim(),
           dueDate: dueDate || null,
           branchName: branchName.trim() || undefined,
           prUrl: prUrl.trim() || undefined,
@@ -456,6 +473,7 @@ export const TaskDetailModal: React.FC = () => {
       labels,
       assignee: assignee.trim(),
       assigneeAccountId,
+      sprint: sprint.trim(),
       dueDate: dueDate || null,
       branchName: branchName.trim() || undefined,
       prUrl: prUrl.trim() || undefined,
@@ -1437,25 +1455,33 @@ export const TaskDetailModal: React.FC = () => {
 
         </div>
 
-        {/* Sprint : les sprints du board du projet, importés par la synchro. Seuls
-            ceux qui portent un identifiant sont proposés, l'API Agile ne déplaçant
-            que par identifiant. */}
-        {selectedTask.source === 'jira' && sprintOptions.length > 0 && (
-          <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                Sprint
-              </label>
-              <LookupField
-                value={selectedTask.sprint || ''}
-                icon={<CalendarRange size={12} />}
-                placeholder="Chercher un sprint…"
-                clearLabel="Backlog (aucun sprint)"
-                emptyHint="Aucun sprint ne correspond."
-                onSearch={searchSprint}
-                onPick={option => setTaskSprint(selectedTask.id, option?.id || '', option?.label)}
-              />
-            </div>
-          )}
+        {/* Sprint : sélection ou recherche de sprint pour le ticket */}
+        <div>
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+            Sprint
+          </label>
+          <LookupField
+            value={sprint}
+            icon={<CalendarRange size={12} />}
+            placeholder="Chercher ou nommer un sprint…"
+            clearLabel="Backlog (aucun sprint)"
+            emptyHint="Aucun sprint trouvé. Tapez un nom pour créer."
+            onSearch={async (query: string) => {
+              const res = await searchSprint(query)
+              if (query.trim() && !res.some(o => o.label.toLowerCase() === query.trim().toLowerCase())) {
+                res.unshift({ id: query.trim(), label: query.trim(), sublabel: 'Nouveau sprint' })
+              }
+              return res
+            }}
+            onPick={option => {
+              const val = option?.label || ''
+              setSprint(val)
+              if (selectedTask && selectedTask.source === 'jira') {
+                setTaskSprint(selectedTask.id, option?.id || '', val)
+              }
+            }}
+          />
+        </div>
 
         {/* Équipe : le champ Team du tracker, modifiable. L'écriture part tout de
             suite dans la file, contrairement aux champs texte qui attendent

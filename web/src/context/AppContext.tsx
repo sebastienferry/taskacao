@@ -182,7 +182,7 @@ interface AppContextType {
   toasts: ToastMessage[]
   addToast: (toast: Omit<ToastMessage, 'id'>) => void
   removeToast: (id: string) => void
-  createTask: (task: { title: string; description?: string; status?: Status; priority?: Priority; labels?: string[]; assignee?: string; dueDate?: string | null; source?: TaskSource; externalUrl?: string; projectId?: string }) => Promise<Task | null>
+  createTask: (task: { title: string; description?: string; status?: Status; priority?: Priority; labels?: string[]; assignee?: string; dueDate?: string | null; sprint?: string; source?: TaskSource; externalUrl?: string; projectId?: string }) => Promise<Task | null>
   /**
    * assigneeAccountId accompagne un changement d'assigné : Jira n'assigne que
    * par identifiant de compte, jamais par nom affiché.
@@ -1611,6 +1611,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     labels?: string[]
     assignee?: string
     dueDate?: string | null
+    sprint?: string
     source?: TaskSource
     externalUrl?: string
     projectId?: string

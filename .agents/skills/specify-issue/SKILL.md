@@ -1,30 +1,55 @@
 ---
 name: specify-issue
-description: Rédige la spécification technique selon GitHub Spec Kit (spec.md, plan.md, tasks.md sous specs/), avec user stories, architecture et critères d'acceptation Gherkin.
+description: Write the executable specification of a ticket in the project's Spec-Driven Design framework, before any code.
 ---
-# Skill : Specify Issue (GitHub Spec Kit SDD)
+# Specify Issue (OpenSpec SDD)
 
-## Objectif
-Produire la spécification exécutable d'un ticket selon GitHub Spec Kit, dans le
-répertoire `specs/` du projet.
+Stage: clarified -> specified.
 
-## Pré-requis
-Le projet doit être initialisé avec Spec Kit (répertoire `.specify/` présent).
-Sinon, lancer l'installation Spec Kit depuis la configuration du projet TaskFlow,
-ou exécuter `specify init --here` à la racine du dépôt.
+## Goal
+Produce a specification another engineer could implement without asking you
+anything. Behaviour and acceptance criteria first, implementation choices second,
+and the two kept in separate files.
 
-## Instructions
-1. Lire `.specify/memory/constitution.md` pour respecter les principes du projet.
-2. Créer ou basculer sur la branche Git de travail au format <KEY>-<titre-slug>.
-3. Écrire `specs/<KEY>-<titre-slug>/spec.md` (le quoi et le pourquoi, sans
-   choix d'implémentation) :
-   - Contexte, User Stories priorisées et périmètre exclu
-   - Exigences fonctionnelles numérotées et critères d'acceptation Given / When / Then
-   - Points à clarifier marqués explicitement plutôt que devinés
-4. Écrire `plan.md` (le comment) : pile technique, architecture, contrats de données
-   et diagrammes de flux Mermaid.
-5. Écrire `tasks.md` : la checklist ordonnée et vérifiable de mise en œuvre.
-6. Si les commandes Spec Kit sont disponibles dans l'agent, utiliser
-   `/speckit.specify`, `/speckit.plan` puis `/speckit.tasks`
-   au lieu de rédiger les fichiers à la main.
-7. Publier le résumé de la spécification en commentaire du ticket.
+## Read first
+- The clarification outcome on the ticket: the decisions are already made, apply them.
+- If {sdd_framework} or --framework=<name> is provided, use it. Otherwise, auto-detect:
+  - If `openspec/` exists -> use OpenSpec SDD.
+  - If `.specify/` or `specs/` exists -> use Spec Kit SDD.
+- Ensure the project SDD directory is initialized before writing specifications.
+
+## Steps
+1. Create or switch to the work branch, named <KEY>-<title-slug>. Never write on the default branch.
+2. Select the SDD framework from {sdd_framework} argument, flag, or project detection:
+
+   **If using OpenSpec SDD:**
+   - Create change directory `openspec/changes/<KEY>-<title-slug>/`
+   - Write `proposal.md` (problem, value, in/out scope)
+   - Write `design.md` (technical decisions, rejected alternatives)
+   - Write `tasks.md` (ordered implementation checklist)
+   - Write `specs/<capability>/spec.md` (requirements with Given/When/Then)
+   - Validate with `openspec validate <change-id> --strict`
+
+   **If using Spec Kit SDD:**
+   - Write `specs/<KEY>-<title-slug>/spec.md` (prioritised user stories, functional requirements, Given/When/Then)
+   - Write `plan.md` (stack, architecture, data contracts, target files)
+   - Write `tasks.md` (ordered implementation checklist with test plan)
+   - Use `/speckit.specify`, `/speckit.plan`, `/speckit.tasks` if available.
+
+## Do not
+- Do not decide what the clarification left open. Mark it as open and say so.
+- Do not describe implementation inside the behaviour file.
+- Do not start implementing, even the easy part.
+
+## Report
+- The files written, with their paths.
+- The work branch.
+- Requirements that are still open, and what they block.
+
+## Ticket Transition & Status Update
+The agent executing this skill is responsible for advancing the ticket to the next agentic status upon completion:
+- **Stage Transition**: Advance ticket from `clarified` to `specified`.
+- **GitHub CLI**: `gh issue edit <NUMBER> --add-label "specified" --remove-label "clarified"`
+- **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "specified" --remove-label "clarified"`
+- **Comments**: Post the stage summary report as a comment on the ticket via `gh issue comment <NUMBER> --body "..."` or `linear issue comment add <ISSUE_KEY> --body "..."`.
+- **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).

@@ -2224,9 +2224,9 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 	}
 
 	_, err := d.conn.Exec(`
-		INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, source, external_url, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, projID, key, req.Title, req.Description, string(req.Status), string(req.Priority), string(labelsJSON), pinnedVal, req.Assignee, req.AssigneeAvatar, newPos, req.DueDate, req.Source, extURL, now, now)
+		INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, source, external_url, sprint, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, projID, key, req.Title, req.Description, string(req.Status), string(req.Priority), string(labelsJSON), pinnedVal, req.Assignee, req.AssigneeAvatar, newPos, req.DueDate, req.Source, extURL, strings.TrimSpace(req.Sprint), now, now)
 
 	if err != nil {
 		return nil, err
@@ -2246,6 +2246,7 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 		AssigneeAvatar: req.AssigneeAvatar,
 		Position:       newPos,
 		DueDate:        req.DueDate,
+		Sprint:         strings.TrimSpace(req.Sprint),
 		Source:         req.Source,
 		ExternalURL:    extURL,
 		Activities:     []models.TaskActivity{},
@@ -2396,6 +2397,10 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 			d.registerProjectRepoPathUnsafe(existing.ProjectID, trimmed)
 		}
 	}
+	oldSprint := existing.Sprint
+	if req.Sprint != nil {
+		existing.Sprint = strings.TrimSpace(*req.Sprint)
+	}
 	if req.Source != nil {
 		existing.Source = *req.Source
 	}
@@ -2421,9 +2426,9 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 
 	_, err = d.conn.Exec(`
 		UPDATE tasks
-		SET project_id = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?, pinned = ?, assignee = ?, assignee_avatar = ?, position = ?, due_date = ?, branch_name = ?, pr_url = ?, repo_path = ?, tracker_status = ?, source = ?, external_url = ?, updated_at = ?
+		SET project_id = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?, pinned = ?, assignee = ?, assignee_avatar = ?, position = ?, due_date = ?, branch_name = ?, pr_url = ?, repo_path = ?, tracker_status = ?, source = ?, external_url = ?, sprint = ?, updated_at = ?
 		WHERE id = ? OR key = ?
-	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), pinnedVal, existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, repoPathValue(existing.RepoPath), existing.TrackerStatus, existing.Source, existing.ExternalURL, existing.UpdatedAt, existing.ID, existing.Key)
+	`, existing.ProjectID, existing.Title, existing.Description, string(existing.Status), string(existing.Priority), string(labelsJSON), pinnedVal, existing.Assignee, existing.AssigneeAvatar, existing.Position, existing.DueDate, existing.BranchName, existing.PrURL, repoPathValue(existing.RepoPath), existing.TrackerStatus, existing.Source, existing.ExternalURL, existing.Sprint, existing.UpdatedAt, existing.ID, existing.Key)
 
 	if err != nil {
 		return nil, err
@@ -2436,6 +2441,30 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 			Description: req.Description != nil,
 			Priority:    req.Priority != nil,
 		})
+	}
+
+	// Sprint change tracker operation queue
+	if req.Sprint != nil && strings.TrimSpace(*req.Sprint) != strings.TrimSpace(oldSprint) {
+		sprintID := strings.TrimSpace(*req.Sprint)
+		if proj, _ := d.getProjectByIDUnsafe(existing.ProjectID); proj != nil {
+			for _, sp := range proj.Sprints {
+				if strings.EqualFold(sp.Name, sprintID) || sp.ID == sprintID {
+					sprintID = sp.ID
+					break
+				}
+			}
+		}
+		if _, opErr := d.enqueueTrackerOpUnsafe(TrackerOp{
+			Kind:       TrackerOpSetSprint,
+			ProjectID:  existing.ProjectID,
+			TaskID:     existing.ID,
+			TaskKey:    existing.Key,
+			TaskIDs:    []string{existing.ID},
+			SprintID:   sprintID,
+			SprintName: strings.TrimSpace(*req.Sprint),
+		}); opErr != nil {
+			log.Printf("[UpdateTask] sprint de %s non mis en file: %v", existing.Key, opErr)
+		}
 	}
 
 	// L'assignation ne peut pas voyager avec la synchro des champs : acli n'a pas

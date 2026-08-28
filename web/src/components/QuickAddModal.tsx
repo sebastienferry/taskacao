@@ -1,11 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import {
   X,
   Plus,
-  Loader2
+  Loader2,
+  CalendarRange
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { Status, Priority, TaskSource } from '../types'
+import type { Status, Priority, TaskSource, TrackerSprint } from '../types'
+import { LookupField } from './LookupField'
+import { sprintLookup } from '../lib/lookups'
 
 export const QuickAddModal: React.FC = () => {
   const {
@@ -14,6 +17,7 @@ export const QuickAddModal: React.FC = () => {
     quickAddInitialStatus,
     createTask,
     projects,
+    tasks,
     selectedProjectId,
     t,
   } = useApp()
@@ -28,11 +32,34 @@ export const QuickAddModal: React.FC = () => {
   const [source, setSource] = useState<TaskSource>(
     (defaultProj?.issueTracker as TaskSource) || 'local'
   )
+  const [sprint, setSprint] = useState('')
   const [labels, setLabels] = useState<string[]>([])
   const [labelInput, setLabelInput] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const availableSprints = useMemo(() => {
+    const proj = projects.find(p => p.id === taskProjectId)
+    const projSprints = (proj?.sprints || []).filter(sp => sp.name && sp.state !== 'closed')
+    const distinctTaskSprints = Array.from(
+      new Set(
+        tasks
+          .filter(t => t.projectId === taskProjectId)
+          .map(t => (t.sprint || '').trim())
+          .filter(Boolean)
+      )
+    )
+    const combined: TrackerSprint[] = [...projSprints]
+    for (const name of distinctTaskSprints) {
+      if (!combined.some(s => s.name.toLowerCase() === name.toLowerCase() || (s.id && s.id.toLowerCase() === name.toLowerCase()))) {
+        combined.push({ id: name, name, state: 'future' })
+      }
+    }
+    return combined
+  }, [projects, taskProjectId, tasks])
+
+  const searchSprint = useMemo(() => sprintLookup(availableSprints), [availableSprints])
 
   useEffect(() => {
     if (isQuickAddOpen) {
@@ -44,6 +71,7 @@ export const QuickAddModal: React.FC = () => {
       setTaskProjectId(initialProjId)
       const proj = projects.find(p => p.id === initialProjId) || projects[0]
       setSource((proj?.issueTracker as TaskSource) || 'local')
+      setSprint('')
       setLabels(['New'])
       setLabelInput('')
       setTimeout(() => {
@@ -86,6 +114,7 @@ export const QuickAddModal: React.FC = () => {
       status,
       priority,
       labels,
+      sprint: sprint.trim() || undefined,
       source,
       projectId: taskProjectId,
     })
@@ -251,6 +280,28 @@ export const QuickAddModal: React.FC = () => {
                 <option value="low">{t.priority.low}</option>
               </select>
             </div>
+          </div>
+
+          {/* Sprint */}
+          <div>
+            <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+              Sprint
+            </label>
+            <LookupField
+              value={sprint}
+              icon={<CalendarRange size={12} />}
+              placeholder="Affecter un sprint (optionnel)…"
+              clearLabel="Backlog (aucun sprint)"
+              emptyHint="Aucun sprint trouvé. Tapez un nom pour créer."
+              onSearch={async (query: string) => {
+                const res = await searchSprint(query)
+                if (query.trim() && !res.some(o => o.label.toLowerCase() === query.trim().toLowerCase())) {
+                  res.unshift({ id: query.trim(), label: query.trim(), sublabel: 'Nouveau sprint' })
+                }
+                return res
+              }}
+              onPick={option => setSprint(option?.label || '')}
+            />
           </div>
 
           {/* Labels */}

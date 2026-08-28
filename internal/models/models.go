@@ -640,6 +640,7 @@ type CreateTaskRequest struct {
 	DueDate        *string  `json:"dueDate"`
 	Source         string   `json:"source,omitempty"`
 	ExternalURL    *string  `json:"externalUrl,omitempty"`
+	Sprint         string   `json:"sprint,omitempty"`
 }
 
 type UpdateTaskRequest struct {
@@ -661,6 +662,7 @@ type UpdateTaskRequest struct {
 	PrURL             *string `json:"prUrl,omitempty"`
 	RepoPath          *string `json:"repoPath,omitempty"`
 	TrackerStatus     *string `json:"trackerStatus,omitempty"`
+	Sprint            *string `json:"sprint,omitempty"`
 	Source            *string `json:"source,omitempty"`
 	ExternalURL       *string `json:"externalUrl,omitempty"`
 }
