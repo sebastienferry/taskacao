@@ -1101,14 +1101,22 @@ func (r *Runner) SetGithubIssueMilestone(repo string, repoPath string, issueNumb
 		ghPath = "gh"
 	}
 
+	target := strings.TrimSpace(milestoneTitleOrNumber)
 	var args []string
-	if strings.TrimSpace(milestoneTitleOrNumber) == "" {
-		args = []string{"issue", "edit", fmt.Sprintf("%d", issueNumber), "-R", repo, "--milestone", ""}
+	if target == "" || target == "0" || strings.EqualFold(target, "null") || strings.EqualFold(target, "none") {
+		args = []string{"issue", "edit", fmt.Sprintf("%d", issueNumber), "-R", repo, "--remove-milestone"}
 	} else {
-		args = []string{"issue", "edit", fmt.Sprintf("%d", issueNumber), "-R", repo, "--milestone", strings.TrimSpace(milestoneTitleOrNumber)}
+		args = []string{"issue", "edit", fmt.Sprintf("%d", issueNumber), "-R", repo, "--milestone", target}
 	}
 	output, err := r.runCommand(ctx, repoPath, ghPath, args...)
 	if err != nil {
+		// Fallback: If gh issue edit fails, try direct REST API
+		if target == "" || target == "0" || strings.EqualFold(target, "null") || strings.EqualFold(target, "none") {
+			apiArgs := []string{"api", fmt.Sprintf("repos/%s/issues/%d", repo, issueNumber), "-X", "PATCH", "-F", "milestone=null"}
+			if _, apiErr := r.runCommand(ctx, repoPath, ghPath, apiArgs...); apiErr == nil {
+				return nil
+			}
+		}
 		return fmt.Errorf("failed to set GitHub issue milestone: %w (output: %s)", err, output)
 	}
 	return nil
