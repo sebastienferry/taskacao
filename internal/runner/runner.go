@@ -675,7 +675,25 @@ func (r *Runner) SyncFromGithub(repo string, repoPath string) ([]models.Task, er
 
 		var status models.Status = models.StatusToClarify
 		if strings.EqualFold(item.State, "closed") {
-			status = models.StatusDone
+			status = models.StatusFinished
+		} else {
+			for _, l := range labels {
+				clean := strings.ToLower(strings.TrimPrefix(l, "#"))
+				switch clean {
+				case "new", "untouched":
+					status = models.StatusToClarify
+				case "clarified":
+					status = models.StatusToSpecify
+				case "specified":
+					status = models.StatusToImplement
+				case "implemented":
+					status = models.StatusToTest
+				case "reviewed":
+					status = models.StatusToClose
+				case "finished", "closed", "done":
+					status = models.StatusFinished
+				}
+			}
 		}
 
 		assignee := ""
@@ -768,7 +786,25 @@ func (r *Runner) FetchSingleGithubIssue(repo string, repoPath string, issueNumbe
 
 	var status models.Status = models.StatusToClarify
 	if strings.EqualFold(item.State, "closed") {
-		status = models.StatusDone
+		status = models.StatusFinished
+	} else {
+		for _, l := range labels {
+			clean := strings.ToLower(strings.TrimPrefix(l, "#"))
+			switch clean {
+			case "new", "untouched":
+				status = models.StatusToClarify
+			case "clarified":
+				status = models.StatusToSpecify
+			case "specified":
+				status = models.StatusToImplement
+			case "implemented":
+				status = models.StatusToTest
+			case "reviewed":
+				status = models.StatusToClose
+			case "finished", "closed", "done":
+				status = models.StatusFinished
+			}
+		}
 	}
 
 	assignee := ""
@@ -959,7 +995,7 @@ func (r *Runner) UpdateGithubIssueState(repo string, repoPath string, keyOrNumbe
 	}
 
 	state := "open"
-	if status == models.StatusFinished || status == models.StatusDone || status == models.StatusToClose {
+	if status == models.StatusFinished || status == models.StatusDone {
 		state = "closed"
 	}
 

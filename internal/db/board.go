@@ -299,6 +299,9 @@ func StageForTrackerStatus(proj *models.Project, trackerStatus string) string {
 	if proj == nil || trackerStatus == "" {
 		return ""
 	}
+	if trackerStatus == "done" || trackerStatus == "closed" || trackerStatus == "finished" {
+		return "finished"
+	}
 	column := ""
 	for _, col := range proj.TrackerColumns {
 		if strings.ToLower(col.Name) == trackerStatus {
@@ -314,6 +317,9 @@ func StageForTrackerStatus(proj *models.Project, trackerStatus string) string {
 		if column != "" {
 			break
 		}
+	}
+	if strings.EqualFold(column, "done") || strings.EqualFold(column, "closed") || strings.EqualFold(column, "finished") {
+		return "finished"
 	}
 	if column == "" {
 		// Fallback: check if trackerStatus matches a stage name directly

@@ -2284,7 +2284,10 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 	if req.Status != nil {
 		oldStage := GetStageLabelForStatus(existing.Status)
 		existing.Status = *req.Status
-		if req.Labels == nil {
+		if *req.Status == models.StatusFinished || *req.Status == models.StatusDone {
+			existing.Status = models.StatusFinished
+			existing.Labels = SetWorkflowLabel(existing.Labels, "#finished")
+		} else if req.Labels == nil {
 			newStage := GetStageLabelForStatus(*req.Status)
 			if oldStage != newStage {
 				removedLabels = append(removedLabels, oldStage)
@@ -2326,16 +2329,37 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 	if req.PrURL != nil {
 		existing.PrURL = req.PrURL
 	}
-	// Statut du tracker : il pilote l'étape du workflow et le statut interne, via
-	// le mapping du projet. L'inverse est vrai aussi — une étape choisie sans
-	// statut retombe sur le premier statut de la colonne de cette étape.
-	if req.TrackerStatus != nil {
+
+	// Détection d'une étape agentique explicite dans les labels
+	var explicitStage string
+	if req.Labels != nil {
+		for _, l := range *req.Labels {
+			stage := strings.ToLower(strings.TrimPrefix(l, "#"))
+			if _, isStage := stageToInternalStatus[stage]; isStage {
+				explicitStage = stage
+				break
+			}
+		}
+	}
+
+	// Statut du tracker & workflow : alignement bidirectionnel
+	if explicitStage != "" {
+		existing.Labels = SetWorkflowLabel(existing.Labels, "#"+explicitStage)
+		if internal, ok := InternalStatusForStage(explicitStage); ok && req.Status == nil {
+			existing.Status = internal
+		}
+		if proj, _ := d.getProjectByIDUnsafe(existing.ProjectID); proj != nil {
+			if target := TrackerStatusForStage(proj, explicitStage); target != "" {
+				existing.TrackerStatus = target
+			}
+		}
+	} else if req.TrackerStatus != nil {
 		trimmedStatus := strings.TrimSpace(*req.TrackerStatus)
 		existing.TrackerStatus = trimmedStatus
 		if proj, _ := d.getProjectByIDUnsafe(existing.ProjectID); proj != nil && trimmedStatus != "" {
 			if stage := StageForTrackerStatus(proj, trimmedStatus); stage != "" {
 				existing.Labels = SetWorkflowLabel(existing.Labels, "#"+stage)
-				if internal, ok := InternalStatusForStage(stage); ok {
+				if internal, ok := InternalStatusForStage(stage); ok && req.Status == nil {
 					existing.Status = internal
 				}
 			}
@@ -2350,9 +2374,6 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 				if target := TrackerStatusForStage(proj, stage); target != "" && !strings.EqualFold(target, existing.TrackerStatus) {
 					existing.TrackerStatus = target
 				}
-				// Le statut interne suit l'étape aussi, sauf si l'appelant l'a
-				// fixé explicitement : sinon la fiche afficherait une étape et
-				// les vues génériques une autre.
 				if req.Status == nil {
 					if internal, ok := InternalStatusForStage(stage); ok {
 						existing.Status = internal

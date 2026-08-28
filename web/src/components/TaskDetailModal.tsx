@@ -146,8 +146,11 @@ export const TaskDetailModal: React.FC = () => {
   const hasProjectStatuses = projectColumns.some(c => c.statuses.length > 0)
 
   const stageOfStatus = (value: string): WorkflowStage | null => {
-    const column = projectColumns.find(c => c.statuses.some(st => st.toLowerCase() === value.toLowerCase()))
+    const clean = value.toLowerCase().trim()
+    if (clean === 'done' || clean === 'closed' || clean === 'finished') return 'finished'
+    const column = projectColumns.find(c => c.statuses.some(st => st.toLowerCase() === clean) || c.name.toLowerCase() === clean)
     if (!column) return null
+    if (column.name.toLowerCase() === 'done' || column.name.toLowerCase() === 'closed') return 'finished'
     for (const stage of WORKFLOW_ORDER) {
       if ((projectStageColumns[stage] || []).includes(column.name)) return stage
     }
@@ -159,6 +162,7 @@ export const TaskDetailModal: React.FC = () => {
       const column = projectColumns.find(c => c.name === columnName)
       if (column?.statuses.length) return column.statuses[0]
     }
+    if (stage === 'finished') return 'Done'
     return ''
   }
 
@@ -182,7 +186,7 @@ export const TaskDetailModal: React.FC = () => {
     setTrackerStatus(value)
     const stage = stageOfStatus(value)
     if (stage) {
-      const others = labels.filter(l => !(WORKFLOW_ORDER as string[]).includes(l.toLowerCase().replace('#', '')))
+      const others = labels.filter(l => !(WORKFLOW_ORDER as string[]).includes(l.toLowerCase().replace(/^#+/, '')))
       setLabels([...others, stage])
     }
   }
