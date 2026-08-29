@@ -103,10 +103,20 @@ export const RoadmapView: React.FC = () => {
 
   const [roadmapMode, setRoadmapMode] = useState<'sprints' | 'epics'>('sprints')
   const [tab, setTab] = useState<HorizonTab>('now')
+  const [displayMode, setDisplayMode] = useState<'framing' | 'execution'>('execution')
   const [epicMeta, setEpicMeta] = useState<EpicMeta[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [onlyIssues, setOnlyIssues] = useState(false)
   const [showClosed, setShowClosed] = useState(false)
+
+  // Synchronisation du mode par défaut selon l'horizon sélectionné
+  useEffect(() => {
+    if (tab === 'later') {
+      setDisplayMode('framing')
+    } else if (tab === 'now' || tab === 'next') {
+      setDisplayMode('execution')
+    }
+  }, [tab])
 
   const [showCreateMacroModal, setShowCreateMacroModal] = useState(false)
   const [createMacroTitle, setCreateMacroTitle] = useState('')
@@ -267,7 +277,6 @@ export const RoadmapView: React.FC = () => {
     [rows]
   )
 
-  const operational = tab === 'now' || tab === 'next'
   // Les onglets « non classés » et « masqués » n'ont pas d'horizon propre : le
   // panneau y montre le cadrage, pas la vérification de sprint.
   const horizonOfTab: Horizon =
@@ -275,11 +284,11 @@ export const RoadmapView: React.FC = () => {
 
   const visibleRows = useMemo(() => {
     const list = tab === 'unclassified' ? rows.filter(r => !r.horizon) : rows.filter(r => r.horizon === tab)
-    if (operational && onlyIssues) {
+    if (displayMode === 'execution' && onlyIssues) {
       return list.filter(r => placementIssues(r, horizonOfTab).length > 0)
     }
     return list
-  }, [rows, tab, operational, onlyIssues, horizonOfTab])
+  }, [rows, tab, displayMode, onlyIssues, horizonOfTab])
 
   // Chercher un épic et rester devant un onglet vide n'aide personne : quand la
   // recherche ne trouve rien ici mais trouve ailleurs, on va là où c'est. Sans
@@ -522,6 +531,36 @@ export const RoadmapView: React.FC = () => {
             </div>
           )}
 
+          {/* Toggle Mode: Framing | Execution */}
+          <div className="flex items-center p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
+            <button
+              type="button"
+              onClick={() => setDisplayMode('framing')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                displayMode === 'framing'
+                  ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Mode Framing : Cadrage et Checklist TODOs"
+            >
+              <Compass size={12} />
+              <span>Framing</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDisplayMode('execution')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                displayMode === 'execution'
+                  ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Mode Execution : Stories, Sprints et Découpe"
+            >
+              <Target size={12} />
+              <span>Execution</span>
+            </button>
+          </div>
+
           <button
             type="button"
             disabled={busyKey === 'epic'}
@@ -538,7 +577,7 @@ export const RoadmapView: React.FC = () => {
             <Plus size={12} /> Macro
           </button>
 
-          {operational && (
+          {displayMode === 'execution' && (
             <button
               type="button"
               onClick={() => setOnlyIssues(v => !v)}
@@ -580,7 +619,7 @@ export const RoadmapView: React.FC = () => {
           )}
         </div>
 
-        {operational && (
+        {displayMode === 'execution' && (tab === 'now' || tab === 'next') && (
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] bg-[var(--bg-tertiary)] border border-[var(--border-color)] shrink-0">
             <CalendarDays size={13} style={{ color: HORIZON_META[horizonOfTab].color }} />
             <span className="text-[var(--text-muted)]">{tab === 'now' ? 'Sprints actifs' : 'Sprints à venir'} :</span>
@@ -647,7 +686,7 @@ export const RoadmapView: React.FC = () => {
                       {row.maturity}
                     </span>
 
-                    {operational && (
+                    {displayMode === 'execution' ? (
                       issues.length > 0 ? (
                         <span className="ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded inline-flex items-center gap-1"
                           style={{ color: 'var(--status-danger)', background: 'rgb(var(--status-danger-rgb) / 0.13)', border: '1px solid rgb(var(--status-danger-rgb) / 0.32)' }}>
@@ -661,9 +700,7 @@ export const RoadmapView: React.FC = () => {
                           tout placé
                         </span>
                       )
-                    )}
-
-                    {tab === 'later' && (
+                    ) : (
                       <span className="ml-auto text-[10px] font-mono text-[var(--text-muted)]">
                         {todosOf(row).filter(t => t.done).length}/{todosOf(row).length} todos
                       </span>
@@ -753,7 +790,37 @@ export const RoadmapView: React.FC = () => {
                     {HORIZON_META[selected.horizon].label}
                   </span>
                 )}
-                <div className="ml-auto flex items-center gap-1.5">
+                <div className="ml-auto flex items-center gap-1.5 flex-wrap">
+                  {/* Switcher de mode de visualisation */}
+                  <div className="flex items-center p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
+                    <button
+                      type="button"
+                      onClick={() => setDisplayMode('framing')}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] font-bold transition-all cursor-pointer ${
+                        displayMode === 'framing'
+                          ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                      }`}
+                      title="Mode Framing : Cadrage et Checklist TODOs"
+                    >
+                      <Compass size={11} />
+                      <span>Framing</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDisplayMode('execution')}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] font-bold transition-all cursor-pointer ${
+                        displayMode === 'execution'
+                          ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                      }`}
+                      title="Mode Execution : Stories, Sprints et Découpe"
+                    >
+                      <Target size={11} />
+                      <span>Execution</span>
+                    </button>
+                  </div>
+
                   {selected.tasks[0]?.externalUrl && (
                     <a href={selected.tasks[0].externalUrl} target="_blank" rel="noreferrer"
                       className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-colors"
@@ -890,7 +957,7 @@ export const RoadmapView: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 pt-3.5 pb-7 flex flex-col gap-4">
-              {operational ? (
+              {displayMode === 'execution' ? (
                 <>
                   {/* Prototypage : ajouter une story a la volée, ou pousser un
                       ticket existant dans la macro. */}
@@ -1280,10 +1347,10 @@ export const RoadmapView: React.FC = () => {
 </>
               ) : (
                 <>
-                  {/* LATER : le cadrage se fait ici, description et TODO */}
+                  {/* Mode Framing : cadrage de la macro, description et checklist TODO */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-[.08em] text-[var(--text-muted)]">Description</span>
+                      <span className="text-[10px] font-bold uppercase tracking-[.08em] text-[var(--text-muted)]">Framing</span>
                       {draftDirty && (
                         <button
                           type="button"
@@ -1304,13 +1371,13 @@ export const RoadmapView: React.FC = () => {
                         setDraftDirty(true)
                       }}
                       minHeight={160}
-                      placeholder="Le problème, le périmètre, ce qui est hors périmètre… Ce cadrage vit dans TaskFlow."
+                      placeholder="Le problème, le périmètre, la valeur attendue, ce qui est hors périmètre… Ce cadrage vit dans TaskFlow."
                     />
                   </div>
 
                   <div>
                     <div className="text-[10px] font-bold uppercase tracking-[.08em] text-[var(--text-muted)] mb-1.5">
-                      TODO ({todosOf(selected).filter(t => t.done).length}/{todosOf(selected).length})
+                      Checklist TODOs ({todosOf(selected).filter(t => t.done).length}/{todosOf(selected).length})
                     </div>
                     <div className="flex flex-col gap-1.5">
                       {todosOf(selected).map(todo => (
@@ -1374,7 +1441,7 @@ export const RoadmapView: React.FC = () => {
                                 background: 'rgb(var(--status-info-rgb) / 0.12)',
                                 border: '1px solid rgb(var(--status-info-rgb) / 0.32)',
                               }}
-                              title={`Créer une story Jira sous ${selected.key}`}
+                              title={`Créer une story sous ${selected.key}`}
                             >
                               {creatingTodoId === todo.id ? '…' : 'Créer story'}
                             </button>
@@ -1418,16 +1485,21 @@ export const RoadmapView: React.FC = () => {
                   </div>
 
                   {selected.tasks.length > 0 && (
-                    <div>
+                    <div className="pt-2 border-t border-[var(--border-color)]">
                       <div className="text-[10px] font-bold uppercase tracking-[.08em] text-[var(--text-muted)] mb-1.5">
-                        Tickets déjà créés ({selected.tasks.length})
+                        Tickets créés sous cette macro ({selected.tasks.length})
                       </div>
                       <div className="flex flex-wrap gap-1.5">
                         {selected.tasks.map(task => (
-                          <button key={task.id} type="button" onClick={() => setSelectedTask(task)}
-                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
-                            title={task.title}>
-                            {task.key}
+                          <button
+                            key={task.id}
+                            type="button"
+                            onClick={() => setSelectedTask(task)}
+                            className="text-[10.5px] font-mono px-2 py-1 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent-color)]/40 cursor-pointer flex items-center gap-1.5 transition-colors"
+                            title={task.title}
+                          >
+                            <span style={{ color: 'var(--status-info)' }}>{task.key}</span>
+                            <span className="truncate max-w-[200px]">{task.title}</span>
                           </button>
                         ))}
                       </div>

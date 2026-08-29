@@ -317,10 +317,6 @@ func (d *DB) CreateStoryFromEpicTodo(projectID string, epicKey string, todoID st
 	if err != nil || proj == nil {
 		return nil, "", fmt.Errorf("projet non trouvé")
 	}
-	if proj.IssueTracker != "jira" {
-		return nil, "", fmt.Errorf("la création de story depuis une TODO n'est disponible que sur un projet Jira")
-	}
-
 	metas, err := d.GetProjectEpics(projectID)
 	if err != nil {
 		return nil, "", err
@@ -333,7 +329,7 @@ func (d *DB) CreateStoryFromEpicTodo(projectID string, epicKey string, todoID st
 		}
 	}
 	if meta == nil {
-		return nil, "", fmt.Errorf("épic %s sans cadrage enregistré", epicKey)
+		return nil, "", fmt.Errorf("macro %s sans cadrage enregistré", epicKey)
 	}
 
 	var todo *models.EpicTodo
@@ -350,14 +346,17 @@ func (d *DB) CreateStoryFromEpicTodo(projectID string, epicKey string, todoID st
 		return nil, "", fmt.Errorf("cette ligne a déjà produit %s", todo.StoryKey)
 	}
 
-	projectKey := jiraProjectKeyFor(proj)
-	if projectKey == "" {
-		if settings, _ := d.GetSettings(); settings != nil {
-			projectKey = settings.JiraProject
-		}
+	task, err := d.CreateStoryUnderEpic(projectID, epicKey, todo.Text)
+	if err != nil {
+		return nil, "", fmt.Errorf("erreur création de story: %w", err)
 	}
 
-	return nil, "", fmt.Errorf("création de story Jira indisponible (Jira retiré)")
+	todo.StoryKey = task.Key
+	saved, err := d.SaveEpicMeta(projectID, epicKey, nil, nil, &meta.Todos)
+	if err != nil {
+		return meta, task.Key, nil
+	}
+	return saved, task.Key, nil
 }
 
 // projectRepoPath is the working directory acli runs in for this project: the
