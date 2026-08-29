@@ -18,6 +18,7 @@ import (
 
 	"tasks/internal/db"
 	"tasks/internal/handlers"
+	"tasks/internal/models"
 	"tasks/internal/webui"
 )
 
@@ -167,6 +168,14 @@ func main() {
 		port = "8090"
 	}
 
+	if len(os.Args) >= 2 {
+		cmd := strings.ToLower(os.Args[1])
+		if cmd == "stage" || cmd == "transition" || cmd == "set-stage" {
+			handleCliStageCommand(port, os.Args[2:])
+			return
+		}
+	}
+
 	dbPath, dbOrigin := resolveDBPath(os.Getenv("DB_PATH"))
 
 	database, err := db.NewDB(dbPath)
@@ -213,6 +222,8 @@ func main() {
 	mux.HandleFunc("/api/projects", h.HandleProjects)
 	mux.HandleFunc("/api/projects/", h.HandleProjectDetail)
 	mux.HandleFunc("/api/tasks", h.HandleTasks)
+	mux.HandleFunc("/api/tasks/stage", h.HandleTasks)
+	mux.HandleFunc("/api/tasks/transition", h.HandleTasks)
 	mux.HandleFunc("/api/tasks/facets", h.HandleTaskFacets)
 	mux.HandleFunc("/api/teams", h.HandleTeams)
 	mux.HandleFunc("/api/teams/", h.HandleTeams)
@@ -368,3 +379,94 @@ func main() {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
+
+func handleCliStageCommand(defaultPort string, args []string) {
+	if len(args) < 2 {
+		fmt.Println("Usage: taskflow stage <TASK_KEY_OR_ID> <STAGE> [NOTE] [--pr-url <URL>] [--branch <BRANCH>]")
+		fmt.Println("Stages: new, clarified, specified, implemented, reviewed, finished")
+		fmt.Println("Example: taskflow stage PROJ-123 clarified \"Questions answered, scope validated\"")
+		os.Exit(1)
+	}
+
+	taskIDOrKey := args[0]
+	stage := args[1]
+	note := ""
+	prURL := ""
+	branch := ""
+
+	for i := 2; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--pr-url" && i+1 < len(args) {
+			prURL = args[i+1]
+			i++
+		} else if arg == "--branch" && i+1 < len(args) {
+			branch = args[i+1]
+			i++
+		} else {
+			if note == "" {
+				note = arg
+			} else {
+				note += " " + arg
+			}
+		}
+	}
+
+	baseURL := fmt.Sprintf("http://127.0.0.1:%s", defaultPort)
+	if envURL := os.Getenv("TASKFLOW_API_URL"); envURL != "" {
+		baseURL = strings.TrimRight(envURL, "/")
+	}
+
+	// 1. If server is already running, invoke HTTP endpoint
+	if alreadyServing(baseURL) {
+		payload, _ := json.Marshal(map[string]string{
+			"taskId": taskIDOrKey,
+			"stage":  stage,
+			"note":   note,
+			"prUrl":  prURL,
+			"branch": branch,
+		})
+		client := &http.Client{Timeout: 10 * time.Second}
+		req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/tasks/stage", baseURL), strings.NewReader(string(payload)))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted {
+					var res struct {
+						Success bool         `json:"success"`
+						Message string       `json:"message"`
+						Task    *models.Task `json:"task"`
+					}
+					_ = json.Unmarshal(bodyBytes, &res)
+					if res.Message != "" {
+						fmt.Printf("✅ %s\n", res.Message)
+					} else {
+						fmt.Printf("✅ Tâche %s passée à l'étape %s\n", taskIDOrKey, stage)
+					}
+					return
+				}
+				log.Printf("⚠️ Erreur API (%d): %s, repli vers base locale...", resp.StatusCode, string(bodyBytes))
+			}
+		}
+	}
+
+	// 2. Direct local DB fallback
+	dbPath, _ := resolveDBPath(os.Getenv("DB_PATH"))
+	database, err := db.NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("❌ Erreur d'ouverture de la base locale: %v", err)
+	}
+	defer database.Close()
+
+	task, act, err := database.TransitionTaskStage(taskIDOrKey, stage, note, prURL, branch)
+	if err != nil {
+		log.Fatalf("❌ Impossible de changer l'étape de la tâche: %v", err)
+	}
+	fmt.Printf("✅ Tâche %s (%s) passée à l'étape « %s » [#%s]\n", task.Key, task.Title, stage, stage)
+	if act != nil {
+		fmt.Printf("   Activité enregistrée : %s\n", act.ID)
+	}
+}
+

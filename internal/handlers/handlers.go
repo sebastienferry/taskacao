@@ -1188,6 +1188,63 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
+	if (r.URL.Path == "/api/tasks/stage" || r.URL.Path == "/api/tasks/transition") && r.Method == http.MethodPost {
+		var req struct {
+			TaskID  string `json:"taskId"`
+			TaskKey string `json:"taskKey"`
+			ID      string `json:"id"`
+			Key     string `json:"key"`
+			Stage   string `json:"stage"`
+			Label   string `json:"label"`
+			Note    string `json:"note"`
+			Comment string `json:"comment"`
+			PrURL   string `json:"prUrl"`
+			Branch  string `json:"branch"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		targetID := req.TaskID
+		if targetID == "" {
+			targetID = req.TaskKey
+		}
+		if targetID == "" {
+			targetID = req.ID
+		}
+		if targetID == "" {
+			targetID = req.Key
+		}
+		if targetID == "" {
+			writeError(w, http.StatusBadRequest, "Paramètre 'taskId' ou 'taskKey' manquant")
+			return
+		}
+		stage := req.Stage
+		if stage == "" {
+			stage = req.Label
+		}
+		if strings.TrimSpace(stage) == "" {
+			writeError(w, http.StatusBadRequest, "Paramètre 'stage' manquant (ex: 'clarified', 'specified', 'implemented', 'reviewed', 'finished')")
+			return
+		}
+		note := req.Note
+		if note == "" {
+			note = req.Comment
+		}
+		task, act, err := h.db.TransitionTaskStage(targetID, stage, note, req.PrURL, req.Branch)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success":  true,
+			"message":  fmt.Sprintf("Tâche %s passée à l'étape « %s »", task.Key, stage),
+			"task":     task,
+			"activity": act,
+		})
+		return
+	}
+
 	if r.URL.Path == "/api/tasks/migrate" && r.Method == http.MethodPost {
 		var req struct {
 			TaskIDs         []string `json:"taskIds"`
@@ -1483,6 +1540,15 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/advance"):
 		subAction = "advance"
 		id = strings.TrimSuffix(rawPath, "/advance")
+	case rawPath == "stage" || strings.HasSuffix(rawPath, "/stage"):
+		subAction = "stage"
+		id = strings.TrimSuffix(strings.TrimSuffix(rawPath, "/stage"), "stage")
+	case rawPath == "transition" || strings.HasSuffix(rawPath, "/transition"):
+		subAction = "stage"
+		id = strings.TrimSuffix(strings.TrimSuffix(rawPath, "/transition"), "transition")
+	case rawPath == "workflow-label" || strings.HasSuffix(rawPath, "/workflow-label"):
+		subAction = "stage"
+		id = strings.TrimSuffix(strings.TrimSuffix(rawPath, "/workflow-label"), "workflow-label")
 	case strings.HasSuffix(rawPath, "/macro"):
 		subAction = "macro"
 		id = strings.TrimSuffix(rawPath, "/macro")
@@ -1725,6 +1791,101 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"task": task, "activity": act})
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/stage (or /transition or /workflow-label) — switch the agentic
+	// workflow label and stage on a story, updating local state and queueing tracker updates.
+	if (subAction == "stage" || subAction == "transition" || subAction == "workflow-label") && (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodGet) {
+		if r.Method == http.MethodGet {
+			targetID := id
+			if targetID == "" {
+				targetID = r.URL.Query().Get("id")
+			}
+			if targetID == "" {
+				targetID = r.URL.Query().Get("key")
+			}
+			task, err := h.db.GetTaskByID(targetID)
+			if err != nil || task == nil {
+				writeError(w, http.StatusNotFound, "Tâche non trouvée")
+				return
+			}
+			stage := h.db.StageOfTask(task)
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"taskId":  task.ID,
+				"taskKey": task.Key,
+				"stage":   stage,
+				"status":  task.Status,
+				"labels":  task.Labels,
+			})
+			return
+		}
+
+		var req struct {
+			TaskID  string `json:"taskId"`
+			TaskKey string `json:"taskKey"`
+			ID      string `json:"id"`
+			Key     string `json:"key"`
+			Stage   string `json:"stage"`
+			Label   string `json:"label"`
+			Note    string `json:"note"`
+			Comment string `json:"comment"`
+			PrURL   string `json:"prUrl"`
+			Branch  string `json:"branch"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		targetID := id
+		if targetID == "" {
+			targetID = req.TaskID
+		}
+		if targetID == "" {
+			targetID = req.TaskKey
+		}
+		if targetID == "" {
+			targetID = req.ID
+		}
+		if targetID == "" {
+			targetID = req.Key
+		}
+		if targetID == "" {
+			targetID = r.URL.Query().Get("id")
+		}
+		if targetID == "" {
+			targetID = r.URL.Query().Get("key")
+		}
+		if strings.TrimSpace(targetID) == "" {
+			writeError(w, http.StatusBadRequest, "Identifiant ou clé de tâche manquant")
+			return
+		}
+		stage := req.Stage
+		if stage == "" {
+			stage = req.Label
+		}
+		if stage == "" {
+			stage = r.URL.Query().Get("stage")
+		}
+		if stage == "" {
+			stage = r.URL.Query().Get("label")
+		}
+		if strings.TrimSpace(stage) == "" {
+			writeError(w, http.StatusBadRequest, "Paramètre 'stage' (ou 'label') manquant (ex: 'clarified', 'specified', 'implemented', 'reviewed', 'finished')")
+			return
+		}
+		note := req.Note
+		if note == "" {
+			note = req.Comment
+		}
+		task, act, err := h.db.TransitionTaskStage(targetID, stage, note, req.PrURL, req.Branch)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success":  true,
+			"message":  fmt.Sprintf("Tâche %s passée à l'étape « %s »", task.Key, stage),
+			"task":     task,
+			"activity": act,
+		})
 		return
 	}
 
@@ -2243,6 +2404,15 @@ func (h *Handler) HandleTerminalWs(w http.ResponseWriter, r *http.Request) {
 	if workDir == "" {
 		workDir, _ = os.Getwd()
 	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8090"
+	}
+	apiURL := fmt.Sprintf("http://127.0.0.1:%s", port)
+	envVars["TASKFLOW_API_URL"] = apiURL
+	envVars["TASKFLOW_PORT"] = port
+	envVars["TASKACAO_API_URL"] = apiURL
 
 	h.terminalMgr.HandleWebSocket(w, r, sessionID, workDir, envVars)
 }

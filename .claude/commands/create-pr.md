@@ -1,6 +1,6 @@
 ---
+name: create-pr
 description: Review the branch like a peer would, fix what the review finds, then open the merge request and leave the merge to the user.
-argument-hint: <TICKET-KEY> [contexte]
 ---
 # Review and Pull Request
 
@@ -36,10 +36,19 @@ found and fixed, the risky parts pointed out, the test plan written down.
 ## Ticket Transition & Status Update
 The agent executing this skill is responsible for advancing the ticket to the next agentic status upon completion:
 - **Stage Transition**: Advance ticket from `implemented` to `reviewed`.
-- **GitHub CLI**: `gh issue edit <NUMBER> --add-label "reviewed" --remove-label "implemented"`
-- **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "reviewed" --remove-label "implemented"`
-- **Comments**: Post the stage summary report as a comment on the ticket via `gh issue comment <NUMBER> --body "..."` or `linear issue comment add <ISSUE_KEY> --body "..."`.
+- **TaskFlow Local Handler (Recommended)**:
+  Call TaskFlow's local transition handler to record the PR URL, review report, and queue tracker synchronization:
+  ```bash
+  curl -s -X POST "${TASKFLOW_API_URL:-http://127.0.0.1:8090}/api/tasks/${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID}/stage" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "stage": "reviewed",
+      "prUrl": "<PR_OR_MR_URL>",
+      "note": "<Paste review findings and PR link report here>"
+    }'
+  ```
+  *(Or via CLI: `taskflow stage ${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID} reviewed --pr-url "<PR_OR_MR_URL>"`)*
+- **Tracker CLI Fallback** (Only if the local TaskFlow server is unreachable):
+  - **GitHub CLI**: `gh issue edit <NUMBER> --add-label "reviewed" --remove-label "implemented"` && `gh issue comment <NUMBER> --body "..."`
+  - **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "reviewed" --remove-label "implemented"` && `linear issue comment add <ISSUE_KEY> --body "..."`
 - **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).
-
-## Ticket
-$ARGUMENTS

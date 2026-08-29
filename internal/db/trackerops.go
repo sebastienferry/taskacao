@@ -41,6 +41,9 @@ const (
 	// TrackerOpTransition moves a work item to a status named as the tracker
 	// spells it, which is what dropping a card in a board column does.
 	TrackerOpTransition TrackerOpKind = "transition"
+	// TrackerOpStage transitions a work item to an agentic workflow stage, updating
+	// stage labels (#clarified, #specified, etc.), status, and tracker comments.
+	TrackerOpStage TrackerOpKind = "stage"
 	// TrackerOpSetTeam writes the team of a work item, or clears it.
 	TrackerOpSetTeam TrackerOpKind = "set_team"
 	// TrackerOpSetSprint moves work items into a sprint, or back to the backlog.
@@ -71,6 +74,14 @@ type TrackerOp struct {
 	// TargetStatus is the tracker status of a transition, in the tracker's own
 	// spelling ("Dev Test", "To Merge").
 	TargetStatus string
+	// Stage is the target workflow stage ("new", "clarified", "specified", "implemented", "reviewed", "finished").
+	Stage string
+	// Note is a summary note or report comment attached to the stage transition.
+	Note string
+	// PrURL is a pull request or merge request URL to record on the story.
+	PrURL string
+	// BranchName is the git work branch name.
+	BranchName string
 	// TeamID / TeamName describe the target of a set_team. An empty TeamID clears
 	// the field, which is legitimate: the team is never mandatory.
 	TeamID   string
@@ -181,6 +192,20 @@ func buildTrackerOpJob(op TrackerOp) (*models.TaskActivity, SkillJob, error) {
 		action = fmt.Sprintf("Transition de %s ➔ %s", op.TaskKey, op.TargetStatus)
 		summary = fmt.Sprintf("Transition de %s vers « %s » en file d'attente", op.TaskKey, op.TargetStatus)
 		steps = append(steps, fmt.Sprintf("Cible : %s ➔ %s", op.TaskKey, op.TargetStatus))
+	case TrackerOpStage:
+		cleanStage := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(op.Stage), "#"))
+		if cleanStage == "" {
+			cleanStage = "new"
+		}
+		action = fmt.Sprintf("Étape de %s ➔ %s", op.TaskKey, cleanStage)
+		summary = fmt.Sprintf("Passage de %s à l'étape « %s » [#%s] en file d'attente", op.TaskKey, cleanStage, cleanStage)
+		steps = append(steps, fmt.Sprintf("Cible : %s ➔ #%s", op.TaskKey, cleanStage))
+		if strings.TrimSpace(op.TargetStatus) != "" {
+			steps = append(steps, fmt.Sprintf("Statut tracker visé : %s", op.TargetStatus))
+		}
+		if strings.TrimSpace(op.PrURL) != "" {
+			steps = append(steps, fmt.Sprintf("Pull Request : %s", op.PrURL))
+		}
 	case TrackerOpSetTeam:
 		label := op.TeamName
 		if label == "" {
@@ -278,6 +303,8 @@ func (d *DB) processTrackerOpJob(ctx context.Context, job SkillJob) {
 		output, err = d.runPushHorizonsOp(op, &steps)
 	case TrackerOpTransition:
 		output, err = d.runTransitionOp(op, &steps)
+	case TrackerOpStage:
+		output, err = d.runStageOp(op, &steps)
 	case TrackerOpSetTeam:
 		output, err = d.runSetTeamOp(op, &steps)
 	case TrackerOpSetSprint:
@@ -585,6 +612,91 @@ func (d *DB) runTransitionOp(op TrackerOp, steps *[]string) (string, error) {
 	}
 	*steps = append(*steps, fmt.Sprintf("✅ %s transitionné vers « %s »", task.Key, op.TargetStatus))
 	return fmt.Sprintf("%s transitionné vers « %s »", task.Key, op.TargetStatus), nil
+}
+
+func (d *DB) runStageOp(op TrackerOp, steps *[]string) (string, error) {
+	task, err := d.GetTaskByID(op.TaskID)
+	if err != nil || task == nil {
+		return "", fmt.Errorf("tâche introuvable")
+	}
+
+	cleanStage := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(op.Stage), "#"))
+	if cleanStage == "" {
+		cleanStage = "new"
+	}
+	targetLabel := "#" + cleanStage
+	staleLabels := StaleWorkflowLabels(cleanStage)
+
+	writer, _ := d.writerForTask(task)
+	repo := ""
+	repoPath := d.ResolveTaskRepoPath(task)
+	if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
+		repo = proj.GithubRepo
+		if repoPath == "" {
+			repoPath = proj.RepoPath
+		}
+	}
+
+	// 1. Transition if writer supports it and we have a target status
+	if writer != nil && writer.Supports(tracker.CapTransition) && op.TargetStatus != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := writer.Transition(ctx, task.Key, op.TargetStatus); err != nil {
+			*steps = append(*steps, fmt.Sprintf("⚠️ Transition tracker %s échouée (%v), statut gardé en local", op.TargetStatus, err))
+		} else {
+			*steps = append(*steps, fmt.Sprintf("✅ %s transitionné vers « %s » sur %s", task.Key, op.TargetStatus, writer.Name()))
+		}
+	}
+
+	// 2. Linear issue state & labels
+	if task.Source == "linear" || strings.HasPrefix(task.Key, "FRE-") {
+		if cleanStage == "finished" {
+			_ = d.runner.UpdateLinearIssueState(task.Key, models.StatusDone)
+		} else if op.TargetStatus != "" {
+			_ = d.runner.UpdateLinearIssueState(task.Key, models.Status(strings.ToLower(strings.ReplaceAll(op.TargetStatus, " ", "_"))))
+		}
+		_ = d.runner.UpdateLinearIssue(task.Key, nil, nil, nil, &task.Status, task.Labels)
+		*steps = append(*steps, fmt.Sprintf("✅ Ticket Linear %s mis à jour avec le label « %s »", task.Key, targetLabel))
+	}
+
+	// 3. GitHub issues state & labels
+	if task.Source == "github" || (task.ExternalURL != nil && strings.Contains(*task.ExternalURL, "github.com")) || (repo != "" && (strings.HasPrefix(task.Key, "gh-") || strings.HasPrefix(task.Key, "#") || strings.HasPrefix(task.Key, "GH-#"))) {
+		var statusVal models.Status = task.Status
+		if cleanStage == "finished" {
+			statusVal = models.StatusDone
+			_ = d.runner.UpdateGithubIssueState(repo, repoPath, task.Key, models.StatusDone)
+		}
+		if err := d.runner.UpdateGithubIssue(repo, repoPath, task.Key, nil, nil, &statusVal, task.Labels, staleLabels); err != nil {
+			*steps = append(*steps, fmt.Sprintf("⚠️ Synchro distante GitHub échouée pour %s: %v, statut gardé en local", task.Key, err))
+		} else {
+			*steps = append(*steps, fmt.Sprintf("✅ Ticket GitHub %s mis à jour avec le label « %s »", task.Key, targetLabel))
+		}
+	}
+
+	// 4. Post comment / report note if provided
+	if strings.TrimSpace(op.Note) != "" {
+		header := ""
+		switch cleanStage {
+		case "clarified":
+			header = "### 💬 [TaskFlow] Rapport de Clarification\n\n"
+		case "specified":
+			header = "### 📋 [TaskFlow] Spécification Technique & Plan d'Implémentation\n\n"
+		case "implemented":
+			header = "### ⚡ [TaskFlow] Rapport d'Implémentation\n\n"
+		case "reviewed":
+			header = "### 🚀 [TaskFlow] Revue de Code & Préparation PR\n\n"
+		case "finished":
+			header = "### 🏁 [TaskFlow] Rapport de Clôture & Handoff\n\n"
+		default:
+			header = fmt.Sprintf("### 🤖 [TaskFlow] Étape : %s\n\n", cleanStage)
+		}
+		commentBody := header + op.Note
+		_ = d.runner.AddIssueComment(task.Source, repo, repoPath, task.Key, commentBody)
+		*steps = append(*steps, fmt.Sprintf("💬 Rapport d'étape consigné sur %s", task.Key))
+	}
+
+	*steps = append(*steps, fmt.Sprintf("✅ %s passé à l'étape « %s » [%s]", task.Key, cleanStage, targetLabel))
+	return fmt.Sprintf("%s passé à l'étape « %s » [%s]", task.Key, cleanStage, targetLabel), nil
 }
 
 func (d *DB) runEpicHorizonOp(op TrackerOp, steps *[]string) (string, error) {

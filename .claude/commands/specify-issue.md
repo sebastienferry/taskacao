@@ -1,6 +1,6 @@
 ---
+name: specify-issue
 description: Write the executable specification of a ticket in the project's Spec-Driven Design framework, before any code.
-argument-hint: <TICKET-KEY> [contexte]
 ---
 # Specify Issue (OpenSpec SDD)
 
@@ -49,10 +49,19 @@ and the two kept in separate files.
 ## Ticket Transition & Status Update
 The agent executing this skill is responsible for advancing the ticket to the next agentic status upon completion:
 - **Stage Transition**: Advance ticket from `clarified` to `specified`.
-- **GitHub CLI**: `gh issue edit <NUMBER> --add-label "specified" --remove-label "clarified"`
-- **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "specified" --remove-label "clarified"`
-- **Comments**: Post the stage summary report as a comment on the ticket via `gh issue comment <NUMBER> --body "..."` or `linear issue comment add <ISSUE_KEY> --body "..."`.
+- **TaskFlow Local Handler (Recommended)**:
+  Call TaskFlow's local transition handler to update SQLite state, record branch, and queue tracker synchronization:
+  ```bash
+  curl -s -X POST "${TASKFLOW_API_URL:-http://127.0.0.1:8090}/api/tasks/${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID}/stage" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "stage": "specified",
+      "branch": "<KEY>-<title-slug>",
+      "note": "<Paste specification report and change ID here>"
+    }'
+  ```
+  *(Or via CLI: `taskflow stage ${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID} specified --branch <KEY>-<title-slug>`)*
+- **Tracker CLI Fallback** (Only if the local TaskFlow server is unreachable):
+  - **GitHub CLI**: `gh issue edit <NUMBER> --add-label "specified" --remove-label "clarified"` && `gh issue comment <NUMBER> --body "..."`
+  - **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "specified" --remove-label "clarified"` && `linear issue comment add <ISSUE_KEY> --body "..."`
 - **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).
-
-## Ticket
-$ARGUMENTS

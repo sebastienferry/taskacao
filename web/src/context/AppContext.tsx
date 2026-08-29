@@ -266,6 +266,8 @@ interface AppContextType {
   /** Met la découpe de macro en file d'activités. Retourne true si la file a accepté. */
   moveTasksToMacro: (projectId: string, taskIds: string[], targetMacroKey: string, newMacroTitle?: string, fields?: Record<string, string>) => Promise<boolean>
   moveTasksToEpic: (projectId: string, taskIds: string[], targetEpicKey: string, newEpicTitle?: string, fields?: Record<string, string>) => Promise<boolean>
+  /** Transitions a task's agentic workflow stage/label, updating local state and queueing tracker sync. */
+  transitionTaskStage: (taskIdOrKey: string, stage: string, note?: string, prUrl?: string, branch?: string) => Promise<{ success: boolean; task?: Task; activity?: TaskActivity; error?: string }>
   advanceTask: (taskId: string, auto?: boolean) => Promise<{ mode: string; skillId?: string; label?: string } | null>
   // Pas interactif en cours : la tâche dont la session TTY attend d'être clôturée.
   pendingInteractive: { taskId: string; taskKey: string; skillId: string; label: string } | null
@@ -2347,7 +2349,36 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }
   const moveTasksToEpic = moveTasksToMacro
 
-  // Un pas du workflow, ou la chaîne autonome. Le serveur décide du pas depuis
+  const transitionTaskStage = async (
+    taskIdOrKey: string,
+    stage: string,
+    note?: string,
+    prUrl?: string,
+    branch?: string
+  ): Promise<{ success: boolean; task?: Task; activity?: TaskActivity; error?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskIdOrKey)}/stage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage, note: note || '', prUrl: prUrl || '', branch: branch || '' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Transition refusée')
+      if (data.task) {
+        setTasks(prev => prev.map(t => (t.id === data.task.id || t.key === data.task.key ? data.task : t)))
+      }
+      fetchActivities()
+      addToast({
+        type: 'success',
+        title: `Étape #${stage} appliquée`,
+        description: `Tâche ${data.task?.key || taskIdOrKey} passée à l'étape ${stage}.`,
+      })
+      return { success: true, task: data.task, activity: data.activity }
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Transition échouée', description: err.message })
+      return { success: false, error: err.message }
+    }
+  }
   // l'étape de la tâche : l'interface ne fait qu'ouvrir le terminal quand le pas
   // est interactif.
   const advanceTask = async (
@@ -3538,6 +3569,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         fetchEpicRequiredFields,
         moveTasksToMacro,
         moveTasksToEpic,
+        transitionTaskStage,
         advanceTask,
         pendingInteractive,
         pinnedTasks,

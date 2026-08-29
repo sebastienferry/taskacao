@@ -241,4 +241,94 @@ func TestHandleTaskPinAndListPins(t *testing.T) {
 	}
 }
 
+func TestHandleTaskStageTransition(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	database, err := db.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize db: %v", err)
+	}
+	defer database.Close()
+
+	h := handlers.NewHandler(database)
+
+	// Create project and task
+	proj, _ := database.CreateProject(models.CreateProjectRequest{
+		Name:         "Stage Handler Test",
+		Slug:         "stage-handler-test",
+		IssueTracker: "local",
+		RepoPath:     ".",
+	})
+
+	task, err := database.CreateTask(models.CreateTaskRequest{
+		ProjectID: proj.ID,
+		Title:     "Test transition endpoint",
+		Labels:    []string{"#new"},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create task: %v", err)
+	}
+
+	// 1. POST /api/tasks/{id}/stage
+	stageBody := `{"stage": "clarified", "note": "Questions resolved"}`
+	req, _ := http.NewRequest(http.MethodPost, "/api/tasks/"+task.ID+"/stage", strings.NewReader(stageBody))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.HandleTaskDetail(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var res struct {
+		Success bool         `json:"success"`
+		Message string       `json:"message"`
+		Task    *models.Task `json:"task"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("Failed to decode json: %v", err)
+	}
+	if !res.Success {
+		t.Errorf("Expected success=true")
+	}
+	if res.Task == nil || res.Task.Status != models.StatusToSpecify {
+		t.Errorf("Expected status %s, got %v", models.StatusToSpecify, res.Task)
+	}
+
+	// 2. GET /api/tasks/{id}/stage
+	reqGet, _ := http.NewRequest(http.MethodGet, "/api/tasks/"+task.ID+"/stage", nil)
+	rrGet := httptest.NewRecorder()
+	h.HandleTaskDetail(rrGet, reqGet)
+	if rrGet.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d: %s", rrGet.Code, rrGet.Body.String())
+	}
+	var getRes map[string]interface{}
+	_ = json.Unmarshal(rrGet.Body.Bytes(), &getRes)
+	if getRes["stage"] != "clarified" {
+		t.Errorf("Expected stage='clarified', got %v", getRes["stage"])
+	}
+
+	// 3. POST /api/tasks/stage by key
+	batchBody := `{"taskKey": "` + task.Key + `", "stage": "specified", "branch": "feat/api-stage"}`
+	reqBatch, _ := http.NewRequest(http.MethodPost, "/api/tasks/stage", strings.NewReader(batchBody))
+	reqBatch.Header.Set("Content-Type", "application/json")
+	rrBatch := httptest.NewRecorder()
+	h.HandleTasks(rrBatch, reqBatch)
+
+	if rrBatch.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d: %s", rrBatch.Code, rrBatch.Body.String())
+	}
+
+	var batchRes struct {
+		Success bool         `json:"success"`
+		Task    *models.Task `json:"task"`
+	}
+	_ = json.Unmarshal(rrBatch.Body.Bytes(), &batchRes)
+	if batchRes.Task == nil || batchRes.Task.Status != models.StatusToImplement {
+		t.Errorf("Expected status %s, got %v", models.StatusToImplement, batchRes.Task)
+	}
+}
+
+
 

@@ -40,7 +40,18 @@ and a local workspace with nothing stale in it.
 ## Ticket Transition & Status Update
 The agent executing this skill is responsible for advancing the ticket to the next agentic status upon completion:
 - **Stage Transition**: Advance ticket from `reviewed` to `finished`.
-- **GitHub CLI**: `gh issue edit <NUMBER> --add-label "finished" --remove-label "reviewed"` then `gh issue close <NUMBER>`
-- **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "finished" --remove-label "reviewed" --state "Done"`
-- **Comments**: Post the stage summary report as a comment on the ticket via `gh issue comment <NUMBER> --body "..."` or `linear issue comment add <ISSUE_KEY> --body "..."`.
+- **TaskFlow Local Handler (Recommended)**:
+  Call TaskFlow's local transition handler to close the ticket in SQLite, log the handover, and queue tracker closing:
+  ```bash
+  curl -s -X POST "${TASKFLOW_API_URL:-http://127.0.0.1:8090}/api/tasks/${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID}/stage" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "stage": "finished",
+      "note": "<Paste handover report and acceptance checklist here>"
+    }'
+  ```
+  *(Or via CLI: `taskflow stage ${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID} finished`)*
+- **Tracker CLI Fallback** (Only if the local TaskFlow server is unreachable):
+  - **GitHub CLI**: `gh issue edit <NUMBER> --add-label "finished" --remove-label "reviewed"` then `gh issue close <NUMBER>`
+  - **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "finished" --remove-label "reviewed" --state "Done"`
 - **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).

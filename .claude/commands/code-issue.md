@@ -1,6 +1,6 @@
 ---
+name: code-issue
 description: Implement the ticket from its specification and prove it works with the project's own build, linters and tests.
-argument-hint: <TICKET-KEY> [contexte]
 ---
 # Implement Code
 
@@ -36,10 +36,18 @@ already there, with the project's checks green.
 ## Ticket Transition & Status Update
 The agent executing this skill is responsible for advancing the ticket to the next agentic status upon completion:
 - **Stage Transition**: Advance ticket from `specified` to `implemented`.
-- **GitHub CLI**: `gh issue edit <NUMBER> --add-label "implemented" --remove-label "specified"`
-- **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "implemented" --remove-label "specified"`
-- **Comments**: Post the stage summary report as a comment on the ticket via `gh issue comment <NUMBER> --body "..."` or `linear issue comment add <ISSUE_KEY> --body "..."`.
+- **TaskFlow Local Handler (Recommended)**:
+  Call TaskFlow's local transition handler to update SQLite state, record test green checks, and queue tracker synchronization:
+  ```bash
+  curl -s -X POST "${TASKFLOW_API_URL:-http://127.0.0.1:8090}/api/tasks/${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID}/stage" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "stage": "implemented",
+      "note": "<Paste implementation and test output report here>"
+    }'
+  ```
+  *(Or via CLI: `taskflow stage ${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID} implemented`)*
+- **Tracker CLI Fallback** (Only if the local TaskFlow server is unreachable):
+  - **GitHub CLI**: `gh issue edit <NUMBER> --add-label "implemented" --remove-label "specified"` && `gh issue comment <NUMBER> --body "..."`
+  - **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "implemented" --remove-label "specified"` && `linear issue comment add <ISSUE_KEY> --body "..."`
 - **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).
-
-## Ticket
-$ARGUMENTS
