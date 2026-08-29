@@ -217,7 +217,7 @@ func (d *DB) ComputeDailyDigest(projectID string, dateRaw string, assignee strin
 		return nil, fmt.Errorf("le digest quotidien est réservé aux projets de type personnel (projet %s)", proj.Name)
 	}
 
-	tasks, err := d.GetTasks("", "", "", "", proj.ID, "", "", "", nil, nil, false)
+	tasks, err := d.GetTasks("", "", "", "", proj.ID, "", "", "", "", nil, nil, false)
 	if err != nil {
 		return nil, err
 	}

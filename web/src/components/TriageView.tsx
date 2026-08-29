@@ -49,6 +49,8 @@ export const TriageView: React.FC = () => {
     activeJobCount,
     hideDone,
     toggleHideDone,
+    parentFilter,
+    setParentFilter,
   } = useApp()
 
   const [macros, setMacros] = useState<EpicMeta[]>([])
@@ -123,10 +125,11 @@ export const TriageView: React.FC = () => {
     }
 
     // Macro dropdown filter
-    if (filterMacro === 'none') {
+    const activeMacro = parentFilter === '__no_macro__' ? 'none' : parentFilter || filterMacro
+    if (activeMacro === 'none') {
       list = list.filter(t => !(t.parentKey || t.parentTitle || '').trim())
-    } else if (filterMacro !== 'all') {
-      list = list.filter(t => t.parentKey === filterMacro || t.parentTitle === filterMacro)
+    } else if (activeMacro !== 'all') {
+      list = list.filter(t => t.parentKey === activeMacro || t.parentTitle === activeMacro)
     }
 
     // Search query
@@ -257,8 +260,12 @@ export const TriageView: React.FC = () => {
             <div className="flex items-center gap-1">
               <Target size={13} className="text-[var(--text-muted)]" />
               <select
-                value={filterMacro}
-                onChange={e => setFilterMacro(e.target.value)}
+                value={parentFilter === '__no_macro__' ? 'none' : parentFilter || filterMacro}
+                onChange={e => {
+                  const val = e.target.value
+                  setFilterMacro(val)
+                  setParentFilter(val === 'all' ? null : val === 'none' ? '__no_macro__' : val)
+                }}
                 className="px-2 py-1 text-xs rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
                 title="Filtrer par Macro"
               >

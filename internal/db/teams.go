@@ -319,7 +319,7 @@ func (d *DB) GetTeamWorkload(projectID string, teamName string) (*models.TeamWor
 		return nil, fmt.Errorf("nom d'équipe manquant")
 	}
 
-	tasks, err := d.GetTasks("", "", "", "", projectID, "", teamName, "", nil, nil, false)
+	tasks, err := d.GetTasks("", "", "", "", projectID, "", teamName, "", "", nil, nil, false)
 	if err != nil {
 		return nil, err
 	}

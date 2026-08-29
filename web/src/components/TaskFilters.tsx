@@ -1,7 +1,7 @@
 import React from 'react'
-import { Flame, Calendar, Layers, Pin, User, SlidersHorizontal, Check, Shapes, Settings2 } from 'lucide-react'
+import { Flame, Calendar, Layers, Pin, User, SlidersHorizontal, Check, Shapes, Settings2, Target } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import { LookupField } from './LookupField'
+import { LookupField, type LookupOption } from './LookupField'
 import { valueLookup } from '../lib/lookups'
 import type { Priority } from '../types'
 
@@ -30,6 +30,9 @@ export const TaskFilters: React.FC = () => {
     setTeamFilter,
     assigneeFilter,
     setAssigneeFilter,
+    parentFilter,
+    setParentFilter,
+    availableParents,
     trackerStatusFilters,
     setTrackerStatusFilters,
     issueTypeFilters,
@@ -102,6 +105,56 @@ export const TaskFilters: React.FC = () => {
       return people
     }
   }, [availableAssignees, taskFacets.unassignedCount, unassignedFilterValue])
+
+  const searchMacroValue = React.useMemo(() => {
+    const macroList: Array<{ id: string; label: string; sublabel?: string }> = []
+    const seen = new Set<string>()
+
+    if (taskFacets.macros && taskFacets.macros.length > 0) {
+      for (const m of taskFacets.macros) {
+        if (!m.key || seen.has(m.key)) continue
+        seen.add(m.key)
+        macroList.push({
+          id: m.key,
+          label: m.title ? `${m.key} · ${m.title}` : m.key,
+          sublabel: m.count ? `${m.count} ticket(s)` : undefined,
+        })
+      }
+    }
+    for (const p of availableParents) {
+      if (!p.key || seen.has(p.key)) continue
+      seen.add(p.key)
+      macroList.push({
+        id: p.key,
+        label: p.title ? `${p.key} · ${p.title}` : p.key,
+        sublabel: p.count ? `${p.count} ticket(s)` : undefined,
+      })
+    }
+
+    return async (query: string): Promise<LookupOption[]> => {
+      const q = query.trim().toLowerCase()
+      const filtered = macroList.filter(
+        m => !q || m.label.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
+      )
+      if (taskFacets.noMacroCount > 0 && (!q || 'sans macro'.includes(q) || 'sans milestone'.includes(q))) {
+        return [
+          { id: '__no_macro__', label: 'Sans macro', sublabel: `${taskFacets.noMacroCount} ticket(s)` },
+          ...filtered,
+        ]
+      }
+      return filtered
+    }
+  }, [taskFacets.macros, taskFacets.noMacroCount, availableParents])
+
+  const selectedMacroLabel = React.useMemo(() => {
+    if (!parentFilter) return ''
+    if (parentFilter === '__no_macro__' || parentFilter === 'none') return 'Sans macro'
+    const found = taskFacets.macros?.find(m => m.key === parentFilter)
+    if (found) return found.title ? `${found.key} · ${found.title}` : found.key
+    const foundParent = availableParents.find(p => p.key === parentFilter)
+    if (foundParent) return foundParent.title ? `${foundParent.key} · ${foundParent.title}` : foundParent.key
+    return parentFilter
+  }, [parentFilter, taskFacets.macros, availableParents])
 
   return (
     <div className="flex items-center gap-2 shrink-0">
@@ -332,6 +385,21 @@ export const TaskFilters: React.FC = () => {
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {(taskFacets.macros.length > 0 || availableParents.length > 0) && (
+        <div className="flex items-center gap-1 w-[200px]">
+          <Target size={12} className={parentFilter ? 'text-amber-400' : 'text-[var(--text-muted)]'} />
+          <div className="flex-1">
+            <LookupField
+              value={selectedMacroLabel}
+              placeholder="Toutes macros…"
+              clearLabel="Toutes macros"
+              onSearch={searchMacroValue}
+              onPick={option => setParentFilter(option?.id || null)}
+            />
+          </div>
         </div>
       )}
 

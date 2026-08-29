@@ -52,6 +52,8 @@ interface AppContextType {
   taskFacets: {
     sprints: string[]
     teams: string[]
+    macros: { key: string; title: string; count: number }[]
+    noMacroCount: number
     assignees: string[]
     unassignedCount: number
     trackerStatuses: TaskFacetValue[]
@@ -112,6 +114,8 @@ interface AppContextType {
   setSprintFilter: (sprint: string | null) => void
   teamFilter: string | null
   setTeamFilter: (team: string | null) => void
+  macroFilter: string | null
+  setMacroFilter: (macro: string | null) => void
   setLabelFilter: (label: string | null) => void
   assigneeFilter: string | null
   setAssigneeFilter: (assignee: string | null) => void
@@ -433,6 +437,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [taskFacets, setTaskFacets] = useState<{
     sprints: string[]
     teams: string[]
+    macros: { key: string; title: string; count: number }[]
+    noMacroCount: number
     assignees: string[]
     unassignedCount: number
     trackerStatuses: TaskFacetValue[]
@@ -444,6 +450,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }>({
     sprints: [],
     teams: [],
+    macros: [],
+    noMacroCount: 0,
     assignees: [],
     unassignedCount: 0,
     trackerStatuses: [],
@@ -463,7 +471,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [teamFilter, setTeamFilterState] = useState<string | null>(null)
   const [assigneeFilter, setAssigneeFilterState] = useState<string | null>(null)
   const [sourceFilter, setSourceFilter] = useState<'all' | TaskSource>('all')
-  const [parentFilter, setParentFilter] = useState<string | null>(null)
+  const [parentFilter, setParentFilterState] = useState<string | null>(null)
   const [dailyDigest, setDailyDigest] = useState<DailyDigest | null>(null)
   const [isDigestLoading, setIsDigestLoading] = useState(false)
   const [isDigestEnriching, setIsDigestEnriching] = useState(false)
@@ -625,6 +633,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setAssigneeFilter = useCallback((value: string | null) => {
     setAssigneeFilterState(value)
     persistFilter({ assignee: value })
+  }, [persistFilter])
+
+  const setParentFilter = useCallback((value: string | null) => {
+    setParentFilterState(value)
+    persistFilter({ parent: value })
   }, [persistFilter])
 
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false)
@@ -938,6 +951,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (labelFilter) params.append('label', labelFilter)
     if (sprintFilter) params.append('sprint', sprintFilter)
     if (teamFilter) params.append('team', teamFilter)
+    if (parentFilter) params.append('macro', parentFilter)
     // L'assigné se filtre côté serveur comme le reste : il n'était appliqué
     // nulle part, ce qui laissait « Mes tâches » sans effet.
     if (assigneeFilter) params.append('assignee', assigneeFilter)
@@ -945,7 +959,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     issueTypeFilters.forEach(type => params.append('issueType', type))
     if (pinnedOnly) params.append('pinned', '1')
     return params.toString()
-  }, [selectedProjectId, searchQuery, activeView, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, assigneeFilter, trackerStatusFilters, issueTypeFilters, pinnedOnly])
+  }, [selectedProjectId, searchQuery, activeView, statusFilter, priorityFilter, labelFilter, sprintFilter, teamFilter, parentFilter, assigneeFilter, trackerStatusFilters, issueTypeFilters, pinnedOnly])
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -971,6 +985,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setLabelFilterState(stored.label ?? null)
     setSprintFilterState(stored.sprint ?? null)
     setTeamFilterState(stored.team ?? null)
+    setParentFilterState(stored.parent ?? null)
     setAssigneeFilterState(stored.assignee ?? null)
     try {
       const raw = stored.trackerStatuses
@@ -999,6 +1014,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setTaskFacets({
         sprints: data?.sprints || [],
         teams: data?.teams || [],
+        macros: data?.macros || [],
+        noMacroCount: data?.noMacroCount || 0,
         assignees: data?.assignees || [],
         unassignedCount: data?.unassignedCount || 0,
         trackerStatuses: data?.trackerStatuses || [],
@@ -2801,7 +2818,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ? tasks
       : tasks.filter(t => (t.source || 'local') === sourceFilter)
     if (parentFilter) {
-      out = out.filter(t => t.parentKey === parentFilter)
+      if (parentFilter === '__no_macro__' || parentFilter === 'none') {
+        out = out.filter(t => !t.parentKey && !t.parentTitle)
+      } else {
+        out = out.filter(t => t.parentKey === parentFilter || t.parentTitle === parentFilter)
+      }
     }
     return out
   }, [tasks, sourceFilter, parentFilter])
@@ -3328,6 +3349,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setSourceFilter,
         parentFilter,
         setParentFilter,
+        macroFilter: parentFilter,
+        setMacroFilter: setParentFilter,
         availableParents,
         skillLabel,
         skillCommand,

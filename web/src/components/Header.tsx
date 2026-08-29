@@ -11,6 +11,7 @@ import {
   Code2,
   Settings,
   Terminal as TerminalIcon,
+  Target,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Status, Priority } from '../types'
@@ -40,6 +41,8 @@ export const Header: React.FC = () => {
     setSprintFilter,
     teamFilter,
     setTeamFilter,
+    parentFilter,
+    setParentFilter,
     assigneeFilter,
     setAssigneeFilter,
     setIsQuickAddOpen,
@@ -53,7 +56,7 @@ export const Header: React.FC = () => {
 
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  const hasActiveFilters = Boolean(statusFilter || priorityFilter || labelFilter || sprintFilter || teamFilter || assigneeFilter || searchQuery || pinnedOnly)
+  const hasActiveFilters = Boolean(statusFilter || priorityFilter || labelFilter || sprintFilter || teamFilter || parentFilter || assigneeFilter || searchQuery || pinnedOnly)
 
   return (
     <header
@@ -137,6 +140,15 @@ export const Header: React.FC = () => {
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold shrink-0 accent-text bg-[var(--accent-light)] border border-[var(--accent-color)]/40">
               Épinglés
               <button onClick={() => setPinnedOnly(false)} className="hover:opacity-75 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {parentFilter && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">
+              <Target size={10} />
+              {parentFilter === '__no_macro__' || parentFilter === 'none' ? 'Sans macro' : parentFilter}
+              <button onClick={() => setParentFilter(null)} className="hover:opacity-75 cursor-pointer">
                 <X size={11} />
               </button>
             </span>

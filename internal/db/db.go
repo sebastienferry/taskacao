@@ -694,9 +694,17 @@ var containerIssueTypes = []string{"Epic", "Initiative"}
 // work items nobody owns. An empty parameter cannot say it: it means "no filter".
 const unassignedFilterValue = "__unassigned__"
 
+type TaskFacetMacro struct {
+	Key   string `json:"key"`
+	Title string `json:"title"`
+	Count int    `json:"count"`
+}
+
 type TaskFacets struct {
 	Sprints []string `json:"sprints"`
 	Teams   []string `json:"teams"`
+	Macros  []TaskFacetMacro `json:"macros"`
+	NoMacroCount int `json:"noMacroCount"`
 	// Assignees are the people carried by the project's work items, in the
 	// tracker's own spelling. The team members are served separately: somebody
 	// can be in a team without owning a single ticket yet.
@@ -743,6 +751,7 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 	facets := &TaskFacets{
 		Sprints:         []string{},
 		Teams:           []string{},
+		Macros:          []TaskFacetMacro{},
 		Assignees:       []string{},
 		TrackerStatuses: []TaskFacetValue{},
 		Statuses:        []TaskFacetValue{},
@@ -809,6 +818,82 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 		rows.Close()
 	}
 	_ = d.conn.QueryRow(unassignedQuery, scopeArgs...).Scan(&facets.UnassignedCount)
+
+	// Macros / Milestones
+	macroCounts := make(map[string]int)
+	macroTitles := make(map[string]string)
+	macroQuery := "SELECT parent_key, parent_title, COUNT(*) FROM tasks WHERE TRIM(parent_key) != '' OR TRIM(parent_title) != ''"
+	noMacroQuery := "SELECT COUNT(*) FROM tasks WHERE TRIM(parent_key) = '' AND TRIM(parent_title) = ''"
+	if projectID != "" {
+		scope := " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
+		macroQuery += scope
+		noMacroQuery += scope
+	}
+	macroQuery += " GROUP BY parent_key, parent_title ORDER BY COUNT(*) DESC"
+
+	if rows, err := d.conn.Query(macroQuery, scopeArgs...); err == nil {
+		for rows.Next() {
+			var pKey, pTitle string
+			var count int
+			if err := rows.Scan(&pKey, &pTitle, &count); err != nil {
+				continue
+			}
+			pKey = strings.TrimSpace(pKey)
+			pTitle = strings.TrimSpace(pTitle)
+			k := pKey
+			if k == "" {
+				k = pTitle
+			}
+			if k != "" {
+				macroCounts[k] += count
+				if pTitle != "" {
+					macroTitles[k] = pTitle
+				}
+			}
+		}
+		rows.Close()
+	}
+	_ = d.conn.QueryRow(noMacroQuery, scopeArgs...).Scan(&facets.NoMacroCount)
+
+	// Scan epics table for existing macros
+	epicQuery := "SELECT key, title FROM epics WHERE 1=1"
+	epicArgs := []interface{}{}
+	if projectID != "" {
+		epicQuery += " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
+		epicArgs = append(epicArgs, projectID, projectID, projectID)
+	}
+	if rows, err := d.conn.Query(epicQuery, epicArgs...); err == nil {
+		for rows.Next() {
+			var k, t string
+			if err := rows.Scan(&k, &t); err == nil {
+				k = strings.TrimSpace(k)
+				t = strings.TrimSpace(t)
+				if k != "" {
+					if _, exists := macroCounts[k]; !exists {
+						macroCounts[k] = 0
+					}
+					if t != "" {
+						macroTitles[k] = t
+					}
+				}
+			}
+		}
+		rows.Close()
+	}
+
+	for k, count := range macroCounts {
+		facets.Macros = append(facets.Macros, TaskFacetMacro{
+			Key:   k,
+			Title: macroTitles[k],
+			Count: count,
+		})
+	}
+	sort.Slice(facets.Macros, func(i, j int) bool {
+		if facets.Macros[i].Count != facets.Macros[j].Count {
+			return facets.Macros[i].Count > facets.Macros[j].Count
+		}
+		return facets.Macros[i].Key < facets.Macros[j].Key
+	})
 
 	statusQuery := "SELECT tracker_status, COUNT(*) FROM tasks WHERE TRIM(tracker_status) != ''"
 	if projectID != "" {
@@ -912,7 +997,7 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 // GetTasks lists the tasks matching the filters. pinnedOnly restricts to the
 // pinned tickets, which is the fastest way back to the two or three chantiers in
 // flight when the board carries three hundred.
-func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, assignee string, trackerStatuses, issueTypes []string, pinnedOnly bool) ([]models.Task, error) {
+func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, assignee, macro string, trackerStatuses, issueTypes []string, pinnedOnly bool) ([]models.Task, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -960,6 +1045,15 @@ func (d *DB) GetTasks(query, status, priority, label, projectID, sprint, team, a
 	if team != "" {
 		conditions = append(conditions, "team = ?")
 		args = append(args, team)
+	}
+
+	if macro != "" {
+		if strings.EqualFold(macro, unassignedFilterValue) || strings.EqualFold(macro, "__no_macro__") || strings.EqualFold(macro, "none") {
+			conditions = append(conditions, "(TRIM(parent_key) = '' AND TRIM(parent_title) = '')")
+		} else {
+			conditions = append(conditions, "(parent_key = ? OR parent_title = ?)")
+			args = append(args, macro, macro)
+		}
 	}
 
 	// Les conteneurs sont écartés par défaut, et seulement par défaut : les

@@ -1178,6 +1178,10 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 		sprint := r.URL.Query().Get("sprint")
 		team := r.URL.Query().Get("team")
 		assignee := r.URL.Query().Get("assignee")
+		macro := r.URL.Query().Get("macro")
+		if macro == "" {
+			macro = r.URL.Query().Get("epic")
+		}
 		// Statuts du tracker à afficher, répétables : ?trackerStatus=Draft&trackerStatus=Selected
 		trackerStatuses := r.URL.Query()["trackerStatus"]
 		// Types de tickets à afficher, répétables : ?issueType=Bug&issueType=Story
@@ -1186,7 +1190,7 @@ func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
 		// en cours quand le board en porte trois cents.
 		pinnedOnly := r.URL.Query().Get("pinned") == "1" || r.URL.Query().Get("pinned") == "true"
 
-		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team, assignee, trackerStatuses, issueTypes, pinnedOnly)
+		tasks, err := h.db.GetTasks(q, status, priority, label, projectID, sprint, team, assignee, macro, trackerStatuses, issueTypes, pinnedOnly)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
