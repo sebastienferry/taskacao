@@ -404,25 +404,25 @@ export const DigestView: React.FC = () => {
         </div>
       )}
 
-      {/* Load per epic */}
-      {dailyDigest && dailyDigest.byEpic.length > 0 && (
+      {/* Load per macro */}
+      {dailyDigest && ((dailyDigest.byMacro && dailyDigest.byMacro.length > 0) || (dailyDigest.byEpic && dailyDigest.byEpic.length > 0)) && (
         <section className="rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] overflow-hidden">
           <header className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/40">
             <Layers size={15} className="text-violet-400" />
-            <h3 className="text-xs font-bold text-[var(--text-primary)]">Charge par epic</h3>
+            <h3 className="text-xs font-bold text-[var(--text-primary)]">Charge par macro</h3>
           </header>
           <div className="p-3 overflow-x-auto">
             <table className="w-full text-xs min-w-[420px]">
               <thead>
                 <tr className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
-                  <th className="text-left font-bold py-1 px-2">Epic</th>
+                  <th className="text-left font-bold py-1 px-2">Macro</th>
                   <th className="text-left font-bold py-1 px-2">Titre</th>
                   <th className="text-right font-bold py-1 px-2">Ouvertes</th>
                   <th className="text-right font-bold py-1 px-2">Terminées</th>
                 </tr>
               </thead>
               <tbody>
-                {dailyDigest.byEpic.slice(0, 15).map(g => (
+                {(dailyDigest.byMacro || dailyDigest.byEpic || []).slice(0, 15).map(g => (
                   <tr key={g.parentKey} className="border-t border-[var(--border-color)]">
                     <td className="py-1.5 px-2 font-mono font-bold text-violet-300">{g.parentKey}</td>
                     <td className="py-1.5 px-2 text-[var(--text-secondary)] truncate max-w-[280px]">{g.parentTitle || '—'}</td>

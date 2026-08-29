@@ -350,7 +350,7 @@ export const TaskFilters: React.FC = () => {
                 // Un conteneur n'est pas montré tant qu'il n'est pas demandé :
                 // sans cette mention, son compteur face à une liste qui n'en
                 // affiche aucun serait incompréhensible.
-                const isContainer = ['epic', 'initiative'].includes(type.value.toLowerCase())
+                const isContainer = ['macro', 'epic', 'initiative'].includes(type.value.toLowerCase())
                 return (
                   <button
                     key={type.value}

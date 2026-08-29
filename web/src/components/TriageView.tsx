@@ -17,8 +17,8 @@ import {
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField, type LookupOption } from './LookupField'
-import { epicLookup, sprintLookup } from '../lib/lookups'
-import type { EpicMeta, Task } from '../types'
+import { macroLookup, sprintLookup } from '../lib/lookups'
+import type { MacroMeta, Task } from '../types'
 
 type Dimension = 'sprint' | 'macro' | 'team' | 'assignee'
 
@@ -39,11 +39,11 @@ export const TriageView: React.FC = () => {
     setTasksSprint,
     setTaskTeam,
     setTasksTeam,
-    setTaskEpic,
-    createEpic,
-    moveTasksToEpic,
+    setTaskMacro,
+    createMacro,
+    moveTasksToMacro,
     updateTask,
-    fetchProjectEpics,
+    fetchProjectMacros,
     setSelectedTask,
     setChatTask,
     activeJobCount,
@@ -55,7 +55,7 @@ export const TriageView: React.FC = () => {
     migrateTasks,
   } = useApp()
 
-  const [macros, setMacros] = useState<EpicMeta[]>([])
+  const [macros, setMacros] = useState<MacroMeta[]>([])
   const [dimensions, setDimensions] = useState<Dimension[]>(['sprint', 'macro'])
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [batchBusy, setBatchBusy] = useState<string | null>(null)
@@ -74,8 +74,8 @@ export const TriageView: React.FC = () => {
       setMacros([])
       return
     }
-    fetchProjectEpics(currentProject.id).then(setMacros)
-  }, [currentProject?.id, fetchProjectEpics, activeJobCount])
+    fetchProjectMacros(currentProject.id).then(setMacros)
+  }, [currentProject?.id, fetchProjectMacros, activeJobCount])
 
   const sprintOptions = useMemo(
     () =>
@@ -161,7 +161,7 @@ export const TriageView: React.FC = () => {
   }
 
   const searchMacro = useMemo(() => {
-    const base = epicLookup(macros)
+    const base = macroLookup(macros)
     return async (query: string): Promise<LookupOption[]> => {
       const res = await base(query)
       if (query.trim() && !res.some(o => o.label.toLowerCase() === query.trim().toLowerCase() || o.id.toLowerCase() === query.trim().toLowerCase())) {
@@ -400,7 +400,7 @@ export const TriageView: React.FC = () => {
               type="button"
               disabled={batchBusy === 'macro'}
               onClick={() =>
-                runBatch('macro', () => moveTasksToEpic(currentProject.id, selectedIds, batchMacro))
+                runBatch('macro', () => moveTasksToMacro(currentProject.id, selectedIds, batchMacro))
               }
               className="px-2 py-1 rounded-lg text-xs font-bold cursor-pointer disabled:opacity-40 text-[var(--text-primary)] bg-[var(--bg-primary)] border border-[var(--border-color)] shrink-0 hover:bg-[var(--bg-tertiary)]"
             >
@@ -603,19 +603,19 @@ export const TriageView: React.FC = () => {
                         onSearch={searchMacro}
                         onPick={async (option) => {
                           if (!option?.id) {
-                            await setTaskEpic(task.id, '')
+                            await setTaskMacro(task.id, '')
                             return
                           }
                           if (option.id.startsWith('__create__:')) {
                             const title = option.id.replace('__create__:', '')
-                            const created = await createEpic(task.projectId || currentProject?.id || 'default', title)
+                            const created = await createMacro(task.projectId || currentProject?.id || 'default', title)
                             if (created) {
-                              await setTaskEpic(task.id, created.key)
-                              const epics = await fetchProjectEpics(task.projectId || currentProject?.id || 'default')
-                              if (epics) setMacros(epics)
+                              await setTaskMacro(task.id, created.key)
+                              const macrosList = await fetchProjectMacros(task.projectId || currentProject?.id || 'default')
+                              if (macrosList) setMacros(macrosList)
                             }
                           } else {
-                            await setTaskEpic(task.id, option.id)
+                            await setTaskMacro(task.id, option.id)
                           }
                         }}
                       />

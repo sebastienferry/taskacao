@@ -166,16 +166,15 @@ type TrackerSprint struct {
 	EndDate   string `json:"endDate,omitempty"`
 }
 
-// EpicMeta is the epic-level data Taskacao owns. Epics are not imported as cards
-// — they are containers referenced by their children — so their horizon, their
-// shaping notes and their todo list have nowhere else to live.
-type EpicMeta struct {
-	ProjectID   string     `json:"projectId"`
-	Key         string     `json:"key"`
-	Horizon     string     `json:"horizon"` // "now", "next", "later", "hidden", "" = non classé
-	Description string     `json:"description"`
-	Todos       []EpicTodo `json:"todos"`
-	// Title et Status viennent du ticket épic lui-même, que la synchro n'importe
+// MacroMeta is the macro-level data TaskFlow owns. Macros are containers referenced by their children
+// — so their horizon, their framing notes and their todo list have nowhere else to live.
+type MacroMeta struct {
+	ProjectID   string      `json:"projectId"`
+	Key         string      `json:"key"`
+	Horizon     string      `json:"horizon"` // "now", "next", "later", "hidden", "" = non classé
+	Description string      `json:"description"`
+	Todos       []MacroTodo `json:"todos"`
+	// Title et Status viennent du ticket macro lui-même, que la synchro n'importe
 	// pas comme carte. Closed permet de sortir de la roadmap ce qui est terminé
 	// sans avoir à deviner depuis l'état des enfants.
 	Title     string    `json:"title,omitempty"`
@@ -184,13 +183,17 @@ type EpicMeta struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// EpicTodo is one shaping item on an epic, before it becomes a story.
-type EpicTodo struct {
+// MacroTodo is one shaping item on a macro, before it becomes a story.
+type MacroTodo struct {
 	ID       string `json:"id"`
 	Text     string `json:"text"`
 	Done     bool   `json:"done"`
 	StoryKey string `json:"storyKey,omitempty"`
 }
+
+// Backwards compatibility aliases
+type EpicMeta = MacroMeta
+type EpicTodo = MacroTodo
 
 // TrackerBoard is a board of the tracker, for the project picker.
 type TrackerBoard struct {
@@ -735,13 +738,15 @@ type DigestTaskRef struct {
 	DaysToDue    *int `json:"daysToDue,omitempty"`
 }
 
-// DigestEpicGroup summarises how much open work hangs under one parent.
-type DigestEpicGroup struct {
+// DigestMacroGroup summarises how much open work hangs under one parent macro.
+type DigestMacroGroup struct {
 	ParentKey   string `json:"parentKey"`
 	ParentTitle string `json:"parentTitle,omitempty"`
 	OpenCount   int    `json:"openCount"`
 	DoneCount   int    `json:"doneCount"`
 }
+
+type DigestEpicGroup = DigestMacroGroup
 
 // DigestStats are the headline counters of a digest.
 type DigestStats struct {
@@ -773,13 +778,14 @@ type DailyDigest struct {
 	Assignees []string `json:"assignees,omitempty"`
 
 	// Deterministic, task-derived sections.
-	Focus          []DigestTaskRef   `json:"focus"`          // urgent / high, act today
-	Watch          []DigestTaskRef   `json:"watch"`          // medium, this week
-	Stale          []DigestTaskRef   `json:"stale"`          // high+ open too long
-	DueSoon        []DigestTaskRef   `json:"dueSoon"`        // overdue or due within a week
-	AwaitingReview []DigestTaskRef   `json:"awaitingReview"` // has a PR or sits in review
-	RecentlyDone   []DigestTaskRef   `json:"recentlyDone"`   // closed in the last 7 days
-	ByEpic         []DigestEpicGroup `json:"byEpic"`
+	Focus          []DigestTaskRef    `json:"focus"`          // urgent / high, act today
+	Watch          []DigestTaskRef    `json:"watch"`          // medium, this week
+	Stale          []DigestTaskRef    `json:"stale"`          // high+ open too long
+	DueSoon        []DigestTaskRef    `json:"dueSoon"`        // overdue or due within a week
+	AwaitingReview []DigestTaskRef    `json:"awaitingReview"` // has a PR or sits in review
+	RecentlyDone   []DigestTaskRef    `json:"recentlyDone"`   // closed in the last 7 days
+	ByMacro        []DigestMacroGroup `json:"byMacro"`
+	ByEpic         []DigestMacroGroup `json:"byEpic,omitempty"`
 	Stats          DigestStats       `json:"stats"`
 
 	// AI enrichment (agenda / meetings).

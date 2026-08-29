@@ -427,7 +427,7 @@ export const ProjectModal: React.FC = () => {
       // ramène rien.
       if (editingProject.issueTracker === 'jira') {
         setIsLoadingIssueTypes(true)
-        fetchProjectIssueTypes(editingProject.id).then(list => {
+        fetchProjectIssueTypes(editingProject.id).then((list: string[]) => {
           setAvailableIssueTypes(list)
           setIsLoadingIssueTypes(false)
         })
@@ -1621,7 +1621,7 @@ export const ProjectModal: React.FC = () => {
                       </div>
                       <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
                         <CheckCircle2 size={11} className="shrink-0" />
-                        <span>Sprints & Epics</span>
+                        <span>Sprints & Macros</span>
                       </div>
                       <div className="flex items-center gap-1 text-[10.5px] text-emerald-400 font-medium">
                         <CheckCircle2 size={11} className="shrink-0" />

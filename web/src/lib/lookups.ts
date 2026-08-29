@@ -35,24 +35,26 @@ const matches = (haystack: string, query: string): boolean =>
   haystack.toLowerCase().includes(query.trim().toLowerCase())
 
 /**
- * Épics du projet, cherchés par clé ou par titre. Les épics terminés sont exclus
- * par défaut : on ne rattache pas un ticket à un chantier clos, mais l'épic
- * courant d'un ticket reste proposé par l'appelant s'il est hors liste.
+ * Macros du projet, cherchées par clé ou par titre. Les macros terminées sont exclues
+ * par défaut : on ne rattache pas un ticket à un chantier clos, mais la macro
+ * courante d'un ticket reste proposée par l'appelant si elle est hors liste.
  */
-export const epicLookup =
-  (epics: EpicMeta[], options?: { includeClosed?: boolean }) =>
+export const macroLookup =
+  (macros: EpicMeta[], options?: { includeClosed?: boolean }) =>
   async (query: string): Promise<LookupOption[]> => {
-    const pool = options?.includeClosed ? epics : epics.filter(epic => !epic.closed)
-    const found = pool.filter(epic => {
+    const pool = options?.includeClosed ? macros : macros.filter(macro => !macro.closed)
+    const found = pool.filter(macro => {
       if (!query.trim()) return true
-      return matches(epic.key, query) || matches(epic.title || '', query)
+      return matches(macro.key, query) || matches(macro.title || '', query)
     })
-    return found.slice(0, DEFAULT_LIMIT).map(epic => ({
-      id: epic.key,
-      label: epic.key,
-      sublabel: epic.title || undefined,
+    return found.slice(0, DEFAULT_LIMIT).map(macro => ({
+      id: macro.key,
+      label: macro.key,
+      sublabel: macro.title || undefined,
     }))
   }
+
+export const epicLookup = macroLookup
 
 /**
  * Sprints du board, cherchés par nom. Les sprints clos sont écartés, ainsi que

@@ -2,12 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Check, ExternalLink, Layers, Target, User, CalendarRange, Inbox, Eye, EyeOff } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField, type LookupOption } from './LookupField'
-import { epicLookup, sprintLookup } from '../lib/lookups'
-import type { EpicMeta, Task } from '../types'
+import { macroLookup, sprintLookup } from '../lib/lookups'
+import type { MacroMeta, Task } from '../types'
 
 /**
  * Triage du backlog : voir d'un coup ce qui n'est rattaché à rien (pas de sprint,
- * pas d'équipe, pas d'épic, personne dessus) et le corriger sans ouvrir une seule
+ * pas d'équipe, pas de macro, personne dessus) et le corriger sans ouvrir une seule
  * fiche. Chaque cellule est le champ lui-même, pas un aperçu de champ.
  *
  * Les quatre dimensions sont traitées ensemble parce que c'est ainsi qu'un
@@ -18,12 +18,12 @@ import type { EpicMeta, Task } from '../types'
  * tickets pour leur donner un sprint produit une activité, pas trente.
  */
 
-type Dimension = 'sprint' | 'team' | 'epic' | 'assignee'
+type Dimension = 'sprint' | 'team' | 'macro' | 'assignee'
 
 const DIMENSION_LABELS: Record<Dimension, string> = {
   sprint: 'sans sprint',
   team: 'sans équipe',
-  epic: 'sans épic',
+  macro: 'sans macro',
   assignee: 'sans assigné',
 }
 
@@ -37,18 +37,18 @@ export const CurationTable: React.FC = () => {
     setTasksSprint,
     setTaskTeam,
     setTasksTeam,
-    setTaskEpic,
-    moveTasksToEpic,
+    setTaskMacro,
+    moveTasksToMacro,
     updateTask,
-    fetchProjectEpics,
+    fetchProjectMacros,
     setSelectedTask,
     activeJobCount,
     hideDone,
     toggleHideDone,
   } = useApp()
 
-  const [epics, setEpics] = useState<EpicMeta[]>([])
-  const [dimensions, setDimensions] = useState<Dimension[]>(['sprint', 'team', 'epic'])
+  const [macros, setMacros] = useState<MacroMeta[]>([])
+  const [dimensions, setDimensions] = useState<Dimension[]>(['sprint', 'team', 'macro'])
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [batchBusy, setBatchBusy] = useState<string | null>(null)
   // Un choix de lot porte l'identifiant (ce que l'API prend) et le libellé (ce
@@ -56,17 +56,17 @@ export const CurationTable: React.FC = () => {
   // valable : retirer du sprint, retirer l'équipe.
   const [batchSprint, setBatchSprint] = useState<{ id: string; name: string }>({ id: '', name: '' })
   const [batchTeam, setBatchTeam] = useState<{ id: string; name: string }>({ id: '', name: '' })
-  const [batchEpic, setBatchEpic] = useState('')
+  const [batchMacro, setBatchMacro] = useState('')
 
   useEffect(() => {
     if (!currentProject?.id) {
-      setEpics([])
+      setMacros([])
       return
     }
-    fetchProjectEpics(currentProject.id).then(setEpics)
-    // activeJobCount : un rattachement à un épic passe par la file, la liste des
-    // épics n'est à jour qu'une fois la file vidée.
-  }, [currentProject?.id, fetchProjectEpics, activeJobCount])
+    fetchProjectMacros(currentProject.id).then(setMacros)
+    // activeJobCount : un rattachement à une macro passe par la file, la liste des
+    // macros n'est à jour qu'une fois la file vidée.
+  }, [currentProject?.id, fetchProjectMacros, activeJobCount])
 
   const sprintOptions = useMemo(
     () =>
@@ -76,15 +76,15 @@ export const CurationTable: React.FC = () => {
     [currentProject?.sprints]
   )
 
-  const epicOptions = useMemo(
-    () => epics.filter(e => !e.closed).map(e => ({ key: e.key, title: e.title || e.key })),
-    [epics]
+  const macroOptions = useMemo(
+    () => macros.filter(e => !e.closed).map(e => ({ key: e.key, title: e.title || e.key })),
+    [macros]
   )
 
   const isMissing = (task: Task, dimension: Dimension): boolean => {
     if (dimension === 'sprint') return !(task.sprint || '').trim()
     if (dimension === 'team') return !(task.team || '').trim()
-    if (dimension === 'epic') return !(task.parentKey || '').trim()
+    if (dimension === 'macro') return !(task.parentKey || '').trim()
     return !(task.assignee || '').trim()
   }
 
@@ -96,7 +96,7 @@ export const CurationTable: React.FC = () => {
   )
 
   const counts = useMemo(() => {
-    const out: Record<Dimension, number> = { sprint: 0, team: 0, epic: 0, assignee: 0 }
+    const out: Record<Dimension, number> = { sprint: 0, team: 0, macro: 0, assignee: 0 }
     pool.forEach(task => {
       (Object.keys(out) as Dimension[]).forEach(dimension => {
         if (isMissing(task, dimension)) out[dimension] += 1
@@ -118,9 +118,8 @@ export const CurationTable: React.FC = () => {
     )
   }
 
-  // Les épics et les sprints sont cherchés au clavier plutôt que déroulés : un
-  // projet porte cent quarante épics, une liste déroulante ne se lit plus.
-  const searchEpic = useMemo(() => epicLookup(epics), [epics])
+  // Les macros et les sprints sont cherchés au clavier
+  const searchMacro = useMemo(() => macroLookup(macros), [macros])
   const searchSprint = useMemo(() => sprintLookup(currentProject?.sprints || []), [currentProject?.sprints])
 
   const searchTeamOptions = async (query: string): Promise<LookupOption[]> => {
@@ -134,7 +133,7 @@ export const CurationTable: React.FC = () => {
     setChecked({})
     setBatchSprint({ id: '', name: '' })
     setBatchTeam({ id: '', name: '' })
-    setBatchEpic('')
+    setBatchMacro('')
     setBatchBusy(null)
   }
 
@@ -253,27 +252,27 @@ export const CurationTable: React.FC = () => {
             </button>
           </div>
 
-          {epicOptions.length > 0 && (
+          {macroOptions.length > 0 && (
             <div className="flex items-center gap-1 w-[230px]">
               <div className="flex-1">
                 <LookupField
-                  value={batchEpic}
+                  value={batchMacro}
                   icon={<Target size={11} />}
-                  placeholder="épic..."
+                  placeholder="macro..."
                   allowClear={false}
-                  onSearch={searchEpic}
-                  onPick={option => setBatchEpic(option?.id || '')}
+                  onSearch={searchMacro}
+                  onPick={option => setBatchMacro(option?.id || '')}
                 />
               </div>
               <button
                 type="button"
-                disabled={!batchEpic || batchBusy === 'epic'}
+                disabled={!batchMacro || batchBusy === 'macro'}
                 onClick={() =>
-                  runBatch('epic', () => moveTasksToEpic(currentProject.id, selectedIds, batchEpic))
+                  runBatch('macro', () => moveTasksToMacro(currentProject.id, selectedIds, batchMacro))
                 }
                 className="px-2 py-1 rounded-lg text-[11px] font-bold cursor-pointer disabled:opacity-40 text-[var(--text-primary)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] shrink-0"
               >
-                {batchBusy === 'epic' ? '…' : 'OK'}
+                {batchBusy === 'macro' ? '…' : 'OK'}
               </button>
             </div>
           )}
@@ -319,7 +318,7 @@ export const CurationTable: React.FC = () => {
                 </th>
                 <th className="py-2 px-2">Ticket</th>
                 <th className="py-2 px-2">Titre</th>
-                <th className="py-2 px-2 w-[190px]">Épic</th>
+                <th className="py-2 px-2 w-[190px]">Macro</th>
                 <th className="py-2 px-2 w-[170px]">Sprint</th>
                 <th className="py-2 px-2 w-[190px]">Équipe</th>
                 <th className="py-2 px-2 w-[190px]">Assigné</th>
@@ -378,17 +377,17 @@ export const CurationTable: React.FC = () => {
                       </button>
                     </td>
 
-                    {/* Épic */}
+                    {/* Macro */}
                     <td className="py-1.5 px-2">
                       <LookupField
                         value={task.parentKey || ''}
                         icon={<Target size={10} />}
-                        placeholder="épic..."
-                        clearLabel="Aucun épic"
-                        emptyHint="Aucun épic ne correspond."
+                        placeholder="macro..."
+                        clearLabel="Aucune macro"
+                        emptyHint="Aucune macro ne correspond."
                         disabled={task.source !== 'jira'}
-                        onSearch={searchEpic}
-                        onPick={option => setTaskEpic(task.id, option?.id || '')}
+                        onSearch={searchMacro}
+                        onPick={option => setTaskMacro(task.id, option?.id || '')}
                       />
                     </td>
 

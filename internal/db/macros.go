@@ -12,30 +12,23 @@ import (
 	"tasks/internal/models"
 )
 
-// Les épics ne sont pas des cartes : le tracker les traite comme des conteneurs
-// et la synchro n'importe que Task et Story. Leur horizon — NOW, NEXT, LATER —
-// est une décision produit, pas une déduction, et le travail de cadrage qu'on
-// mène dessus (description, TODO) n'a nulle part où vivre côté tracker. Cette
-// table est donc la mémoire propre de Taskacao sur les épics, indexée par la clé
-// du ticket parent.
+// Les macros ne sont pas des cartes simples : le tracker les traite comme des
+// conteneurs (ex : GitHub milestones) et la synchro n'importe que Task et Story.
+// Leur horizon — NOW, NEXT, LATER — est une décision produit, et le travail
+// de cadrage (framing, description, checklist TODOs) vit dans TaskFlow.
 
 const (
 	HorizonNow   = "now"
 	HorizonNext  = "next"
 	HorizonLater = "later"
-	// HorizonHidden est le tout-venant : des épics fourre-tout qui n'ont pas
-	// vocation à apparaître dans la roadmap, mais qu'on ne veut pas voir
-	// remonter indéfiniment dans les non classés.
+	// HorizonHidden est le tout-venant : des macros qui n'ont pas
+	// vocation à apparaître dans la roadmap active.
 	HorizonHidden = "hidden"
 )
 
-// Le label de roadmap porté par l'épic dans Jira. L'horizon est une décision
-// d'équipe : la garder en base locale la rendrait invisible aux collègues, hors
-// de Jira et absente d'un autre poste. La description et la TODO, elles, restent
-// locales : les écrire dans la description de l'épic détruirait sa mise en forme.
 const RoadmapLabelPrefix = "roadmap:"
 
-// RoadmapLabel is the Jira label for an horizon, empty for "unclassified".
+// RoadmapLabel is the label for a horizon, empty for "unclassified".
 func RoadmapLabel(horizon string) string {
 	h := normalizeHorizon(horizon)
 	if h == "" {
@@ -44,12 +37,12 @@ func RoadmapLabel(horizon string) string {
 	return RoadmapLabelPrefix + h
 }
 
-// AllRoadmapLabels lists the three labels, to remove the ones that no longer apply.
+// AllRoadmapLabels lists all roadmap horizon labels.
 func AllRoadmapLabels() []string {
 	return []string{RoadmapLabelPrefix + HorizonNow, RoadmapLabelPrefix + HorizonNext, RoadmapLabelPrefix + HorizonLater, RoadmapLabelPrefix + HorizonHidden}
 }
 
-// HorizonFromLabels reads the horizon a Jira epic carries, empty when it carries none.
+// HorizonFromLabels reads the horizon from labels, empty when it carries none.
 func HorizonFromLabels(labels []string) string {
 	for _, l := range labels {
 		clean := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(l, "#")))
@@ -73,14 +66,12 @@ func normalizeHorizon(value string) string {
 	case HorizonHidden:
 		return HorizonHidden
 	default:
-		// Chaîne vide = non classé, ce qui est un état légitime : un épic qui
-		// vient d'apparaître n'a pas encore été arbitré.
 		return ""
 	}
 }
 
-func (d *DB) ensureEpicsTable() {
-	_, _ = d.conn.Exec(`CREATE TABLE IF NOT EXISTS epics (
+func (d *DB) ensureMacrosTable() {
+	_, _ = d.conn.Exec(`CREATE TABLE IF NOT EXISTS macros (
 		project_id TEXT NOT NULL,
 		key TEXT NOT NULL,
 		horizon TEXT NOT NULL DEFAULT '',
@@ -92,17 +83,27 @@ func (d *DB) ensureEpicsTable() {
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (project_id, key)
 	);`)
-	// Colonnes ajoutées après coup : les bases existantes les reçoivent ici.
-	_, _ = d.conn.Exec("ALTER TABLE epics ADD COLUMN title TEXT NOT NULL DEFAULT '';")
-	_, _ = d.conn.Exec("ALTER TABLE epics ADD COLUMN status TEXT NOT NULL DEFAULT '';")
-	_, _ = d.conn.Exec("ALTER TABLE epics ADD COLUMN closed INTEGER NOT NULL DEFAULT 0;")
-	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_epics_project ON epics(project_id, horizon);")
+	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_macros_project ON macros(project_id, horizon);")
+
+	// Migrate from legacy epics table if it exists
+	var hasEpics int
+	_ = d.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='epics';").Scan(&hasEpics)
+	if hasEpics > 0 {
+		_, _ = d.conn.Exec(`
+			INSERT OR IGNORE INTO macros (project_id, key, horizon, description, todos, title, status, closed, updated_at)
+			SELECT project_id, key, horizon, description, todos, title, status, closed, updated_at FROM epics;
+		`)
+	}
 }
 
-// GetProjectEpics returns the epic metadata of a project, keyed by epic key.
-func (d *DB) GetProjectEpics(projectID string) ([]models.EpicMeta, error) {
+func (d *DB) ensureEpicsTable() {
+	d.ensureMacrosTable()
+}
+
+// GetProjectMacros returns the macro metadata of a project, keyed by macro key.
+func (d *DB) GetProjectMacros(projectID string) ([]models.MacroMeta, error) {
 	d.mu.Lock()
-	d.ensureEpicsTable()
+	d.ensureMacrosTable()
 	d.mu.Unlock()
 
 	proj, _ := d.GetProjectByID(projectID)
@@ -116,7 +117,7 @@ func (d *DB) GetProjectEpics(projectID string) ([]models.EpicMeta, error) {
 					closedVal = 1
 				}
 				_, _ = d.conn.Exec(`
-					INSERT INTO epics (project_id, key, title, description, status, closed, updated_at)
+					INSERT INTO macros (project_id, key, title, description, status, closed, updated_at)
 					VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 					ON CONFLICT(project_id, key) DO UPDATE SET
 						title = excluded.title,
@@ -131,7 +132,7 @@ func (d *DB) GetProjectEpics(projectID string) ([]models.EpicMeta, error) {
 	d.mu.RLock()
 	rows, err := d.conn.Query(`
 		SELECT project_id, key, horizon, description, todos, title, status, closed, updated_at
-		FROM epics WHERE project_id = ? ORDER BY key ASC
+		FROM macros WHERE project_id = ? ORDER BY key ASC
 	`, projectID)
 	d.mu.RUnlock()
 	if err != nil {
@@ -139,45 +140,56 @@ func (d *DB) GetProjectEpics(projectID string) ([]models.EpicMeta, error) {
 	}
 	defer rows.Close()
 
-	out := []models.EpicMeta{}
+	out := []models.MacroMeta{}
 	for rows.Next() {
-		var e models.EpicMeta
+		var e models.MacroMeta
 		var todosJSON string
 		var closed int
 		if err := rows.Scan(&e.ProjectID, &e.Key, &e.Horizon, &e.Description, &todosJSON, &e.Title, &e.Status, &closed, &e.UpdatedAt); err != nil {
 			continue
 		}
 		e.Closed = closed == 1
-		e.Todos = parseEpicTodos(todosJSON)
+		e.Todos = parseMacroTodos(todosJSON)
 		out = append(out, e)
 	}
 	return out, nil
 }
 
-func parseEpicTodos(raw string) []models.EpicTodo {
+// GetProjectEpics is an alias for GetProjectMacros.
+func (d *DB) GetProjectEpics(projectID string) ([]models.MacroMeta, error) {
+	return d.GetProjectMacros(projectID)
+}
+
+func parseMacroTodos(raw string) []models.MacroTodo {
 	if strings.TrimSpace(raw) == "" || raw == "[]" {
-		return []models.EpicTodo{}
+		return []models.MacroTodo{}
 	}
-	var list []models.EpicTodo
+	var list []models.MacroTodo
 	if err := json.Unmarshal([]byte(raw), &list); err != nil {
-		return []models.EpicTodo{}
+		return []models.MacroTodo{}
 	}
 	return list
 }
 
-// SaveEpicMeta upserts an epic's horizon, description and todos. Only the fields
-// provided are touched: classifying an epic must not wipe the shaping notes, and
-// editing the notes must not reset the horizon.
-func (d *DB) SaveEpicMeta(projectID string, key string, horizon *string, description *string, todos *[]models.EpicTodo) (*models.EpicMeta, error) {
-	return d.UpdateEpic(projectID, key, nil, horizon, description, todos, nil)
+func parseEpicTodos(raw string) []models.EpicTodo {
+	return parseMacroTodos(raw)
 }
 
-// UpdateEpic updates macro metadata (title, horizon, description, todos, closed) locally and in GitHub milestone if applicable.
-func (d *DB) UpdateEpic(projectID string, key string, title *string, horizon *string, description *string, todos *[]models.EpicTodo, closed *bool) (*models.EpicMeta, error) {
+// SaveMacroMeta upserts a macro's horizon, description and todos checklist.
+func (d *DB) SaveMacroMeta(projectID string, key string, horizon *string, description *string, todos *[]models.MacroTodo) (*models.MacroMeta, error) {
+	return d.UpdateMacro(projectID, key, nil, horizon, description, todos, nil)
+}
+
+func (d *DB) SaveEpicMeta(projectID string, key string, horizon *string, description *string, todos *[]models.EpicTodo) (*models.EpicMeta, error) {
+	return d.SaveMacroMeta(projectID, key, horizon, description, todos)
+}
+
+// UpdateMacro updates macro metadata (title, horizon, description, todos, closed) locally and in GitHub milestone if applicable.
+func (d *DB) UpdateMacro(projectID string, key string, title *string, horizon *string, description *string, todos *[]models.MacroTodo, closed *bool) (*models.MacroMeta, error) {
 	projectID = strings.TrimSpace(projectID)
 	key = strings.TrimSpace(key)
 	if projectID == "" || key == "" {
-		return nil, fmt.Errorf("projet et clé d'épic obligatoires")
+		return nil, fmt.Errorf("projet et clé de macro obligatoires")
 	}
 
 	proj, _ := d.GetProjectByID(projectID)
@@ -215,30 +227,31 @@ func (d *DB) UpdateEpic(projectID string, key string, title *string, horizon *st
 		d.mu.Unlock()
 	}
 
-	return d.saveEpicMetaFull(projectID, key, horizon, description, todos, title, nil, closed)
+	return d.saveMacroMetaFull(projectID, key, horizon, description, todos, title, nil, closed)
 }
 
-// saveEpicMetaFull ajoute les champs que seule la synchro renseigne : titre,
-// statut et « terminé ». Un champ nil n'est pas touché, pour qu'un classement
-// n'écrase pas ce que la synchro a lu, et inversement.
-func (d *DB) saveEpicMetaFull(projectID string, key string, horizon *string, description *string, todos *[]models.EpicTodo, title *string, status *string, closed *bool) (*models.EpicMeta, error) {
+func (d *DB) UpdateEpic(projectID string, key string, title *string, horizon *string, description *string, todos *[]models.EpicTodo, closed *bool) (*models.EpicMeta, error) {
+	return d.UpdateMacro(projectID, key, title, horizon, description, todos, closed)
+}
+
+func (d *DB) saveMacroMetaFull(projectID string, key string, horizon *string, description *string, todos *[]models.MacroTodo, title *string, status *string, closed *bool) (*models.MacroMeta, error) {
 	projectID = strings.TrimSpace(projectID)
 	key = strings.TrimSpace(key)
 	if projectID == "" || key == "" {
-		return nil, fmt.Errorf("projet et clé d'épic obligatoires")
+		return nil, fmt.Errorf("projet et clé de macro obligatoires")
 	}
 
 	d.mu.Lock()
-	d.ensureEpicsTable()
+	d.ensureMacrosTable()
 
-	current := models.EpicMeta{ProjectID: projectID, Key: key, Todos: []models.EpicTodo{}}
+	current := models.MacroMeta{ProjectID: projectID, Key: key, Todos: []models.MacroTodo{}}
 	var todosJSON string
 	var closedInt int
 	err := d.conn.QueryRow(`
-		SELECT horizon, description, todos, title, status, closed FROM epics WHERE project_id = ? AND key = ?
+		SELECT horizon, description, todos, title, status, closed FROM macros WHERE project_id = ? AND key = ?
 	`, projectID, key).Scan(&current.Horizon, &current.Description, &todosJSON, &current.Title, &current.Status, &closedInt)
 	if err == nil {
-		current.Todos = parseEpicTodos(todosJSON)
+		current.Todos = parseMacroTodos(todosJSON)
 		current.Closed = closedInt == 1
 	}
 
@@ -259,7 +272,7 @@ func (d *DB) saveEpicMetaFull(projectID string, key string, horizon *string, des
 		current.Description = *description
 	}
 	if todos != nil {
-		cleaned := make([]models.EpicTodo, 0, len(*todos))
+		cleaned := make([]models.MacroTodo, 0, len(*todos))
 		for _, todo := range *todos {
 			text := strings.TrimSpace(todo.Text)
 			if text == "" {
@@ -281,7 +294,7 @@ func (d *DB) saveEpicMetaFull(projectID string, key string, horizon *string, des
 		closedValue = 1
 	}
 	_, execErr := d.conn.Exec(`
-		INSERT INTO epics (project_id, key, horizon, description, todos, title, status, closed, updated_at)
+		INSERT INTO macros (project_id, key, horizon, description, todos, title, status, closed, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id, key) DO UPDATE SET
 			horizon = excluded.horizon,
@@ -300,40 +313,39 @@ func (d *DB) saveEpicMetaFull(projectID string, key string, horizon *string, des
 	return &current, nil
 }
 
-// CreateStoryFromEpicTodo turns a line of epic shaping into a real story in the
-// tracker, under that epic, and records the created key on the todo so the line
-// is never turned into a second ticket.
-//
-// The task is also inserted locally: waiting for the next sync would leave the
-// user staring at a story that exists in Jira but nowhere on the board.
-func (d *DB) CreateStoryFromEpicTodo(projectID string, epicKey string, todoID string) (*models.EpicMeta, string, error) {
+func (d *DB) saveEpicMetaFull(projectID string, key string, horizon *string, description *string, todos *[]models.EpicTodo, title *string, status *string, closed *bool) (*models.EpicMeta, error) {
+	return d.saveMacroMetaFull(projectID, key, horizon, description, todos, title, status, closed)
+}
+
+// CreateStoryFromMacroTodo turns a line of macro shaping into a real story in the tracker.
+func (d *DB) CreateStoryFromMacroTodo(projectID string, macroKey string, todoID string) (*models.MacroMeta, string, error) {
 	projectID = strings.TrimSpace(projectID)
-	epicKey = strings.TrimSpace(epicKey)
+	macroKey = strings.TrimSpace(macroKey)
 	todoID = strings.TrimSpace(todoID)
-	if projectID == "" || epicKey == "" || todoID == "" {
-		return nil, "", fmt.Errorf("projet, épic et ligne de TODO obligatoires")
+	if projectID == "" || macroKey == "" || todoID == "" {
+		return nil, "", fmt.Errorf("projet, macro et ligne de TODO obligatoires")
 	}
 
 	proj, err := d.GetProjectByID(projectID)
 	if err != nil || proj == nil {
 		return nil, "", fmt.Errorf("projet non trouvé")
 	}
-	metas, err := d.GetProjectEpics(projectID)
+	metas, err := d.GetProjectMacros(projectID)
 	if err != nil {
 		return nil, "", err
 	}
-	var meta *models.EpicMeta
+	var meta *models.MacroMeta
 	for i := range metas {
-		if metas[i].Key == epicKey {
+		if metas[i].Key == macroKey {
 			meta = &metas[i]
 			break
 		}
 	}
 	if meta == nil {
-		return nil, "", fmt.Errorf("macro %s sans cadrage enregistré", epicKey)
+		return nil, "", fmt.Errorf("macro %s sans cadrage enregistré", macroKey)
 	}
 
-	var todo *models.EpicTodo
+	var todo *models.MacroTodo
 	for i := range meta.Todos {
 		if meta.Todos[i].ID == todoID {
 			todo = &meta.Todos[i]
@@ -347,79 +359,63 @@ func (d *DB) CreateStoryFromEpicTodo(projectID string, epicKey string, todoID st
 		return nil, "", fmt.Errorf("cette ligne a déjà produit %s", todo.StoryKey)
 	}
 
-	task, err := d.CreateStoryUnderEpic(projectID, epicKey, todo.Text)
+	task, err := d.CreateStoryUnderMacro(projectID, macroKey, todo.Text)
 	if err != nil {
 		return nil, "", fmt.Errorf("erreur création de story: %w", err)
 	}
 
 	todo.StoryKey = task.Key
-	saved, err := d.SaveEpicMeta(projectID, epicKey, nil, nil, &meta.Todos)
+	saved, err := d.SaveMacroMeta(projectID, macroKey, nil, nil, &meta.Todos)
 	if err != nil {
 		return meta, task.Key, nil
 	}
 	return saved, task.Key, nil
 }
 
-// projectRepoPath is the working directory acli runs in for this project: the
-// CLI reads its credentials from the user profile, but the directory still
-// matters for consistency with the rest of the tracker calls.
-func projectRepoPath(proj *models.Project) string {
-	if proj == nil {
-		return ""
-	}
-	return strings.TrimSpace(proj.RepoPath)
+func (d *DB) CreateStoryFromEpicTodo(projectID string, epicKey string, todoID string) (*models.EpicMeta, string, error) {
+	return d.CreateStoryFromMacroTodo(projectID, epicKey, todoID)
 }
 
-// PushEpicHorizonLabel mirrors the classification onto the Jira epic: it adds the
-// label of the chosen horizon and removes the other two. It performs the tracker
-// call itself, so it is only ever run from a queued activity (TrackerOpEpicHorizon
-// or TrackerOpPushHorizons): a click must not wait on it, and its failure has to
-// stay readable in the activity rather than vanish.
-func (d *DB) PushEpicHorizonLabel(projectID string, epicKey string, horizon string) (string, error) {
+// PushMacroHorizonLabel mirrors the classification onto the macro.
+func (d *DB) PushMacroHorizonLabel(projectID string, macroKey string, horizon string) (string, error) {
 	return "classification gardée en local", nil
 }
 
-// ImportEpicHorizons reads the roadmap labels of a project's epics and records
-// them locally. Jira wins when an epic carries a label, since that is the shared
-// source; an epic without label keeps whatever was decided locally, which will be
-// pushed the next time it is touched.
-func (d *DB) ImportEpicHorizons(projectID string) (string, error) {
+func (d *DB) PushEpicHorizonLabel(projectID string, epicKey string, horizon string) (string, error) {
+	return d.PushMacroHorizonLabel(projectID, epicKey, horizon)
+}
+
+// ImportMacroHorizons reads the roadmap labels of a project's macros.
+func (d *DB) ImportMacroHorizons(projectID string) (string, error) {
 	proj, err := d.GetProjectByID(projectID)
 	if err != nil || proj == nil {
 		return "", fmt.Errorf("projet non trouvé")
 	}
-	projectKey := jiraProjectKeyFor(proj)
-	if projectKey == "" {
-		if settings, _ := d.GetSettings(); settings != nil {
-			projectKey = settings.JiraProject
-		}
-	}
-	if projectKey == "" {
-		return "", fmt.Errorf("clé de projet Jira absente")
-	}
-
-	return "0 épics lus", nil
+	return "0 macros lues", nil
 }
 
-// PendingHorizonPushes lists the epics classified locally whose Jira epic does
-// not carry the matching roadmap label yet.
-func (d *DB) PendingHorizonPushes(projectID string) ([]models.EpicMeta, error) {
-	return []models.EpicMeta{}, nil
+func (d *DB) ImportEpicHorizons(projectID string) (string, error) {
+	return d.ImportMacroHorizons(projectID)
 }
 
-// PushPendingHorizons mirrors every locally classified epic.
+// PendingHorizonPushes lists the macros classified locally.
+func (d *DB) PendingHorizonPushes(projectID string) ([]models.MacroMeta, error) {
+	return []models.MacroMeta{}, nil
+}
+
+// PushPendingHorizons mirrors every locally classified macro.
 func (d *DB) PushPendingHorizons(projectID string) (int, []string, error) {
 	return 0, nil, nil
 }
 
-// SetTaskEpic queues the attachment of a ticket to a macro.
-func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, *models.TaskActivity, error) {
+// SetTaskMacro queues the attachment of a ticket to a macro.
+func (d *DB) SetTaskMacro(taskIDOrKey string, macroKey string) (*models.Task, *models.TaskActivity, error) {
 	task, err := d.GetTaskByID(taskIDOrKey)
 	if err != nil || task == nil {
 		return nil, nil, fmt.Errorf("tâche introuvable")
 	}
-	cleanEpicKey := strings.TrimSpace(epicKey)
-	if err := d.writeTaskParentLocally(task, cleanEpicKey); err != nil {
+	cleanMacroKey := strings.TrimSpace(macroKey)
+	if err := d.writeTaskParentLocally(task, cleanMacroKey); err != nil {
 		return nil, nil, err
 	}
 	act, err := d.EnqueueTrackerOp(TrackerOp{
@@ -427,19 +423,23 @@ func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, *mod
 		ProjectID: task.ProjectID,
 		TaskID:    task.ID,
 		TaskKey:   task.Key,
-		EpicKey:   cleanEpicKey,
+		EpicKey:   cleanMacroKey,
 	})
 	return task, act, err
 }
 
-// applyTaskEpic performs the attachment of a task to a macro (milestone).
-func (d *DB) applyTaskEpic(taskIDOrKey string, epicKey string, steps *[]string) (*models.Task, error) {
+func (d *DB) SetTaskEpic(taskIDOrKey string, epicKey string) (*models.Task, *models.TaskActivity, error) {
+	return d.SetTaskMacro(taskIDOrKey, epicKey)
+}
+
+// applyTaskMacro performs the attachment of a task to a macro (milestone).
+func (d *DB) applyTaskMacro(taskIDOrKey string, macroKey string, steps *[]string) (*models.Task, error) {
 	task, err := d.GetTaskByID(taskIDOrKey)
 	if err != nil || task == nil {
 		return nil, fmt.Errorf("tâche introuvable")
 	}
-	cleanEpicKey := strings.TrimSpace(epicKey)
-	if err := d.writeTaskParentLocally(task, cleanEpicKey); err != nil {
+	cleanMacroKey := strings.TrimSpace(macroKey)
+	if err := d.writeTaskParentLocally(task, cleanMacroKey); err != nil {
 		return nil, err
 	}
 
@@ -450,19 +450,19 @@ func (d *DB) applyTaskEpic(taskIDOrKey string, epicKey string, steps *[]string) 
 		_, _ = fmt.Sscanf(cleanKey, "%d", &issueNum)
 		if issueNum > 0 {
 			milestoneTarget := ""
-			if cleanEpicKey != "" {
+			if cleanMacroKey != "" {
 				var mTitle string
 				d.mu.RLock()
-				_ = d.conn.QueryRow("SELECT title FROM epics WHERE project_id = ? AND key = ?", task.ProjectID, cleanEpicKey).Scan(&mTitle)
+				_ = d.conn.QueryRow("SELECT title FROM macros WHERE project_id = ? AND key = ?", task.ProjectID, cleanMacroKey).Scan(&mTitle)
 				d.mu.RUnlock()
 				if mTitle != "" {
 					milestoneTarget = mTitle
-				} else if strings.HasPrefix(strings.ToUpper(cleanEpicKey), "M-") {
+				} else if strings.HasPrefix(strings.ToUpper(cleanMacroKey), "M-") {
 					var num int
-					_, _ = fmt.Sscanf(strings.ToUpper(cleanEpicKey), "M-%d", &num)
+					_, _ = fmt.Sscanf(strings.ToUpper(cleanMacroKey), "M-%d", &num)
 					milestoneTarget = fmt.Sprintf("%d", num)
 				} else {
-					milestoneTarget = cleanEpicKey
+					milestoneTarget = cleanMacroKey
 				}
 			}
 			if err := d.runner.SetGithubIssueMilestone(proj.GithubRepo, proj.RepoPath, issueNum, milestoneTarget); err != nil {
@@ -482,22 +482,27 @@ func (d *DB) applyTaskEpic(taskIDOrKey string, epicKey string, steps *[]string) 
 	return task, nil
 }
 
+func (d *DB) applyTaskEpic(taskIDOrKey string, epicKey string, steps *[]string) (*models.Task, error) {
+	return d.applyTaskMacro(taskIDOrKey, epicKey, steps)
+}
+
 // writeTaskParentLocally mirrors the attachment in the local database.
-func (d *DB) writeTaskParentLocally(task *models.Task, epicKey string) error {
+func (d *DB) writeTaskParentLocally(task *models.Task, macroKey string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	parentTitle := ""
-	if epicKey != "" {
-		_ = d.conn.QueryRow("SELECT title FROM epics WHERE project_id = ? AND key = ?", task.ProjectID, epicKey).Scan(&parentTitle)
+	if macroKey != "" {
+		_ = d.conn.QueryRow("SELECT title FROM macros WHERE project_id = ? AND key = ?", task.ProjectID, macroKey).Scan(&parentTitle)
 		if parentTitle == "" {
-			parentTitle = epicKey
+			parentTitle = macroKey
 		}
 	}
-	_, err := d.conn.Exec("UPDATE tasks SET parent_key = ?, parent_title = ?, parent_type = 'macro', updated_at = ? WHERE id = ?", epicKey, parentTitle, time.Now(), task.ID)
+	_, err := d.conn.Exec("UPDATE tasks SET parent_key = ?, parent_title = ?, parent_type = 'macro', updated_at = ? WHERE id = ?", macroKey, parentTitle, time.Now(), task.ID)
 	return err
 }
 
-func (d *DB) CreateStoryUnderEpic(projectID string, epicKey string, title string) (*models.Task, error) {
+// CreateStoryUnderMacro creates a story task attached under a macro.
+func (d *DB) CreateStoryUnderMacro(projectID string, macroKey string, title string) (*models.Task, error) {
 	proj, err := d.GetProjectByID(projectID)
 	if err != nil || proj == nil {
 		return nil, fmt.Errorf("projet non trouvé")
@@ -505,10 +510,10 @@ func (d *DB) CreateStoryUnderEpic(projectID string, epicKey string, title string
 
 	parentTitle := ""
 	d.mu.RLock()
-	_ = d.conn.QueryRow("SELECT title FROM epics WHERE project_id = ? AND key = ?", projectID, epicKey).Scan(&parentTitle)
+	_ = d.conn.QueryRow("SELECT title FROM macros WHERE project_id = ? AND key = ?", projectID, macroKey).Scan(&parentTitle)
 	d.mu.RUnlock()
 	if parentTitle == "" {
-		parentTitle = epicKey
+		parentTitle = macroKey
 	}
 
 	task, err := d.CreateTask(models.CreateTaskRequest{
@@ -520,8 +525,8 @@ func (d *DB) CreateStoryUnderEpic(projectID string, epicKey string, title string
 		return nil, err
 	}
 
-	_ = d.writeTaskParentLocally(task, epicKey)
-	task.ParentKey = epicKey
+	_ = d.writeTaskParentLocally(task, macroKey)
+	task.ParentKey = macroKey
 	task.ParentTitle = parentTitle
 	task.ParentType = "macro"
 
@@ -535,8 +540,12 @@ func (d *DB) CreateStoryUnderEpic(projectID string, epicKey string, title string
 	return task, nil
 }
 
-// CreateEpic creates the macro in the tracker (e.g. GitHub milestone) and records it locally.
-func (d *DB) CreateEpic(projectID string, title string, horizon string, fields map[string]string) (*models.EpicMeta, error) {
+func (d *DB) CreateStoryUnderEpic(projectID string, epicKey string, title string) (*models.Task, error) {
+	return d.CreateStoryUnderMacro(projectID, epicKey, title)
+}
+
+// CreateMacro creates the macro in the tracker (e.g. GitHub milestone) and records it locally.
+func (d *DB) CreateMacro(projectID string, title string, horizon string, fields map[string]string) (*models.MacroMeta, error) {
 	projectID = strings.TrimSpace(projectID)
 	title = strings.TrimSpace(title)
 	if projectID == "" || title == "" {
@@ -569,11 +578,15 @@ func (d *DB) CreateEpic(projectID string, title string, horizon string, fields m
 	if h == "" {
 		h = HorizonNow
 	}
-	return d.saveEpicMetaFull(projectID, key, &h, nil, nil, &title, &status, &closed)
+	return d.saveMacroMetaFull(projectID, key, &h, nil, nil, &title, &status, &closed)
 }
 
-// DeleteEpic deletes a macro (and its GitHub milestone if applicable) and detaches its child tasks.
-func (d *DB) DeleteEpic(projectID string, key string) error {
+func (d *DB) CreateEpic(projectID string, title string, horizon string, fields map[string]string) (*models.EpicMeta, error) {
+	return d.CreateMacro(projectID, title, horizon, fields)
+}
+
+// DeleteMacro deletes a macro (and its GitHub milestone if applicable) and detaches its child tasks.
+func (d *DB) DeleteMacro(projectID string, key string) error {
 	projectID = strings.TrimSpace(projectID)
 	key = strings.TrimSpace(key)
 	if projectID == "" || key == "" {
@@ -592,35 +605,32 @@ func (d *DB) DeleteEpic(projectID string, key string) error {
 	}
 
 	d.mu.Lock()
-	d.ensureEpicsTable()
-	_, err := d.conn.Exec("DELETE FROM epics WHERE project_id = ? AND key = ?", projectID, key)
+	d.ensureMacrosTable()
+	_, err := d.conn.Exec("DELETE FROM macros WHERE project_id = ? AND key = ?", projectID, key)
 	_, _ = d.conn.Exec("UPDATE tasks SET parent_key = '', parent_title = '' WHERE project_id = ? AND (parent_key = ? OR parent_title = ?)", projectID, key, key)
 	d.mu.Unlock()
 	return err
 }
 
-// MoveTasksToEpic queues the epic split: a batch of tickets moved to another
-// epic, created on the fly when only a title is given. One tracker call per
-// ticket plus a possible epic creation is well past what an HTTP request should
-// hold, so the whole batch runs as a single activity whose steps say what
-// happened to each ticket.
-func (d *DB) MoveTasksToEpic(projectID string, taskIDs []string, targetEpicKey string, newEpicTitle string, fields map[string]string) (*models.TaskActivity, error) {
+func (d *DB) DeleteEpic(projectID string, key string) error {
+	return d.DeleteMacro(projectID, key)
+}
+
+// MoveTasksToMacro queues moving a batch of tickets to a macro.
+func (d *DB) MoveTasksToMacro(projectID string, taskIDs []string, targetMacroKey string, newMacroTitle string, fields map[string]string) (*models.TaskActivity, error) {
 	if len(taskIDs) == 0 {
 		return nil, fmt.Errorf("aucun ticket sélectionné")
 	}
 
-	targetEpicKey = strings.ToUpper(strings.TrimSpace(targetEpicKey))
-	if targetEpicKey == "" && strings.TrimSpace(newEpicTitle) == "" {
-		return nil, fmt.Errorf("épic cible ou intitulé du nouvel épic obligatoire")
+	targetMacroKey = strings.ToUpper(strings.TrimSpace(targetMacroKey))
+	if targetMacroKey == "" && strings.TrimSpace(newMacroTitle) == "" {
+		return nil, fmt.Errorf("macro cible ou intitulé de la nouvelle macro obligatoire")
 	}
 
-	// Cible connue : l'état local suit tout de suite. Sur un épic encore à créer,
-	// sa clé n'existe pas avant que la file ne tourne, et les tickets ne bougent
-	// donc qu'à ce moment là.
-	if targetEpicKey != "" {
+	if targetMacroKey != "" {
 		for _, id := range taskIDs {
 			if task, err := d.GetTaskByID(id); err == nil && task != nil {
-				_ = d.writeTaskParentLocally(task, targetEpicKey)
+				_ = d.writeTaskParentLocally(task, targetMacroKey)
 			}
 		}
 	}
@@ -629,14 +639,17 @@ func (d *DB) MoveTasksToEpic(projectID string, taskIDs []string, targetEpicKey s
 		Kind:         TrackerOpMoveToEpic,
 		ProjectID:    projectID,
 		TaskIDs:      taskIDs,
-		EpicKey:      targetEpicKey,
-		NewEpicTitle: strings.TrimSpace(newEpicTitle),
+		EpicKey:      targetMacroKey,
+		NewEpicTitle: strings.TrimSpace(newMacroTitle),
 		Fields:       fields,
 	})
 }
 
-// appendActivityStep adds a line to an activity's step list, to trace what the
-// autonomous chain decided without inventing a second log.
+func (d *DB) MoveTasksToEpic(projectID string, taskIDs []string, targetEpicKey string, newEpicTitle string, fields map[string]string) (*models.TaskActivity, error) {
+	return d.MoveTasksToMacro(projectID, taskIDs, targetEpicKey, newEpicTitle, fields)
+}
+
+// appendActivityStep adds a line to an activity's step list.
 func (d *DB) appendActivityStep(activityID string, step string) {
 	if strings.TrimSpace(activityID) == "" || strings.TrimSpace(step) == "" {
 		return
@@ -673,24 +686,22 @@ func IsProjectCompatible(p1, p2 *models.Project) bool {
 	if t2 == "" {
 		t2 = "local"
 	}
-	// Same tracker type, or either is local
 	if t1 == t2 || t1 == "local" || t2 == "local" {
 		return true
 	}
-	// Both have github configured
 	if (p1.GithubRepo != "" || t1 == "github") && (p2.GithubRepo != "" || t2 == "github") {
 		return true
 	}
 	return false
 }
 
-// MigrateEpic moves a macro and optionally its attached tasks from one project to another compatible project.
-func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID string, migrateTasks bool) (*models.EpicMeta, int, error) {
+// MigrateMacro moves a macro and optionally its attached tasks from one project to another compatible project.
+func (d *DB) MigrateMacro(sourceProjectID string, macroKey string, targetProjectID string, migrateTasks bool) (*models.MacroMeta, int, error) {
 	sourceProjectID = strings.TrimSpace(sourceProjectID)
-	epicKey = strings.TrimSpace(epicKey)
+	macroKey = strings.TrimSpace(macroKey)
 	targetProjectID = strings.TrimSpace(targetProjectID)
 
-	if sourceProjectID == "" || epicKey == "" || targetProjectID == "" {
+	if sourceProjectID == "" || macroKey == "" || targetProjectID == "" {
 		return nil, 0, fmt.Errorf("projet source, clé de macro et projet cible obligatoires")
 	}
 	if sourceProjectID == targetProjectID {
@@ -711,32 +722,32 @@ func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID
 	}
 
 	d.mu.Lock()
-	d.ensureEpicsTable()
+	d.ensureMacrosTable()
 	d.mu.Unlock()
 
-	// 1. Read existing epic data from source project
+	// 1. Read existing macro data from source project
 	var horizon, description, todosJSON, title, status string
 	var closed int
 	d.mu.RLock()
 	err = d.conn.QueryRow(`
 		SELECT horizon, description, todos, title, status, closed
-		FROM epics
+		FROM macros
 		WHERE project_id = ? AND key = ?
-	`, sourceProjectID, epicKey).Scan(&horizon, &description, &todosJSON, &title, &status, &closed)
+	`, sourceProjectID, macroKey).Scan(&horizon, &description, &todosJSON, &title, &status, &closed)
 	d.mu.RUnlock()
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			title = epicKey
+			title = macroKey
 		} else {
 			return nil, 0, err
 		}
 	}
 	if title == "" {
-		title = epicKey
+		title = macroKey
 	}
 
-	targetEpicKey := epicKey
+	targetMacroKey := macroKey
 
 	// 2. Handle GitHub milestones migration if target is GitHub
 	if targetProj.IssueTracker == "github" || targetProj.GithubRepo != "" {
@@ -749,19 +760,19 @@ func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID
 			}
 		}
 		if existingNum > 0 {
-			targetEpicKey = fmt.Sprintf("M-%d", existingNum)
+			targetMacroKey = fmt.Sprintf("M-%d", existingNum)
 		} else {
 			newNum, createErr := d.runner.CreateGithubMilestone(targetProj.GithubRepo, targetProj.RepoPath, title, description)
 			if createErr == nil && newNum > 0 {
-				targetEpicKey = fmt.Sprintf("M-%d", newNum)
+				targetMacroKey = fmt.Sprintf("M-%d", newNum)
 			}
 		}
 	}
 
-	// 3. Insert or update epic in target project
+	// 3. Insert or update macro in target project
 	d.mu.Lock()
 	_, err = d.conn.Exec(`
-		INSERT INTO epics (project_id, key, horizon, description, todos, title, status, closed, updated_at)
+		INSERT INTO macros (project_id, key, horizon, description, todos, title, status, closed, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(project_id, key) DO UPDATE SET
 			horizon = excluded.horizon,
@@ -771,10 +782,10 @@ func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID
 			status = excluded.status,
 			closed = excluded.closed,
 			updated_at = CURRENT_TIMESTAMP
-	`, targetProjectID, targetEpicKey, horizon, description, todosJSON, title, status, closed)
+	`, targetProjectID, targetMacroKey, horizon, description, todosJSON, title, status, closed)
 
 	// Delete from source project
-	_, _ = d.conn.Exec("DELETE FROM epics WHERE project_id = ? AND key = ?", sourceProjectID, epicKey)
+	_, _ = d.conn.Exec("DELETE FROM macros WHERE project_id = ? AND key = ?", sourceProjectID, macroKey)
 	d.mu.Unlock()
 
 	if err != nil {
@@ -789,7 +800,7 @@ func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID
 			SELECT id, key, title, source, external_url
 			FROM tasks
 			WHERE project_id = ? AND (parent_key = ? OR parent_title = ?)
-		`, sourceProjectID, epicKey, title)
+		`, sourceProjectID, macroKey, title)
 		d.mu.RUnlock()
 
 		if err == nil {
@@ -839,7 +850,7 @@ func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID
 					UPDATE tasks
 					SET id = ?, key = ?, project_id = ?, parent_key = ?, parent_title = ?, parent_type = 'macro', external_url = ?, updated_at = CURRENT_TIMESTAMP
 					WHERE id = ?
-				`, newID, newKey, targetProjectID, targetEpicKey, title, newExternalUrl, t.id)
+				`, newID, newKey, targetProjectID, targetMacroKey, title, newExternalUrl, t.id)
 				d.mu.Unlock()
 
 				if updateErr == nil {
@@ -849,13 +860,13 @@ func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID
 		}
 	}
 
-	var todos []models.EpicTodo
+	var todos []models.MacroTodo
 	if todosJSON != "" {
 		_ = json.Unmarshal([]byte(todosJSON), &todos)
 	}
-	res := &models.EpicMeta{
+	res := &models.MacroMeta{
 		ProjectID:   targetProjectID,
-		Key:         targetEpicKey,
+		Key:         targetMacroKey,
 		Title:       title,
 		Horizon:     horizon,
 		Description: description,
@@ -865,6 +876,10 @@ func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID
 	}
 
 	return res, migratedTasksCount, nil
+}
+
+func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID string, migrateTasks bool) (*models.EpicMeta, int, error) {
+	return d.MigrateMacro(sourceProjectID, epicKey, targetProjectID, migrateTasks)
 }
 
 // MigrateTasks moves a slice of tasks from their current project to another compatible project.

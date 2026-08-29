@@ -1,5 +1,39 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import type { EpicRequiredField, SkillEditorEntry, TTYLaunchResult, Task, Status, Priority, UserSettings, ViewMode, BoardGroupingMode, WorkflowStage, ToastMessage, Skill, TaskActivity, ActivityStats, CliStatus, TaskSource, Project, TrackerBoard, TaskComment, TerminalSession, EpicMeta, EpicHorizon, EpicTodo, GitDiffResult, GitStatusInfo, GitBranchesInfo, DailyDigest, TrackerTeam, TeamMember, TeamWorkload, TaskFacetValue, AutoSyncState, TrackerCheck } from '../types'
+import type {
+  MacroRequiredField,
+  SkillEditorEntry,
+  TTYLaunchResult,
+  Task,
+  Status,
+  Priority,
+  UserSettings,
+  ViewMode,
+  BoardGroupingMode,
+  WorkflowStage,
+  ToastMessage,
+  Skill,
+  TaskActivity,
+  ActivityStats,
+  CliStatus,
+  TaskSource,
+  Project,
+  TrackerBoard,
+  TaskComment,
+  TerminalSession,
+  MacroMeta,
+  MacroHorizon,
+  MacroTodo,
+  GitDiffResult,
+  GitStatusInfo,
+  GitBranchesInfo,
+  DailyDigest,
+  TrackerTeam,
+  TeamMember,
+  TeamWorkload,
+  TaskFacetValue,
+  AutoSyncState,
+  TrackerCheck,
+} from '../types'
 import { translations, type TranslationSchema } from '../locales/translations'
 import { resolveAccentAttribute } from '../lib/accents'
 import {
@@ -202,26 +236,35 @@ interface AppContextType {
   fetchProjectTrackerStatuses: (projectId: string) => Promise<string[]>
   /** Types de tickets que le tracker du projet expose, pour le réglage d'import. */
   fetchProjectIssueTypes: (projectId: string) => Promise<string[]>
-  fetchProjectEpics: (projectId: string) => Promise<EpicMeta[]>
-  saveEpicMeta: (projectId: string, key: string, patch: { title?: string; horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[]; closed?: boolean }) => Promise<EpicMeta | null>
-  createStoryFromEpicTodo: (projectId: string, epicKey: string, todoId: string) => Promise<{ epic: EpicMeta | null; storyKey: string } | null>
-  pendingHorizonPushes: (projectId: string) => Promise<EpicMeta[]>
+  fetchProjectMacros: (projectId: string) => Promise<MacroMeta[]>
+  fetchProjectEpics: (projectId: string) => Promise<MacroMeta[]>
+  saveMacroMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
+  saveEpicMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
+  createStoryFromMacroTodo: (projectId: string, macroKey: string, todoId: string) => Promise<{ macro: MacroMeta | null; epic: MacroMeta | null; storyKey: string } | null>
+  createStoryFromEpicTodo: (projectId: string, epicKey: string, todoId: string) => Promise<{ macro: MacroMeta | null; epic: MacroMeta | null; storyKey: string } | null>
+  pendingHorizonPushes: (projectId: string) => Promise<MacroMeta[]>
   /** Met la poussée des labels d'horizon en file d'activités. Retourne true si la file a accepté. */
   pushPendingHorizons: (projectId: string) => Promise<boolean>
   /**
-   * Met le rattachement à un épic en file d'activités et renvoie le ticket tel
-   * qu'il est déjà en local : l'écriture Jira suit, mais la vue ne doit pas
-   * attendre la file pour montrer le rattachement.
+   * Met le rattachement à une macro en file d'activités et renvoie le ticket tel
+   * qu'il est déjà en local.
    */
+  setTaskMacro: (taskId: string, macroKey: string) => Promise<Task | null>
   setTaskEpic: (taskId: string, epicKey: string) => Promise<Task | null>
+  createStoryUnderMacro: (projectId: string, macroKey: string, title: string) => Promise<string>
   createStoryUnderEpic: (projectId: string, epicKey: string, title: string) => Promise<string>
-  createEpic: (projectId: string, title: string, horizon?: EpicHorizon | '', fields?: Record<string, string>) => Promise<EpicMeta | null>
+  createMacro: (projectId: string, title: string, horizon?: MacroHorizon | '', fields?: Record<string, string>) => Promise<MacroMeta | null>
+  createEpic: (projectId: string, title: string, horizon?: MacroHorizon | '', fields?: Record<string, string>) => Promise<MacroMeta | null>
+  deleteMacro: (projectId: string, key: string) => Promise<boolean>
   deleteEpic: (projectId: string, key: string) => Promise<boolean>
-  migrateEpic: (sourceProjectId: string, epicKey: string, targetProjectId: string, migrateTasks: boolean) => Promise<{ success: boolean; epic?: EpicMeta; migratedTasks?: number; error?: string }>
+  migrateMacro: (sourceProjectId: string, macroKey: string, targetProjectId: string, migrateTasks: boolean) => Promise<{ success: boolean; macro?: MacroMeta; epic?: MacroMeta; migratedTasks?: number; error?: string }>
+  migrateEpic: (sourceProjectId: string, epicKey: string, targetProjectId: string, migrateTasks: boolean) => Promise<{ success: boolean; macro?: MacroMeta; epic?: MacroMeta; migratedTasks?: number; error?: string }>
   migrateTasks: (taskIds: string[], targetProjectId: string) => Promise<{ success: boolean; migratedCount?: number; error?: string }>
-  /** Champs que le tracker impose pour créer un épic sur ce projet. */
-  fetchEpicRequiredFields: (projectId: string) => Promise<EpicRequiredField[]>
-  /** Met la découpe d'épic en file d'activités. Retourne true si la file a accepté. */
+  /** Champs que le tracker impose pour créer une macro sur ce projet. */
+  fetchMacroRequiredFields: (projectId: string) => Promise<MacroRequiredField[]>
+  fetchEpicRequiredFields: (projectId: string) => Promise<MacroRequiredField[]>
+  /** Met la découpe de macro en file d'activités. Retourne true si la file a accepté. */
+  moveTasksToMacro: (projectId: string, taskIds: string[], targetMacroKey: string, newMacroTitle?: string, fields?: Record<string, string>) => Promise<boolean>
   moveTasksToEpic: (projectId: string, taskIds: string[], targetEpicKey: string, newEpicTitle?: string, fields?: Record<string, string>) => Promise<boolean>
   advanceTask: (taskId: string, auto?: boolean) => Promise<{ mode: string; skillId?: string; label?: string } | null>
   // Pas interactif en cours : la tâche dont la session TTY attend d'être clôturée.
@@ -1909,54 +1952,57 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  // Méta-épics : l'horizon est une décision produit, la description et la TODO
-  // du travail de cadrage. Rien de tout ça n'existe côté tracker pour un épic,
-  // donc TaskFlow le porte.
-  const fetchProjectEpics = async (projectId: string): Promise<EpicMeta[]> => {
+  // Méta-macros : l'horizon est une décision produit, le cadrage et la TODO.
+  const fetchProjectMacros = async (projectId: string): Promise<MacroMeta[]> => {
     try {
-      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics`)
-      if (!res.ok) return []
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/macros`)
+      if (!res.ok) {
+        // Fallback to epics route if needed
+        const fb = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics`)
+        if (!fb.ok) return []
+        return (await fb.json()) || []
+      }
       return (await res.json()) || []
     } catch {
       return []
     }
   }
+  const fetchProjectEpics = fetchProjectMacros
 
-  const saveEpicMeta = async (
+  const saveMacroMeta = async (
     projectId: string,
     key: string,
-    patch: { title?: string; horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[]; closed?: boolean }
-  ): Promise<EpicMeta | null> => {
+    patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }
+  ): Promise<MacroMeta | null> => {
     try {
-      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics`, {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/macros`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key, ...patch }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Enregistrement refusé')
-      const epic = data.epic || data
+      const macro = data.macro || data.epic || data
       if (patch.title) {
         setTasks(prev => prev.map(t => (t.parentKey === key || t.parentTitle === key) ? { ...t, parentTitle: patch.title } : t))
       }
-      return epic || null
+      return macro || null
     } catch (err: any) {
-      addToast({ type: 'error', title: 'Épic non enregistré', description: err.message })
+      addToast({ type: 'error', title: 'Macro non enregistrée', description: err.message })
       return null
     }
   }
+  const saveEpicMeta = saveMacroMeta
 
-  // Une ligne de TODO devient une story dans le tracker, sous son épic. La
-  // tâche est insérée localement par le serveur, donc un rafraîchissement suffit
-  // à la voir apparaître sur le board.
-  const createStoryFromEpicTodo = async (
+  // Une ligne de TODO devient une story dans le tracker, sous sa macro.
+  const createStoryFromMacroTodo = async (
     projectId: string,
-    epicKey: string,
+    macroKey: string,
     todoId: string
-  ): Promise<{ epic: EpicMeta | null; storyKey: string } | null> => {
+  ): Promise<{ macro: MacroMeta | null; epic: MacroMeta | null; storyKey: string } | null> => {
     try {
       const res = await fetch(
-        `${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/${encodeURIComponent(epicKey)}/story`,
+        `${API_BASE}/projects/${encodeURIComponent(projectId)}/macros/${encodeURIComponent(macroKey)}/story`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1968,15 +2014,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addToast({
         type: 'success',
         title: 'Story créée',
-        description: `${data.storyKey} rattachée à ${epicKey}`,
+        description: `${data.storyKey} rattachée à ${macroKey}`,
       })
       fetchTasks()
-      return { epic: data.epic || null, storyKey: data.storyKey || '' }
+      const m = data.macro || data.epic || null
+      return { macro: m, epic: m, storyKey: data.storyKey || '' }
     } catch (err: any) {
       addToast({ type: 'error', title: 'Story non créée', description: err.message })
       return null
     }
   }
+  const createStoryFromEpicTodo = createStoryFromMacroTodo
 
   // Rattrapage : les épics classés avant que le miroir en label existe, et ceux
   // dont la poussée a échoué, restent invisibles dans Jira jusqu'à ce qu'on les
@@ -2097,16 +2145,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  // Le rattachement part dans la file d'activités : l'écriture Jira prend une à
-  // deux secondes par ticket, et son échec doit rester lisible dans les
-  // activités plutôt que disparaître dans une requête expirée. Le tableau se
-  // rafraîchit tout seul quand l'activité se termine.
-  const setTaskEpic = async (taskId: string, epicKey: string): Promise<Task | null> => {
+  // Le rattachement part dans la file d'activités : l'écriture tracker prend une à
+  // deux secondes par ticket. Le tableau se rafraîchit tout seul quand l'activité se termine.
+  const setTaskMacro = async (taskId: string, macroKey: string): Promise<Task | null> => {
     try {
-      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/epic`, {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/macro`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ epicKey }),
+        body: JSON.stringify({ macroKey }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Rattachement refusé')
@@ -2117,7 +2163,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
       addToast({
         type: 'success',
-        title: epicKey ? `Rattachement à ${epicKey} en file` : 'Détachement en file',
+        title: macroKey ? `Rattachement à ${macroKey} en file` : 'Détachement en file',
         description: 'Suivi dans les activités.',
       })
       fetchActivities()
@@ -2127,11 +2173,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return null
     }
   }
+  const setTaskEpic = setTaskMacro
 
-  const createStoryUnderEpic = async (projectId: string, epicKey: string, title: string): Promise<string> => {
+  const createStoryUnderMacro = async (projectId: string, macroKey: string, title: string): Promise<string> => {
     try {
       const res = await fetch(
-        `${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/${encodeURIComponent(epicKey)}/story`,
+        `${API_BASE}/projects/${encodeURIComponent(projectId)}/macros/${encodeURIComponent(macroKey)}/story`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2140,7 +2187,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Création refusée')
-      addToast({ type: 'success', title: 'Story créée', description: `${data.storyKey} sous ${epicKey}` })
+      addToast({ type: 'success', title: 'Story créée', description: `${data.storyKey} sous ${macroKey}` })
       fetchTasks()
       return data.storyKey || ''
     } catch (err: any) {
@@ -2148,16 +2195,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return ''
     }
   }
+  const createStoryUnderEpic = createStoryUnderMacro
 
-  const migrateEpic = async (
+  const migrateMacro = async (
     sourceProjectId: string,
-    epicKey: string,
+    macroKey: string,
     targetProjectId: string,
     migrateTasks: boolean
-  ): Promise<{ success: boolean; epic?: EpicMeta; migratedTasks?: number; error?: string }> => {
+  ): Promise<{ success: boolean; macro?: MacroMeta; epic?: MacroMeta; migratedTasks?: number; error?: string }> => {
     try {
       const res = await fetch(
-        `${API_BASE}/projects/${encodeURIComponent(sourceProjectId)}/epics/${encodeURIComponent(epicKey)}/migrate`,
+        `${API_BASE}/projects/${encodeURIComponent(sourceProjectId)}/macros/${encodeURIComponent(macroKey)}/migrate`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2169,15 +2217,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addToast({
         type: 'success',
         title: 'Macro migrée',
-        description: `Macro ${epicKey} déplacée vers le projet cible (${data.migratedTasks || 0} tickets transférés)`
+        description: `Macro ${macroKey} déplacée vers le projet cible (${data.migratedTasks || 0} tickets transférés)`
       })
       await Promise.all([fetchTasks(), fetchProjects()])
-      return { success: true, epic: data.epic, migratedTasks: data.migratedTasks }
+      const m = data.macro || data.epic
+      return { success: true, macro: m, epic: m, migratedTasks: data.migratedTasks }
     } catch (err: any) {
       addToast({ type: 'error', title: 'Migration échouée', description: err.message })
       return { success: false, error: err.message }
     }
   }
+  const migrateEpic = migrateMacro
 
   const migrateTasks = async (
     taskIds: string[],
@@ -2204,35 +2254,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  const fetchEpicRequiredFields = async (projectId: string): Promise<EpicRequiredField[]> => {
+  const fetchMacroRequiredFields = async (projectId: string): Promise<MacroRequiredField[]> => {
     try {
-      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/fields`)
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/macros/fields`)
       if (!res.ok) return []
       const data = await res.json()
       if (!Array.isArray(data)) return []
-      // La forme est vérifiée plutôt que supposée : un serveur plus ancien laisse
-      // une autre route attraper cette URL et répond une liste d'épics, qui
-      // produirait un sélecteur bâti sur des données qui n'en sont pas.
       return data.filter(
-        (f: unknown): f is EpicRequiredField =>
+        (f: unknown): f is MacroRequiredField =>
           Boolean(f) &&
-          typeof (f as EpicRequiredField).id === 'string' &&
-          typeof (f as EpicRequiredField).name === 'string' &&
-          Array.isArray((f as EpicRequiredField).options)
+          typeof (f as MacroRequiredField).id === 'string' &&
+          typeof (f as MacroRequiredField).name === 'string' &&
+          Array.isArray((f as MacroRequiredField).options)
       )
     } catch {
       return []
     }
   }
+  const fetchEpicRequiredFields = fetchMacroRequiredFields
 
-  const createEpic = async (
+  const createMacro = async (
     projectId: string,
     title: string,
-    horizon?: EpicHorizon | '',
+    horizon?: MacroHorizon | '',
     fields?: Record<string, string>
-  ): Promise<EpicMeta | null> => {
+  ): Promise<MacroMeta | null> => {
     try {
-      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/create`, {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/macros/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, horizon: horizon || '', fields: fields || {} }),
@@ -2246,10 +2294,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return null
     }
   }
+  const createEpic = createMacro
 
-  const deleteEpic = async (projectId: string, key: string): Promise<boolean> => {
+  const deleteMacro = async (projectId: string, key: string): Promise<boolean> => {
     try {
-      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/${encodeURIComponent(key)}`, {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/macros/${encodeURIComponent(key)}`, {
         method: 'DELETE',
       })
       const data = await res.json().catch(() => ({}))
@@ -2262,43 +2311,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return false
     }
   }
+  const deleteEpic = deleteMacro
 
-  // Le geste de coupe : un lot de tickets part vers un autre épic, créé à la
+  // Le geste de coupe : un lot de tickets part vers une autre macro, créée à la
   // volée si on ne donne qu'un intitulé.
-  const moveTasksToEpic = async (
+  const moveTasksToMacro = async (
     projectId: string,
     taskIds: string[],
-    targetEpicKey: string,
-    newEpicTitle?: string,
+    targetMacroKey: string,
+    newMacroTitle?: string,
     fields?: Record<string, string>
   ): Promise<boolean> => {
     try {
-      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/move`, {
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/macros/move`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskIds, targetEpicKey, newEpicTitle: newEpicTitle || '', fields: fields || {} }),
+        body: JSON.stringify({ taskIds, targetEpicKey: targetMacroKey, targetMacroKey, newEpicTitle: newMacroTitle || '', newMacroTitle: newMacroTitle || '', fields: fields || {} }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Déplacement refusé')
-      // Une découpe touche autant de tickets que la sélection : elle s'exécute
-      // en une activité, dont les étapes disent ce qu'est devenu chaque ticket.
       addToast({
         type: 'success',
         title: `Découpe de ${data.count || taskIds.length} ticket(s) en file`,
-        description: targetEpicKey
-          ? `Vers ${targetEpicKey}. Suivi dans les activités.`
-          : 'Nouvel épic créé pendant le traitement. Suivi dans les activités.',
+        description: targetMacroKey
+          ? `Vers ${targetMacroKey}. Suivi dans les activités.`
+          : 'Nouvelle macro créée pendant le traitement. Suivi dans les activités.',
       })
       fetchActivities()
-      // Vers un épic existant, les parents sont déjà écrits en base : la liste
-      // doit le montrer sans attendre que la file ait tourné.
-      if (targetEpicKey) fetchTasks()
+      if (targetMacroKey) fetchTasks()
       return true
     } catch (err: any) {
       addToast({ type: 'error', title: 'Déplacement impossible', description: err.message })
       return false
     }
   }
+  const moveTasksToEpic = moveTasksToMacro
 
   // Un pas du workflow, ou la chaîne autonome. Le serveur décide du pas depuis
   // l'étape de la tâche : l'interface ne fait qu'ouvrir le terminal quand le pas
@@ -2540,10 +2587,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const importSkillFromRepo = (skillId: string) =>
     skillEditorAction(`/${encodeURIComponent(skillId)}/import`, { method: 'POST' }, 'Contenu du dépôt importé')
 
-  const pendingHorizonPushes = async (projectId: string): Promise<EpicMeta[]> => {
+  const pendingHorizonPushes = async (projectId: string): Promise<MacroMeta[]> => {
     try {
-      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/push-horizons`)
-      if (!res.ok) return []
+      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/macros/push-horizons`)
+      if (!res.ok) {
+        const fb = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/push-horizons`)
+        if (!fb.ok) return []
+        return (await fb.json()) || []
+      }
       return (await res.json()) || []
     } catch {
       return []
@@ -2552,7 +2603,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const pushPendingHorizons = async (projectId: string): Promise<boolean> => {
     try {
-      const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/push-horizons`, { method: 'POST' })
+      let res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/macros/push-horizons`, { method: 'POST' })
+      if (!res.ok) {
+        res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/push-horizons`, { method: 'POST' })
+      }
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Poussée refusée')
       addToast({
@@ -3461,18 +3515,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         importProjectBoardColumns,
         fetchProjectTrackerStatuses,
         fetchProjectIssueTypes,
+        fetchProjectMacros,
         fetchProjectEpics,
+        saveMacroMeta,
         saveEpicMeta,
+        createStoryFromMacroTodo,
         createStoryFromEpicTodo,
         pendingHorizonPushes,
         pushPendingHorizons,
+        setTaskMacro,
         setTaskEpic,
+        createStoryUnderMacro,
         createStoryUnderEpic,
+        createMacro,
         createEpic,
+        deleteMacro,
         deleteEpic,
+        migrateMacro,
         migrateEpic,
         migrateTasks,
+        fetchMacroRequiredFields,
         fetchEpicRequiredFields,
+        moveTasksToMacro,
         moveTasksToEpic,
         advanceTask,
         pendingInteractive,

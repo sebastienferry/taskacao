@@ -239,7 +239,8 @@ func (d *DB) ComputeDailyDigest(projectID string, dateRaw string, assignee strin
 		DueSoon:        []models.DigestTaskRef{},
 		AwaitingReview: []models.DigestTaskRef{},
 		RecentlyDone:   []models.DigestTaskRef{},
-		ByEpic:         []models.DigestEpicGroup{},
+		ByMacro:        []models.DigestMacroGroup{},
+		ByEpic:         []models.DigestMacroGroup{},
 	}
 
 	seenAssignees := map[string]bool{}
@@ -351,29 +352,34 @@ func (d *DB) ComputeDailyDigest(projectID string, dateRaw string, assignee strin
 	})
 
 	for key, openCount := range epicOpen {
-		digest.ByEpic = append(digest.ByEpic, models.DigestEpicGroup{
+		group := models.DigestMacroGroup{
 			ParentKey:   key,
 			ParentTitle: epicTitle[key],
 			OpenCount:   openCount,
 			DoneCount:   epicDone[key],
-		})
+		}
+		digest.ByMacro = append(digest.ByMacro, group)
+		digest.ByEpic = append(digest.ByEpic, group)
 	}
-	// Epics with no open work left are noise in a daily brief.
+	// Macros with no open work left are noise in a daily brief.
 	for key, doneCount := range epicDone {
 		if _, ok := epicOpen[key]; !ok {
-			digest.ByEpic = append(digest.ByEpic, models.DigestEpicGroup{
+			group := models.DigestMacroGroup{
 				ParentKey:   key,
 				ParentTitle: epicTitle[key],
 				DoneCount:   doneCount,
-			})
+			}
+			digest.ByMacro = append(digest.ByMacro, group)
+			digest.ByEpic = append(digest.ByEpic, group)
 		}
 	}
-	sort.SliceStable(digest.ByEpic, func(i, j int) bool {
-		if digest.ByEpic[i].OpenCount != digest.ByEpic[j].OpenCount {
-			return digest.ByEpic[i].OpenCount > digest.ByEpic[j].OpenCount
+	sort.SliceStable(digest.ByMacro, func(i, j int) bool {
+		if digest.ByMacro[i].OpenCount != digest.ByMacro[j].OpenCount {
+			return digest.ByMacro[i].OpenCount > digest.ByMacro[j].OpenCount
 		}
-		return digest.ByEpic[i].ParentKey < digest.ByEpic[j].ParentKey
+		return digest.ByMacro[i].ParentKey < digest.ByMacro[j].ParentKey
 	})
+	digest.ByEpic = digest.ByMacro
 
 	for a := range seenAssignees {
 		digest.Assignees = append(digest.Assignees, a)
@@ -524,20 +530,24 @@ func renderDigestMarkdown(dg *models.DailyDigest) string {
 	}
 	renderSection(&b, "✅ Terminées récemment", dg.RecentlyDone, doneEmpty)
 
-	b.WriteString("\n## 🗂 Charge par epic\n\n")
-	if len(dg.ByEpic) == 0 {
-		b.WriteString("Aucun epic rattaché aux tâches de ce projet.\n")
+	b.WriteString("\n## 🗂 Charge par macro\n\n")
+	macrosList := dg.ByMacro
+	if len(macrosList) == 0 {
+		macrosList = dg.ByEpic
+	}
+	if len(macrosList) == 0 {
+		b.WriteString("Aucune macro rattachée aux tâches de ce projet.\n")
 	} else {
-		b.WriteString("| Epic | Titre | Ouvertes | Terminées |\n|---|---|---:|---:|\n")
-		shown := dg.ByEpic
+		b.WriteString("| Macro | Titre | Ouvertes | Terminées |\n|---|---|---:|---:|\n")
+		shown := macrosList
 		if len(shown) > digestSectionCap {
 			shown = shown[:digestSectionCap]
 		}
 		for _, g := range shown {
 			b.WriteString(fmt.Sprintf("| %s | %s | %d | %d |\n", g.ParentKey, g.ParentTitle, g.OpenCount, g.DoneCount))
 		}
-		if len(dg.ByEpic) > len(shown) {
-			b.WriteString(fmt.Sprintf("\n*%d autres epics non détaillés ici.*\n", len(dg.ByEpic)-len(shown)))
+		if len(macrosList) > len(shown) {
+			b.WriteString(fmt.Sprintf("\n*%d autres macros non détaillées ici.*\n", len(macrosList)-len(shown)))
 		}
 	}
 

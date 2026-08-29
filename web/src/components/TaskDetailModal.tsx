@@ -37,13 +37,13 @@ import {
   Target,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import type { TeamMember, Status, Priority, DetailMode, SpecFramework, WorkflowStage, EpicMeta } from '../types'
+import type { TeamMember, Status, Priority, DetailMode, SpecFramework, WorkflowStage, MacroMeta } from '../types'
 import { WORKFLOW_ORDER } from '../lib/workflow'
 import { InteractiveTerminal } from './InteractiveTerminal'
 import { TaskComments } from './TaskComments'
 import { LookupField, type LookupOption } from './LookupField'
 import { MarkdownEditor } from './Markdown'
-import { sprintLookup, epicLookup, isProjectCompatible } from '../lib/lookups'
+import { sprintLookup, macroLookup, isProjectCompatible } from '../lib/lookups'
 
 export const TaskDetailModal: React.FC = () => {
   const {
@@ -75,28 +75,28 @@ export const TaskDetailModal: React.FC = () => {
     searchTrackerTeams,
     setTaskTeam,
     setTaskSprint,
-    setTaskEpic,
-    createEpic,
-    fetchProjectEpics,
+    setTaskMacro,
+    createMacro,
+    fetchProjectMacros,
     togglePin,
     isPinned,
     syncSingleTask,
     t,
   } = useApp()
 
-  const [projectEpics, setProjectEpics] = useState<EpicMeta[]>([])
+  const [projectMacros, setProjectMacros] = useState<MacroMeta[]>([])
 
   useEffect(() => {
     const projId = selectedTask?.projectId || projects[0]?.id
     if (projId) {
-      fetchProjectEpics(projId).then(epics => {
-        setProjectEpics(epics || [])
+      fetchProjectMacros(projId).then(macros => {
+        setProjectMacros(macros || [])
       }).catch(() => {})
     }
-  }, [selectedTask?.projectId, projects, fetchProjectEpics])
+  }, [selectedTask?.projectId, projects, fetchProjectMacros])
 
   const availableMacros = useMemo(() => {
-    const combined: EpicMeta[] = [...projectEpics]
+    const combined: MacroMeta[] = [...projectMacros]
     const currentProjId = selectedTask?.projectId || projects[0]?.id
     const distinctTaskMacros = tasks
       .filter(t => t.projectId === currentProjId && (t.parentKey || t.parentTitle))
@@ -117,9 +117,9 @@ export const TaskDetailModal: React.FC = () => {
       }
     }
     return combined
-  }, [projectEpics, selectedTask?.projectId, projects, tasks])
+  }, [projectMacros, selectedTask?.projectId, projects, tasks])
 
-  const searchMacro = useMemo(() => epicLookup(availableMacros), [availableMacros])
+  const searchMacro = useMemo(() => macroLookup(availableMacros), [availableMacros])
 
   // The task's own project drives the AI provider, the command template and the
   // skill overrides. It is NOT necessarily the project selected in the sidebar:
@@ -1582,17 +1582,17 @@ export const TaskDetailModal: React.FC = () => {
             onPick={async (option) => {
               if (!selectedTask) return
               if (!option?.id) {
-                await setTaskEpic(selectedTask.id, '')
+                await setTaskMacro(selectedTask.id, '')
                 return
               }
               if (option.id.startsWith('__create__:')) {
                 const title = option.id.replace('__create__:', '')
-                const created = await createEpic(selectedTask.projectId || projects[0]?.id || 'default', title)
+                const created = await createMacro(selectedTask.projectId || projects[0]?.id || 'default', title)
                 if (created) {
-                  await setTaskEpic(selectedTask.id, created.key)
+                  await setTaskMacro(selectedTask.id, created.key)
                 }
               } else {
-                await setTaskEpic(selectedTask.id, option.id)
+                await setTaskMacro(selectedTask.id, option.id)
               }
             }}
           />

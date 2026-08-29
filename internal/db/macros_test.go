@@ -24,7 +24,7 @@ func TestProjectCompatibility(t *testing.T) {
 	}
 }
 
-func TestMigrateEpicAndTasks(t *testing.T) {
+func TestMigrateMacroAndTasks(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 
@@ -53,19 +53,19 @@ func TestMigrateEpicAndTasks(t *testing.T) {
 		t.Fatalf("Failed to create project B: %v", err)
 	}
 
-	// Create an epic in project A
+	// Create a macro in project A
 	h := "now"
-	desc := "Epic in Project A"
-	todos := []models.EpicTodo{{ID: "t1", Text: "Do something", Done: false}}
-	epicA, err := database.SaveEpicMeta(p1.ID, "M-1", &h, &desc, &todos)
+	desc := "Macro in Project A"
+	todos := []models.MacroTodo{{ID: "t1", Text: "Do something", Done: false}}
+	macroA, err := database.SaveMacroMeta(p1.ID, "M-1", &h, &desc, &todos)
 	if err != nil {
-		t.Fatalf("Failed to save epic: %v", err)
+		t.Fatalf("Failed to save macro: %v", err)
 	}
-	if epicA.Key != "M-1" {
-		t.Fatalf("Expected epic key M-1, got %s", epicA.Key)
+	if macroA.Key != "M-1" {
+		t.Fatalf("Expected macro key M-1, got %s", macroA.Key)
 	}
 
-	// Create task under epic in project A
+	// Create task under macro in project A
 	taskA, err := database.CreateTask(models.CreateTaskRequest{
 		ProjectID: p1.ID,
 		Title:     "Task under M-1",
@@ -82,13 +82,13 @@ func TestMigrateEpicAndTasks(t *testing.T) {
 		t.Fatalf("Failed to update parent: %v", err)
 	}
 
-	// Migrate epic and attached tasks from p1 to p2
-	migratedEpic, taskCount, err := database.MigrateEpic(p1.ID, "M-1", p2.ID, true)
+	// Migrate macro and attached tasks from p1 to p2
+	migratedMacro, taskCount, err := database.MigrateMacro(p1.ID, "M-1", p2.ID, true)
 	if err != nil {
-		t.Fatalf("MigrateEpic failed: %v", err)
+		t.Fatalf("MigrateMacro failed: %v", err)
 	}
-	if migratedEpic.ProjectID != p2.ID {
-		t.Errorf("Expected migrated epic project ID %s, got %s", p2.ID, migratedEpic.ProjectID)
+	if migratedMacro.ProjectID != p2.ID {
+		t.Errorf("Expected migrated macro project ID %s, got %s", p2.ID, migratedMacro.ProjectID)
 	}
 	if taskCount != 1 {
 		t.Errorf("Expected 1 migrated task, got %d", taskCount)

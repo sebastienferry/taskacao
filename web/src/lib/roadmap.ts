@@ -43,6 +43,7 @@ export interface EpicRow {
   /** L'épic est terminé côté tracker : hors roadmap par défaut. */
   closed: boolean
 }
+export type MacroRow = EpicRow
 
 const PRIORITY_RANK: Record<Priority, number> = { urgent: 4, high: 3, medium: 2, low: 1 }
 
@@ -276,6 +277,9 @@ export const matchesEpicSearch = (row: EpicRow, query: string): boolean => {
     .toLowerCase()
   return terms.every(term => haystack.includes(term))
 }
+
+export const matchesMacroSearch = matchesEpicSearch
+export const buildMacroRows = buildEpicRows
 
 /**
  * Anomalies de placement d'un épic : les tickets non terminés qui n'ont aucun

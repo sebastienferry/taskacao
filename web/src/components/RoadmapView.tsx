@@ -30,33 +30,29 @@ import { MarkdownEditor } from './Markdown'
 import { SprintTimelineView } from './SprintTimelineView'
 import { sprintLookup, isProjectCompatible } from '../lib/lookups'
 import {
-  buildEpicRows,
+  buildMacroRows,
   placementIssues,
   placementOf,
-  matchesEpicSearch,
+  matchesMacroSearch,
   HORIZON_META,
   MATURITY_META,
   PLACEMENT_META,
   PRIORITY_META,
-  type EpicRow,
+  type MacroRow,
   type Horizon,
   type HorizonTab,
   tasksBySprintOrder,
   sprintLabelOf,
 } from '../lib/roadmap'
-import type { EpicHorizon, EpicMeta, EpicTodo } from '../types'
+import type { MacroHorizon, MacroMeta, MacroTodo } from '../types'
 
 /**
- * Roadmap des épics, d'après le design « Roadmap Epics.dc.html ».
+ * Roadmap des macros, d'après le design « Roadmap Epics.dc.html ».
  *
  * Deux métiers, pas un seul. NOW et NEXT sont opérationnels : on y vérifie que
- * les stories d'un épic sont bien dans un sprint — actif pour NOW, à venir pour
- * NEXT — et tout ce qui ne l'est pas doit sauter aux yeux. LATER est du design
- * d'épic : description et TODO se travaillent avant qu'il y ait des stories.
- *
- * La classification est une décision, pas une déduction : elle est stockée par
- * épic. Les données ne font que la suggérer, pour arbitrer en un clic les épics
- * qui n'ont pas encore été rangés.
+ * les stories d'une macro sont bien dans un sprint — actif pour NOW, à venir pour
+ * NEXT — et tout ce qui ne l'est pas doit sauter aux yeux. LATER est du cadrage
+ * de macro : description et TODO se travaillent avant qu'il y ait des stories.
  */
 
 const TABS: { id: HorizonTab; label: string; icon: React.ReactNode }[] = [
@@ -64,8 +60,6 @@ const TABS: { id: HorizonTab; label: string; icon: React.ReactNode }[] = [
   { id: 'next', label: 'NEXT', icon: <Route size={14} /> },
   { id: 'later', label: 'LATER', icon: <Compass size={14} /> },
   { id: 'unclassified', label: 'Non classés', icon: <HelpCircle size={14} /> },
-  // Sans onglet dédié, un épic masqué serait injoignable : on ne pourrait plus
-  // le reclasser.
   { id: 'hidden', label: 'Masqués', icon: <EyeOff size={14} /> },
 ]
 
@@ -76,14 +70,14 @@ export const RoadmapView: React.FC = () => {
     currentProject,
     setSelectedTask,
     setChatTask,
-    fetchProjectEpics,
-    saveEpicMeta,
-    createStoryFromEpicTodo,
-    setTaskEpic,
-    createStoryUnderEpic,
-    createEpic,
-    deleteEpic,
-    moveTasksToEpic,
+    fetchProjectMacros,
+    saveMacroMeta,
+    createStoryFromMacroTodo,
+    setTaskMacro,
+    createStoryUnderMacro,
+    createMacro,
+    deleteMacro,
+    moveTasksToMacro,
     setTaskSprint,
     setTasksSprint,
     assigneeFilter,
@@ -100,13 +94,13 @@ export const RoadmapView: React.FC = () => {
     setSearchQuery,
     activeJobCount,
     addToast,
-    migrateEpic,
+    migrateMacro,
   } = useApp()
 
-  const [roadmapMode, setRoadmapMode] = useState<'sprints' | 'epics'>('sprints')
+  const [roadmapMode, setRoadmapMode] = useState<'sprints' | 'macros'>('sprints')
   const [tab, setTab] = useState<HorizonTab>('now')
   const [displayMode, setDisplayMode] = useState<'framing' | 'execution'>('execution')
-  const [epicMeta, setEpicMeta] = useState<EpicMeta[]>([])
+  const [macroMeta, setMacroMeta] = useState<MacroMeta[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [onlyIssues, setOnlyIssues] = useState(false)
   const [showClosed, setShowClosed] = useState(false)
@@ -127,7 +121,7 @@ export const RoadmapView: React.FC = () => {
 
   const [showCreateMacroModal, setShowCreateMacroModal] = useState(false)
   const [createMacroTitle, setCreateMacroTitle] = useState('')
-  const [createMacroHorizon, setCreateMacroHorizon] = useState<EpicHorizon>('now')
+  const [createMacroHorizon, setCreateMacroHorizon] = useState<MacroHorizon>('now')
   const [createMacroProjectId, setCreateMacroProjectId] = useState<string>('')
 
   const [isEditingTitle, setIsEditingTitle] = useState(false)
@@ -153,7 +147,7 @@ export const RoadmapView: React.FC = () => {
   const [draggingCut, setDraggingCut] = useState(false)
   const rowRefs = useRef<(HTMLDivElement | null)[]>([])
   const [moveTarget, setMoveTarget] = useState('')
-  const [newEpicTitle, setNewEpicTitle] = useState('')
+  const [newMacroTitle, setNewMacroTitle] = useState('')
 
   // Largeur du panneau de droite. C'est là que le travail se fait (les tickets de
   // l'épic, la découpe), alors que la colonne de gauche n'a qu'à lister : la
@@ -246,18 +240,18 @@ export const RoadmapView: React.FC = () => {
 
   useEffect(() => {
     if (!currentProject?.id) {
-      setEpicMeta([])
+      setMacroMeta([])
       return
     }
-    fetchProjectEpics(currentProject.id).then(setEpicMeta)
-  }, [currentProject?.id, fetchProjectEpics, activeJobCount])
+    fetchProjectMacros(currentProject.id).then(setMacroMeta)
+  }, [currentProject?.id, fetchProjectMacros, activeJobCount])
 
-  const allRows = useMemo(() => buildEpicRows(tasks, currentProject, epicMeta), [tasks, currentProject, epicMeta])
+  const allRows = useMemo(() => buildMacroRows(tasks, currentProject, macroMeta), [tasks, currentProject, macroMeta])
 
   const rows = useMemo(() => {
     let list = allRows
     if (!showClosed) list = list.filter(r => !r.closed)
-    if (searchQuery.trim()) list = list.filter(r => matchesEpicSearch(r, searchQuery))
+    if (searchQuery.trim()) list = list.filter(r => matchesMacroSearch(r, searchQuery))
     return list
   }, [allRows, showClosed, searchQuery])
 
@@ -265,7 +259,7 @@ export const RoadmapView: React.FC = () => {
     const q = searchQuery.trim()
     if (!q) return 0
     return allRows.filter(r => {
-      if (!matchesEpicSearch(r, q)) return false
+      if (!matchesMacroSearch(r, q)) return false
       if (!showClosed && r.closed) return true
       return false
     }).length
@@ -297,9 +291,7 @@ export const RoadmapView: React.FC = () => {
     return list
   }, [rows, tab, displayMode, onlyIssues, horizonOfTab])
 
-  // Chercher un épic et rester devant un onglet vide n'aide personne : quand la
-  // recherche ne trouve rien ici mais trouve ailleurs, on va là où c'est. Sans
-  // recherche active, l'onglet reste celui que l'utilisateur a choisi.
+  // Chercher une macro et rester devant un onglet vide n'aide personne
   useEffect(() => {
     if (!searchQuery.trim() || visibleRows.length > 0) return
     const target = TABS.find(candidate =>
@@ -310,26 +302,19 @@ export const RoadmapView: React.FC = () => {
     if (target && target.id !== tab) setTab(target.id)
   }, [searchQuery, visibleRows.length, rows, tab])
 
+  const selected: MacroRow | null = visibleRows.find(r => r.key === selectedKey) || visibleRows[0] || null
 
-
-  const selected: EpicRow | null = visibleRows.find(r => r.key === selectedKey) || visibleRows[0] || null
-
-  // Les tickets de l'épic dans l'ordre chronologique de leur sprint : c'est cet
-  // ordre que la liste affiche et que le curseur de coupe découpe.
+  // Les tickets de la macro dans l'ordre chronologique de leur sprint
   const orderedOpen = useMemo(
     () => (selected ? tasksBySprintOrder(selected.open, currentProject) : []),
     [selected?.key, selected?.open, currentProject?.id, currentProject?.sprints]
   )
 
-  // Glissement du cran de coupe : on cherche la frontière de ligne la plus proche
-  // du pointeur, ce qui évite tout calcul de pas et supporte des lignes de
-  // hauteurs différentes.
+  // Glissement du cran de coupe
   useEffect(() => {
     if (!draggingCut) return
 
     const onMove = (e: PointerEvent) => {
-      // Bornée à la liste courante : le tableau de refs garde des entrées d'un
-      // épic précédent plus long, qui décaleraient la frontière trouvée.
       const rows = rowRefs.current.slice(0, orderedOpen.length).filter(Boolean) as HTMLDivElement[]
       if (rows.length === 0) return
 
@@ -344,7 +329,6 @@ export const RoadmapView: React.FC = () => {
         }
       })
 
-      // Sous la dernière ligne, la coupe n'a plus d'objet : on la relâche.
       const last = rows[rows.length - 1].getBoundingClientRect()
       if (e.clientY > last.bottom) {
         setCutAt(-1)
@@ -362,8 +346,6 @@ export const RoadmapView: React.FC = () => {
     }
   }, [draggingCut, orderedOpen.length])
 
-  // Les tickets à couper : ceux cochés à la main, ou ceux situés au delà du
-  // curseur. Les deux gestes alimentent la même action.
   const cutIds = useMemo(() => {
     const manual = Object.entries(checked).filter(([, on]) => on).map(([id]) => id)
     if (manual.length > 0) return manual
@@ -379,7 +361,7 @@ export const RoadmapView: React.FC = () => {
     setCutAt(-1)
     rowRefs.current = []
     setMoveTarget('')
-    setNewEpicTitle('')
+    setNewMacroTitle('')
   }, [selected?.key, selected?.meta?.description])
 
   const attachCandidates = useMemo(() => {
@@ -396,7 +378,7 @@ export const RoadmapView: React.FC = () => {
 
   const persist = async (
     key: string,
-    patch: { horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[] }
+    patch: { horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[] }
   ) => {
     if (!currentProject?.id) {
       addToast({
@@ -406,15 +388,15 @@ export const RoadmapView: React.FC = () => {
       })
       return
     }
-    const saved = await saveEpicMeta(currentProject.id, key, patch)
+    const saved = await saveMacroMeta(currentProject.id, key, patch)
     if (saved) {
-      setEpicMeta(prev => [...prev.filter(m => m.key !== saved.key), saved])
+      setMacroMeta(prev => [...prev.filter(m => m.key !== saved.key), saved])
     }
   }
 
-  const todosOf = (row: EpicRow | null): EpicTodo[] => row?.meta?.todos || []
+  const todosOf = (row: MacroRow | null): MacroTodo[] => row?.meta?.todos || []
 
-  const addTodo = (row: EpicRow) => {
+  const addTodo = (row: MacroRow) => {
     const text = newTodo.trim()
     if (!text) return
     setNewTodo('')
@@ -423,7 +405,7 @@ export const RoadmapView: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      {/* Sub-View Mode Switcher (Timeline Sprints vs Épics Horizons) */}
+      {/* Sub-View Mode Switcher (Timeline Sprints vs Macros Horizons) */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] shrink-0">
         <div className="flex items-center gap-1.5 bg-[var(--bg-tertiary)] p-0.5 rounded-lg border border-[var(--border-color)]">
           <button
@@ -440,9 +422,9 @@ export const RoadmapView: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => setRoadmapMode('epics')}
+            onClick={() => setRoadmapMode('macros')}
             className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
-              roadmapMode === 'epics'
+              roadmapMode === 'macros'
                 ? 'bg-[var(--accent-color)] text-white shadow-xs'
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
@@ -570,11 +552,11 @@ export const RoadmapView: React.FC = () => {
 
           <button
             type="button"
-            disabled={busyKey === 'epic'}
+            disabled={busyKey === 'macro'}
             onClick={() => {
               const defaultProjId = currentProject?.id || projects.find(p => p.isDefault)?.id || projects[0]?.id || ''
               setCreateMacroProjectId(defaultProjId)
-              setCreateMacroHorizon(tab === 'unclassified' || tab === 'hidden' ? 'now' : (tab as EpicHorizon))
+              setCreateMacroHorizon(tab === 'unclassified' || tab === 'hidden' ? 'now' : (tab as MacroHorizon))
               setCreateMacroTitle('')
               setShowCreateMacroModal(true)
             }}
@@ -734,7 +716,7 @@ export const RoadmapView: React.FC = () => {
 
                   {/* Classification : un clic, et la suggestion est mise en avant */}
                   <div className="flex items-center gap-1.5 mt-2">
-                    {(['now', 'next', 'later', 'hidden'] as EpicHorizon[]).map(h => {
+                    {(['now', 'next', 'later', 'hidden'] as MacroHorizon[]).map(h => {
                       const active = row.horizon === h
                       const isSuggestion = !row.horizon && row.suggested === h
                       return (
@@ -765,13 +747,12 @@ export const RoadmapView: React.FC = () => {
           )}
         </div>
 
-        {/* Poignée de répartition : la liste des épics n'a pas besoin de la moitié
-            de l'écran, le panneau de travail oui. */}
+        {/* Poignée de répartition */}
         {selected && (
           <div
             role="separator"
             aria-orientation="vertical"
-            aria-label="Répartition entre la liste des épics et le panneau"
+            aria-label="Répartition entre la liste des macros et le panneau"
             onPointerDown={startSplitDrag}
             onDoubleClick={() => setPanelWidth(720)}
             title="Glisser pour répartir, double-clic pour revenir à la largeur par défaut"
@@ -875,9 +856,9 @@ export const RoadmapView: React.FC = () => {
                       if (!confirm(`Supprimer la macro ${selected.key} (${selected.title}) ?\n(Les tickets associés seront détachés)`)) return
                       if (!currentProject?.id) return
                       setBusyKey('delete')
-                      const ok = await deleteEpic(currentProject.id, selected.key)
+                      const ok = await deleteMacro(currentProject.id, selected.key)
                       if (ok) {
-                        setEpicMeta(prev => prev.filter(m => m.key !== selected.key))
+                        setMacroMeta(prev => prev.filter(m => m.key !== selected.key))
                         setSelectedKey(null)
                       }
                       setBusyKey(null)
@@ -905,9 +886,9 @@ export const RoadmapView: React.FC = () => {
                       const targetProjId = currentProject?.id || projects.find(p => p.isDefault)?.id || projects[0]?.id
                       if (!targetProjId) return
                       setBusyKey('editTitle')
-                      const updated = await saveEpicMeta(targetProjId, selected.key, { title: nextTitle })
+                      const updated = await saveMacroMeta(targetProjId, selected.key, { title: nextTitle })
                       if (updated) {
-                        setEpicMeta(prev => prev.map(m => m.key === selected.key ? { ...m, title: nextTitle } : m))
+                        setMacroMeta(prev => prev.map(m => m.key === selected.key ? { ...m, title: nextTitle } : m))
                         addToast({ type: 'success', title: `Macro ${selected.key} renommée`, description: nextTitle })
                       }
                       setIsEditingTitle(false)
@@ -997,7 +978,7 @@ export const RoadmapView: React.FC = () => {
                           if (e.key === 'Enter' && newStory.trim() && currentProject?.id) {
                             e.preventDefault()
                             setBusyKey('new')
-                            await createStoryUnderEpic(currentProject.id, selected.key, newStory.trim())
+                            await createStoryUnderMacro(currentProject.id, selected.key, newStory.trim())
                             setNewStory('')
                             setBusyKey(null)
                           }
@@ -1010,7 +991,7 @@ export const RoadmapView: React.FC = () => {
                         disabled={!newStory.trim() || busyKey === 'new' || !currentProject?.id}
                         onClick={async () => {
                           setBusyKey('new')
-                          await createStoryUnderEpic(currentProject!.id, selected.key, newStory.trim())
+                          await createStoryUnderMacro(currentProject!.id, selected.key, newStory.trim())
                           setNewStory('')
                           setBusyKey(null)
                         }}
@@ -1037,7 +1018,7 @@ export const RoadmapView: React.FC = () => {
                               disabled={busyKey === candidate.id}
                               onClick={async () => {
                                 setBusyKey(candidate.id)
-                                await setTaskEpic(candidate.id, selected.key)
+                                await setTaskMacro(candidate.id, selected.key)
                                 setBusyKey(null)
                                 setAttachQuery('')
                               }}
@@ -1200,11 +1181,12 @@ export const RoadmapView: React.FC = () => {
                                 disabled={busyKey === task.id}
                                 onClick={async () => {
                                   setBusyKey(task.id)
-                                  await setTaskEpic(task.id, '')
+                                  await setTaskMacro(task.id, '')
                                   setBusyKey(null)
                                 }}
-                                className="p-0.5 rounded text-[var(--text-muted)] hover:text-rose-400 cursor-pointer shrink-0 disabled:opacity-50"
-                                title={`Retirer ${task.key} de la macro`}>
+                                className="p-1 rounded text-[var(--text-muted)] hover:text-rose-400 cursor-pointer disabled:opacity-50"
+                                title={`Retirer ${task.key} de la macro`}
+                              >
                                 <X size={12} />
                               </button>
                             </div>
@@ -1327,7 +1309,7 @@ export const RoadmapView: React.FC = () => {
                           disabled={!moveTarget || busyKey === 'move'}
                           onClick={async () => {
                             setBusyKey('move')
-                            await moveTasksToEpic(currentProject!.id, cutIds, moveTarget)
+                            await moveTasksToMacro(currentProject!.id, cutIds, moveTarget)
                             setChecked({})
                             setCutAt(-1)
                             setBusyKey(null)
@@ -1340,20 +1322,20 @@ export const RoadmapView: React.FC = () => {
                       <div className="flex items-center gap-2 mt-2">
                         <input
                           type="text"
-                          value={newEpicTitle}
-                          onChange={e => setNewEpicTitle(e.target.value)}
+                          value={newMacroTitle}
+                          onChange={e => setNewMacroTitle(e.target.value)}
                           placeholder="…ou vers une nouvelle macro : son titre"
                           className="flex-1 px-2 py-1.5 text-[11px] rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
                         />
                         <button
                           type="button"
-                          disabled={!newEpicTitle.trim() || busyKey === 'move'}
+                          disabled={!newMacroTitle.trim() || busyKey === 'move'}
                           onClick={async () => {
                             setBusyKey('move')
-                            await moveTasksToEpic(currentProject!.id, cutIds, '', newEpicTitle.trim())
+                            await moveTasksToMacro(currentProject!.id, cutIds, '', newMacroTitle.trim())
                             setChecked({})
                             setCutAt(-1)
-                            setNewEpicTitle('')
+                            setNewMacroTitle('')
                             setBusyKey(null)
                           }}
                           title="Créer la macro cible et y déplacer les tickets sélectionnés"
@@ -1451,10 +1433,10 @@ export const RoadmapView: React.FC = () => {
                               disabled={creatingTodoId === todo.id}
                               onClick={async () => {
                                 setCreatingTodoId(todo.id)
-                                const result = await createStoryFromEpicTodo(currentProject!.id, selected.key, todo.id)
+                                const result = await createStoryFromMacroTodo(currentProject!.id, selected.key, todo.id)
                                 setCreatingTodoId(null)
-                                if (result?.epic) {
-                                  setEpicMeta(prev => [...prev.filter(m => m.key !== result.epic!.key), result.epic!])
+                                if (result?.macro) {
+                                  setMacroMeta(prev => [...prev.filter(m => m.key !== result.macro!.key), result.macro!])
                                 }
                               }}
                               className="text-[9.5px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 cursor-pointer disabled:opacity-50"
@@ -1558,14 +1540,14 @@ export const RoadmapView: React.FC = () => {
                 e.preventDefault()
                 const targetProjId = createMacroProjectId || currentProject?.id || projects[0]?.id
                 if (!createMacroTitle.trim() || !targetProjId) return
-                setBusyKey('epic')
-                const created = await createEpic(
+                setBusyKey('macro')
+                const created = await createMacro(
                   targetProjId,
                   createMacroTitle.trim(),
                   createMacroHorizon
                 )
                 if (created) {
-                  setEpicMeta(prev => [...prev.filter(m => m.key !== created.key), created])
+                  setMacroMeta(prev => [...prev.filter(m => m.key !== created.key), created])
                   setSelectedKey(created.key)
                   setShowCreateMacroModal(false)
                 }
@@ -1594,7 +1576,7 @@ export const RoadmapView: React.FC = () => {
                   </label>
                   <select
                     value={createMacroHorizon}
-                    onChange={(e) => setCreateMacroHorizon(e.target.value as EpicHorizon)}
+                    onChange={(e) => setCreateMacroHorizon(e.target.value as MacroHorizon)}
                     className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] font-medium"
                   >
                     <option value="now">NOW (En cours)</option>
@@ -1633,10 +1615,10 @@ export const RoadmapView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={!createMacroTitle.trim() || busyKey === 'epic'}
+                  disabled={!createMacroTitle.trim() || busyKey === 'macro'}
                   className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white accent-bg rounded-xl cursor-pointer disabled:opacity-50"
                 >
-                  {busyKey === 'epic' ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                  {busyKey === 'macro' ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
                   Créer la macro
                 </button>
               </div>
@@ -1667,7 +1649,7 @@ export const RoadmapView: React.FC = () => {
                 e.preventDefault()
                 if (!migrateTargetProjectId || !currentProject?.id) return
                 setIsMigrating(true)
-                const res = await migrateEpic(
+                const res = await migrateMacro(
                   currentProject.id,
                   selected.key,
                   migrateTargetProjectId,

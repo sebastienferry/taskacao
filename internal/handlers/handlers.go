@@ -717,11 +717,11 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Sub-action: /api/projects/{id}/epics/{key}/migrate — migrate macro and attached tasks to another project
-	if len(parts) >= 4 && parts[1] == "epics" && parts[3] == "migrate" && r.Method == http.MethodPost {
-		epicKey, err := url.PathUnescape(parts[2])
+	// Sub-action: /api/projects/{id}/macros/{key}/migrate — migrate macro and attached tasks to another project
+	if len(parts) >= 4 && (parts[1] == "macros" || parts[1] == "epics") && parts[3] == "migrate" && r.Method == http.MethodPost {
+		macroKey, err := url.PathUnescape(parts[2])
 		if err != nil {
-			epicKey = parts[2]
+			macroKey = parts[2]
 		}
 		var req struct {
 			TargetProjectID string `json:"targetProjectId"`
@@ -731,12 +731,13 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
 			return
 		}
-		meta, count, err := h.db.MigrateEpic(id, epicKey, req.TargetProjectID, req.MigrateTasks)
+		meta, count, err := h.db.MigrateMacro(id, macroKey, req.TargetProjectID, req.MigrateTasks)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"macro":           meta,
 			"epic":            meta,
 			"migratedTasks":   count,
 			"targetProjectId": req.TargetProjectID,
@@ -744,12 +745,12 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sub-action: /api/projects/{id}/epics/{key}/story — turn a shaping todo into
-	// a real story under that epic
-	if len(parts) >= 4 && parts[1] == "epics" && parts[3] == "story" && r.Method == http.MethodPost {
-		epicKey, err := url.PathUnescape(parts[2])
+	// Sub-action: /api/projects/{id}/macros/{key}/story — turn a shaping todo into
+	// a real story under that macro
+	if len(parts) >= 4 && (parts[1] == "macros" || parts[1] == "epics") && parts[3] == "story" && r.Method == http.MethodPost {
+		macroKey, err := url.PathUnescape(parts[2])
 		if err != nil {
-			epicKey = parts[2]
+			macroKey = parts[2]
 		}
 		var req struct {
 			TodoID string `json:"todoId"`
@@ -759,10 +760,8 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
 			return
 		}
-		// Un titre libre crée une story à la volée ; un todoId transforme une
-		// ligne de cadrage. Les deux atterrissent sous le même épic.
 		if strings.TrimSpace(req.TodoID) == "" {
-			task, err := h.db.CreateStoryUnderEpic(id, epicKey, req.Title)
+			task, err := h.db.CreateStoryUnderMacro(id, macroKey, req.Title)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
@@ -770,57 +769,51 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]interface{}{"task": task, "storyKey": task.Key})
 			return
 		}
-		meta, key, err := h.db.CreateStoryFromEpicTodo(id, epicKey, req.TodoID)
+		meta, key, err := h.db.CreateStoryFromMacroTodo(id, macroKey, req.TodoID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"epic": meta, "storyKey": key})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"macro": meta, "epic": meta, "storyKey": key})
 		return
 	}
 
-	// Sub-action: /api/projects/{id}/epics — the epic metadata Taskacao owns:
+	// Sub-action: /api/projects/{id}/macros — the macro metadata TaskFlow owns:
 	// horizon (NOW / NEXT / LATER), shaping notes and todos.
-	if len(parts) >= 2 && parts[1] == "epics" {
+	if len(parts) >= 2 && (parts[1] == "macros" || parts[1] == "epics") {
 		switch r.Method {
 		case http.MethodGet:
-			epics, err := h.db.GetProjectEpics(id)
+			macros, err := h.db.GetProjectMacros(id)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			writeJSON(w, http.StatusOK, epics)
+			writeJSON(w, http.StatusOK, macros)
 			return
 		case http.MethodPost, http.MethodPut, http.MethodPatch:
 			var req struct {
-				Key         string             `json:"key"`
-				Title       *string            `json:"title,omitempty"`
-				Horizon     *string            `json:"horizon,omitempty"`
-				Description *string            `json:"description,omitempty"`
-				Todos       *[]models.EpicTodo `json:"todos,omitempty"`
-				Closed      *bool              `json:"closed,omitempty"`
+				Key         string              `json:"key"`
+				Title       *string             `json:"title,omitempty"`
+				Horizon     *string             `json:"horizon,omitempty"`
+				Description *string             `json:"description,omitempty"`
+				Todos       *[]models.MacroTodo `json:"todos,omitempty"`
+				Closed      *bool               `json:"closed,omitempty"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				writeError(w, http.StatusBadRequest, "Invalid epic payload: "+err.Error())
+				writeError(w, http.StatusBadRequest, "Invalid macro payload: "+err.Error())
 				return
 			}
-			// La clé peut venir du chemin (/epics/PROJ-123) ou du corps.
 			key := req.Key
 			if len(parts) >= 3 && parts[2] != "" {
 				if decoded, err := url.PathUnescape(parts[2]); err == nil {
 					key = decoded
 				}
 			}
-			saved, err := h.db.UpdateEpic(id, key, req.Title, req.Horizon, req.Description, req.Todos, req.Closed)
+			saved, err := h.db.UpdateMacro(id, key, req.Title, req.Horizon, req.Description, req.Todos, req.Closed)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			// L'horizon est reflété en label sur l'épic dans Jira, mais la
-			// poussée part en arrière-plan : faire attendre le clic rendait le
-			// triage pénible, une seconde et demie par épic. Un échec n'est pas
-			// perdu pour autant — l'épic réapparaît dans « à pousser vers Jira »,
-			// qui compare l'état local aux labels réels.
 			labelNote := ""
 			if req.Horizon != nil {
 				labelNote = "label roadmap en file d'attente"
@@ -832,10 +825,10 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 					Horizon:   saved.Horizon,
 				}); err != nil {
 					labelNote = "label roadmap non mis en file : " + err.Error()
-					log.Printf("[epics] label roadmap non mis en file pour %s: %v", key, err)
+					log.Printf("[macros] label roadmap non mis en file pour %s: %v", key, err)
 				}
 			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"epic": saved, "labelNote": labelNote})
+			writeJSON(w, http.StatusOK, map[string]interface{}{"macro": saved, "epic": saved, "labelNote": labelNote})
 			return
 		case http.MethodDelete:
 			key := ""
@@ -848,7 +841,7 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "Clé de macro obligatoire")
 				return
 			}
-			if err := h.db.DeleteEpic(id, key); err != nil {
+			if err := h.db.DeleteMacro(id, key); err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -1490,8 +1483,11 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/advance"):
 		subAction = "advance"
 		id = strings.TrimSuffix(rawPath, "/advance")
+	case strings.HasSuffix(rawPath, "/macro"):
+		subAction = "macro"
+		id = strings.TrimSuffix(rawPath, "/macro")
 	case strings.HasSuffix(rawPath, "/epic"):
-		subAction = "epic"
+		subAction = "macro"
 		id = strings.TrimSuffix(rawPath, "/epic")
 	case strings.HasSuffix(rawPath, "/team"):
 		subAction = "team"
@@ -1782,19 +1778,24 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sub-action: /api/tasks/{id}/epic — attach the ticket to an epic, or detach
-	// it with an empty key. Only REST can do it: acli's edit has no --parent.
-	if subAction == "epic" && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
+	// Sub-action: /api/tasks/{id}/macro (or /epic) — attach the ticket to a macro, or detach
+	// it with an empty key.
+	if (subAction == "macro" || subAction == "epic") && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
 		var req struct {
-			EpicKey string `json:"epicKey"`
+			MacroKey string `json:"macroKey"`
+			EpicKey  string `json:"epicKey"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
 			return
 		}
+		key := req.MacroKey
+		if key == "" {
+			key = req.EpicKey
+		}
 		// L'écriture part dans la file d'activités : la réponse porte l'activité
 		// à suivre, pas un ticket déjà modifié.
-		task, activity, err := h.db.SetTaskEpic(id, req.EpicKey)
+		task, activity, err := h.db.SetTaskMacro(id, key)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

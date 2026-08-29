@@ -855,14 +855,15 @@ func (d *DB) GetTaskFacets(projectID string) (*TaskFacets, error) {
 	}
 	_ = d.conn.QueryRow(noMacroQuery, scopeArgs...).Scan(&facets.NoMacroCount)
 
-	// Scan epics table for existing macros
-	epicQuery := "SELECT key, title FROM epics WHERE 1=1"
-	epicArgs := []interface{}{}
+	d.ensureMacrosTable()
+	// Scan macros table for existing macros
+	macroTableQuery := "SELECT key, title FROM macros WHERE 1=1"
+	macroArgs := []interface{}{}
 	if projectID != "" {
-		epicQuery += " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
-		epicArgs = append(epicArgs, projectID, projectID, projectID)
+		macroTableQuery += " AND (project_id = ? OR project_id = (SELECT slug FROM projects WHERE id = ?) OR project_id = (SELECT id FROM projects WHERE slug = ?))"
+		macroArgs = append(macroArgs, projectID, projectID, projectID)
 	}
-	if rows, err := d.conn.Query(epicQuery, epicArgs...); err == nil {
+	if rows, err := d.conn.Query(macroTableQuery, macroArgs...); err == nil {
 		for rows.Next() {
 			var k, t string
 			if err := rows.Scan(&k, &t); err == nil {

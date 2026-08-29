@@ -96,30 +96,33 @@ export interface TrackerSprint {
   endDate?: string
 }
 
-export type EpicHorizon = 'now' | 'next' | 'later' | 'hidden'
+export type MacroHorizon = 'now' | 'next' | 'later' | 'hidden'
+export type EpicHorizon = MacroHorizon
 
-export interface EpicTodo {
+export interface MacroTodo {
   id: string
   text: string
   done: boolean
   /** Ticket créé depuis cette ligne de TODO, s'il existe. */
   storyKey?: string
 }
+export type EpicTodo = MacroTodo
 
-export interface EpicMeta {
+export interface MacroMeta {
   projectId: string
   key: string
-  /** Titre et statut du ticket épic lui-même, lus par la synchro. */
+  /** Titre et statut du ticket macro lui-même, lus par la synchro. */
   title?: string
   status?: string
-  /** L'épic est dans une catégorie « terminé » côté tracker. */
+  /** La macro est dans une catégorie « terminé » côté tracker. */
   closed?: boolean
-  /** Chaîne vide = épic non encore classé. */
-  horizon: EpicHorizon | ''
+  /** Chaîne vide = macro non encore classée. */
+  horizon: MacroHorizon | ''
   description: string
-  todos: EpicTodo[]
+  todos: MacroTodo[]
   updatedAt: string
 }
+export type EpicMeta = MacroMeta
 
 export interface TrackerBoard {
   id: string
@@ -508,12 +511,13 @@ export interface DigestTaskRef {
   daysToDue?: number
 }
 
-export interface DigestEpicGroup {
+export interface DigestMacroGroup {
   parentKey: string
   parentTitle?: string
   openCount: number
   doneCount: number
 }
+export type DigestEpicGroup = DigestMacroGroup
 
 export interface DigestStats {
   totalOpen: number
@@ -571,7 +575,8 @@ export interface DailyDigest {
   dueSoon: DigestTaskRef[]
   awaitingReview: DigestTaskRef[]
   recentlyDone: DigestTaskRef[]
-  byEpic: DigestEpicGroup[]
+  byMacro: DigestMacroGroup[]
+  byEpic: DigestMacroGroup[]
   stats: DigestStats
   /** Markdown agenda produced by the project's AI agent (meetings). */
   agenda?: string
@@ -668,9 +673,10 @@ export interface SkillEditorEntry {
   repoPath?: string
 }
 
-/** Champ que le tracker impose à la création d'un épic, avec ses valeurs permises. */
-export interface EpicRequiredField {
+/** Champ que le tracker impose à la création d'une macro, avec ses valeurs permises. */
+export interface MacroRequiredField {
   id: string
   name: string
   options: { id: string; value: string }[]
 }
+export type EpicRequiredField = MacroRequiredField
