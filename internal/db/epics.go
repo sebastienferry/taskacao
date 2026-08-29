@@ -168,7 +168,53 @@ func parseEpicTodos(raw string) []models.EpicTodo {
 // provided are touched: classifying an epic must not wipe the shaping notes, and
 // editing the notes must not reset the horizon.
 func (d *DB) SaveEpicMeta(projectID string, key string, horizon *string, description *string, todos *[]models.EpicTodo) (*models.EpicMeta, error) {
-	return d.saveEpicMetaFull(projectID, key, horizon, description, todos, nil, nil, nil)
+	return d.UpdateEpic(projectID, key, nil, horizon, description, todos, nil)
+}
+
+// UpdateEpic updates macro metadata (title, horizon, description, todos, closed) locally and in GitHub milestone if applicable.
+func (d *DB) UpdateEpic(projectID string, key string, title *string, horizon *string, description *string, todos *[]models.EpicTodo, closed *bool) (*models.EpicMeta, error) {
+	projectID = strings.TrimSpace(projectID)
+	key = strings.TrimSpace(key)
+	if projectID == "" || key == "" {
+		return nil, fmt.Errorf("projet et clé d'épic obligatoires")
+	}
+
+	proj, _ := d.GetProjectByID(projectID)
+	if proj != nil && (proj.IssueTracker == "github" || proj.GithubRepo != "") {
+		var num int
+		if strings.HasPrefix(strings.ToUpper(key), "M-") {
+			_, _ = fmt.Sscanf(strings.ToUpper(key), "M-%d", &num)
+		}
+		if num > 0 {
+			state := ""
+			if closed != nil {
+				if *closed {
+					state = "closed"
+				} else {
+					state = "open"
+				}
+			}
+			newTitle := ""
+			if title != nil {
+				newTitle = strings.TrimSpace(*title)
+			}
+			newDesc := ""
+			if description != nil {
+				newDesc = *description
+			}
+			_ = d.runner.UpdateGithubMilestone(proj.GithubRepo, proj.RepoPath, num, newTitle, newDesc, state)
+		}
+	}
+
+	// If title changed, update any task parent_title in tasks table as well
+	if title != nil && strings.TrimSpace(*title) != "" {
+		newTitle := strings.TrimSpace(*title)
+		d.mu.Lock()
+		_, _ = d.conn.Exec("UPDATE tasks SET parent_title = ? WHERE project_id = ? AND (parent_key = ? OR parent_title = ?)", newTitle, projectID, key, key)
+		d.mu.Unlock()
+	}
+
+	return d.saveEpicMetaFull(projectID, key, horizon, description, todos, title, nil, closed)
 }
 
 // saveEpicMetaFull ajoute les champs que seule la synchro renseigne : titre,

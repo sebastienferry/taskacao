@@ -21,6 +21,7 @@ import {
   Search,
   Clock,
   Loader2,
+  Pencil,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField } from './LookupField'
@@ -111,6 +112,14 @@ export const RoadmapView: React.FC = () => {
   const [createMacroTitle, setCreateMacroTitle] = useState('')
   const [createMacroHorizon, setCreateMacroHorizon] = useState<EpicHorizon>('now')
   const [createMacroProjectId, setCreateMacroProjectId] = useState<string>('')
+
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
+  const [editingTitleValue, setEditingTitleValue] = useState('')
+
+  useEffect(() => {
+    setIsEditingTitle(false)
+    setEditingTitleValue('')
+  }, [selectedKey])
 
   // Le cadrage n'est enregistré qu'à la demande
   const [draftDescription, setDraftDescription] = useState('')
@@ -760,6 +769,18 @@ export const RoadmapView: React.FC = () => {
                   )}
                   <button
                     type="button"
+                    onClick={() => {
+                      setEditingTitleValue(selected.title)
+                      setIsEditingTitle(true)
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer border border-[var(--border-color)] hover:border-[var(--accent-color)]/50 transition-colors"
+                    title="Modifier le nom de la macro / milestone"
+                  >
+                    <Pencil size={12} />
+                    <span>Renommer</span>
+                  </button>
+                  <button
+                    type="button"
                     disabled={busyKey === 'delete'}
                     onClick={async () => {
                       if (!confirm(`Supprimer la macro ${selected.key} (${selected.title}) ?\n(Les tickets associés seront détachés)`)) return
@@ -780,7 +801,87 @@ export const RoadmapView: React.FC = () => {
                   </button>
                 </div>
               </div>
-              <h2 className="text-[16px] font-bold leading-[1.25]">{selected.title}</h2>
+
+              <div className="mt-1">
+                {isEditingTitle ? (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault()
+                      if (!selected) return
+                      const nextTitle = editingTitleValue.trim()
+                      if (!nextTitle || nextTitle === selected.title) {
+                        setIsEditingTitle(false)
+                        return
+                      }
+                      const targetProjId = currentProject?.id || projects.find(p => p.isDefault)?.id || projects[0]?.id
+                      if (!targetProjId) return
+                      setBusyKey('editTitle')
+                      const updated = await saveEpicMeta(targetProjId, selected.key, { title: nextTitle })
+                      if (updated) {
+                        setEpicMeta(prev => prev.map(m => m.key === selected.key ? { ...m, title: nextTitle } : m))
+                        addToast({ type: 'success', title: `Macro ${selected.key} renommée`, description: nextTitle })
+                      }
+                      setIsEditingTitle(false)
+                      setBusyKey(null)
+                    }}
+                    className="flex items-center gap-2"
+                  >
+                    <input
+                      type="text"
+                      autoFocus
+                      value={editingTitleValue}
+                      onChange={(e) => setEditingTitleValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setIsEditingTitle(false)
+                        }
+                      }}
+                      className="flex-1 px-2.5 py-1 text-sm font-bold rounded-xl bg-[var(--bg-primary)] border border-[var(--accent-color)] text-[var(--text-primary)] focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!editingTitleValue.trim() || busyKey === 'editTitle'}
+                      className="p-1.5 rounded-lg text-white accent-bg hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50"
+                      title="Enregistrer le nom"
+                    >
+                      {busyKey === 'editTitle' ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingTitle(false)}
+                      className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                      title="Annuler"
+                    >
+                      <X size={13} />
+                    </button>
+                  </form>
+                ) : (
+                  <div className="group flex items-center gap-2">
+                    <h2
+                      onClick={() => {
+                        setEditingTitleValue(selected.title)
+                        setIsEditingTitle(true)
+                      }}
+                      className="text-[16px] font-bold leading-[1.25] cursor-pointer hover:text-[var(--accent-color)] transition-colors"
+                      title="Cliquer pour modifier le nom du milestone"
+                    >
+                      {selected.title}
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingTitleValue(selected.title)
+                        setIsEditingTitle(true)
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-all cursor-pointer"
+                      title="Renommer la macro / milestone"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {selected.meta?.status && (
                 <div className="mt-1.5 text-[10px] font-mono" style={{ color: selected.closed ? 'var(--status-ok)' : 'var(--text-muted)' }}>
                   Macro {selected.closed ? 'terminée' : 'ouverte'} · {selected.meta.status}

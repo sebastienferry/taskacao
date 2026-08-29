@@ -1185,6 +1185,36 @@ func (r *Runner) DeleteGithubMilestone(repo string, repoPath string, milestoneNu
 	return nil
 }
 
+func (r *Runner) UpdateGithubMilestone(repo string, repoPath string, milestoneNumber int, title string, description string, state string) error {
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/milestones/%d", repo, milestoneNumber)
+	args := []string{"api", endpoint, "-X", "PATCH"}
+	if title != "" {
+		args = append(args, "-f", "title="+title)
+	}
+	if description != "" {
+		args = append(args, "-f", "description="+description)
+	}
+	if state != "" {
+		args = append(args, "-f", "state="+state)
+	}
+
+	output, err := r.runCommand(ctx, repoPath, ghPath, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update GitHub milestone: %w (output: %s)", err, output)
+	}
+	return nil
+}
+
 func (r *Runner) ListGithubMilestones(repo string, repoPath string) ([]GithubMilestoneItem, error) {
 	repo, repoPath = ResolveGithubRepo(repo, repoPath)
 

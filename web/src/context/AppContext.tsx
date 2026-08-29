@@ -199,7 +199,7 @@ interface AppContextType {
   /** Types de tickets que le tracker du projet expose, pour le réglage d'import. */
   fetchProjectIssueTypes: (projectId: string) => Promise<string[]>
   fetchProjectEpics: (projectId: string) => Promise<EpicMeta[]>
-  saveEpicMeta: (projectId: string, key: string, patch: { horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[] }) => Promise<EpicMeta | null>
+  saveEpicMeta: (projectId: string, key: string, patch: { title?: string; horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[]; closed?: boolean }) => Promise<EpicMeta | null>
   createStoryFromEpicTodo: (projectId: string, epicKey: string, todoId: string) => Promise<{ epic: EpicMeta | null; storyKey: string } | null>
   pendingHorizonPushes: (projectId: string) => Promise<EpicMeta[]>
   /** Met la poussée des labels d'horizon en file d'activités. Retourne true si la file a accepté. */
@@ -1906,7 +1906,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const saveEpicMeta = async (
     projectId: string,
     key: string,
-    patch: { horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[] }
+    patch: { title?: string; horizon?: EpicHorizon | ''; description?: string; todos?: EpicTodo[]; closed?: boolean }
   ): Promise<EpicMeta | null> => {
     try {
       const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics`, {
@@ -1916,10 +1916,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Enregistrement refusé')
-      // Pas de bandeau ici : la poussée du label part en arrière-plan et un
-      // message par clic rendrait le triage insupportable. Un échec se voit
-      // dans le compteur « à pousser vers Jira ».
-      return data.epic || null
+      const epic = data.epic || data
+      if (patch.title) {
+        setTasks(prev => prev.map(t => (t.parentKey === key || t.parentTitle === key) ? { ...t, parentTitle: patch.title } : t))
+      }
+      return epic || null
     } catch (err: any) {
       addToast({ type: 'error', title: 'Épic non enregistré', description: err.message })
       return null
