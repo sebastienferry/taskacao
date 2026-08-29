@@ -217,6 +217,8 @@ interface AppContextType {
   createStoryUnderEpic: (projectId: string, epicKey: string, title: string) => Promise<string>
   createEpic: (projectId: string, title: string, horizon?: EpicHorizon | '', fields?: Record<string, string>) => Promise<EpicMeta | null>
   deleteEpic: (projectId: string, key: string) => Promise<boolean>
+  migrateEpic: (sourceProjectId: string, epicKey: string, targetProjectId: string, migrateTasks: boolean) => Promise<{ success: boolean; epic?: EpicMeta; migratedTasks?: number; error?: string }>
+  migrateTasks: (taskIds: string[], targetProjectId: string) => Promise<{ success: boolean; migratedCount?: number; error?: string }>
   /** Champs que le tracker impose pour créer un épic sur ce projet. */
   fetchEpicRequiredFields: (projectId: string) => Promise<EpicRequiredField[]>
   /** Met la découpe d'épic en file d'activités. Retourne true si la file a accepté. */
@@ -2147,6 +2149,61 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
+  const migrateEpic = async (
+    sourceProjectId: string,
+    epicKey: string,
+    targetProjectId: string,
+    migrateTasks: boolean
+  ): Promise<{ success: boolean; epic?: EpicMeta; migratedTasks?: number; error?: string }> => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/projects/${encodeURIComponent(sourceProjectId)}/epics/${encodeURIComponent(epicKey)}/migrate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetProjectId, migrateTasks }),
+        }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Échec de la migration de la macro')
+      addToast({
+        type: 'success',
+        title: 'Macro migrée',
+        description: `Macro ${epicKey} déplacée vers le projet cible (${data.migratedTasks || 0} tickets transférés)`
+      })
+      await Promise.all([fetchTasks(), fetchProjects()])
+      return { success: true, epic: data.epic, migratedTasks: data.migratedTasks }
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Migration échouée', description: err.message })
+      return { success: false, error: err.message }
+    }
+  }
+
+  const migrateTasks = async (
+    taskIds: string[],
+    targetProjectId: string
+  ): Promise<{ success: boolean; migratedCount?: number; error?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/migrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskIds, targetProjectId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Échec de la migration des tickets')
+      addToast({
+        type: 'success',
+        title: 'Tickets migrés',
+        description: `${data.migratedCount || 0} ticket(s) déplacé(s) vers le nouveau projet`
+      })
+      await Promise.all([fetchTasks(), fetchProjects()])
+      return { success: true, migratedCount: data.migratedCount }
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Migration échouée', description: err.message })
+      return { success: false, error: err.message }
+    }
+  }
+
   const fetchEpicRequiredFields = async (projectId: string): Promise<EpicRequiredField[]> => {
     try {
       const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/epics/fields`)
@@ -3413,6 +3470,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         createStoryUnderEpic,
         createEpic,
         deleteEpic,
+        migrateEpic,
+        migrateTasks,
         fetchEpicRequiredFields,
         moveTasksToEpic,
         advanceTask,

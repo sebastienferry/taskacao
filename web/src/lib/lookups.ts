@@ -1,5 +1,18 @@
 import type { LookupOption } from '../components/LookupField'
-import type { EpicMeta, TrackerSprint } from '../types'
+import type { EpicMeta, TrackerSprint, Project } from '../types'
+
+export const isProjectCompatible = (
+  p1: Project | null | undefined,
+  p2: Project | null | undefined
+): boolean => {
+  if (!p1 || !p2) return false
+  if (p1.id === p2.id) return false
+  const t1 = (p1.issueTracker || 'local').toLowerCase().trim()
+  const t2 = (p2.issueTracker || 'local').toLowerCase().trim()
+  if (t1 === t2 || t1 === 'local' || t2 === 'local') return true
+  if ((p1.githubRepo || t1 === 'github') && (p2.githubRepo || t2 === 'github')) return true
+  return false
+}
 
 /**
  * Sources de recherche pour les champs de type lookup.

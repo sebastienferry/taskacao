@@ -22,12 +22,13 @@ import {
   Clock,
   Loader2,
   Pencil,
+  ArrowRightLeft,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField } from './LookupField'
 import { MarkdownEditor } from './Markdown'
 import { SprintTimelineView } from './SprintTimelineView'
-import { sprintLookup } from '../lib/lookups'
+import { sprintLookup, isProjectCompatible } from '../lib/lookups'
 import {
   buildEpicRows,
   placementIssues,
@@ -99,6 +100,7 @@ export const RoadmapView: React.FC = () => {
     setSearchQuery,
     activeJobCount,
     addToast,
+    migrateEpic,
   } = useApp()
 
   const [roadmapMode, setRoadmapMode] = useState<'sprints' | 'epics'>('sprints')
@@ -108,6 +110,11 @@ export const RoadmapView: React.FC = () => {
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [onlyIssues, setOnlyIssues] = useState(false)
   const [showClosed, setShowClosed] = useState(false)
+
+  const [showMigrateModal, setShowMigrateModal] = useState(false)
+  const [migrateTargetProjectId, setMigrateTargetProjectId] = useState('')
+  const [migrateIncludeTasks, setMigrateIncludeTasks] = useState(true)
+  const [isMigrating, setIsMigrating] = useState(false)
 
   // Synchronisation du mode par défaut selon l'horizon sélectionné
   useEffect(() => {
@@ -845,6 +852,21 @@ export const RoadmapView: React.FC = () => {
                   >
                     <Pencil size={12} />
                     <span>Renommer</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyKey === 'migrate' || isMigrating}
+                    onClick={() => {
+                      const compatible = projects.filter(p => isProjectCompatible(currentProject, p))
+                      setMigrateTargetProjectId(compatible[0]?.id || '')
+                      setMigrateIncludeTasks(true)
+                      setShowMigrateModal(true)
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer border border-[var(--border-color)] hover:border-[var(--accent-color)]/50 transition-colors"
+                    title="Migrer cette macro et ses tickets vers un autre projet compatible"
+                  >
+                    <ArrowRightLeft size={12} />
+                    <span>Migrer</span>
                   </button>
                   <button
                     type="button"
@@ -1616,6 +1638,111 @@ export const RoadmapView: React.FC = () => {
                 >
                   {busyKey === 'epic' ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
                   Créer la macro
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showMigrateModal && selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-color)]">
+              <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
+                <ArrowRightLeft size={16} className="text-[var(--accent-color)]" />
+                <span>Migrer la Macro ({selected.key})</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMigrateModal(false)}
+                className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault()
+                if (!migrateTargetProjectId || !currentProject?.id) return
+                setIsMigrating(true)
+                const res = await migrateEpic(
+                  currentProject.id,
+                  selected.key,
+                  migrateTargetProjectId,
+                  migrateIncludeTasks
+                )
+                setIsMigrating(false)
+                if (res.success) {
+                  setShowMigrateModal(false)
+                  setSelectedKey(null)
+                }
+              }}
+              className="p-5 space-y-4"
+            >
+              <div>
+                <div className="text-xs text-[var(--text-muted)] mb-1 font-medium">Macro à déplacer :</div>
+                <div className="p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
+                  <div className="text-xs font-bold text-[var(--text-primary)]">{selected.title}</div>
+                  <div className="text-[11px] font-mono text-[var(--text-muted)] mt-0.5">
+                    Projet actuel : {currentProject?.name} · {selected.tasks.length} ticket(s) associé(s)
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                  Projet de destination (compatible)
+                </label>
+                {projects.filter(p => isProjectCompatible(currentProject, p)).length > 0 ? (
+                  <select
+                    value={migrateTargetProjectId}
+                    onChange={(e) => setMigrateTargetProjectId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] font-medium"
+                  >
+                    {projects.filter(p => isProjectCompatible(currentProject, p)).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.issueTracker || 'local'}{p.githubRepo ? ` · ${p.githubRepo}` : ''})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+                    Aucun autre projet compatible trouvé (trackers compatibles requis).
+                  </div>
+                )}
+              </div>
+
+              {selected.tasks.length > 0 && (
+                <label className="flex items-center gap-2.5 p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={migrateIncludeTasks}
+                    onChange={(e) => setMigrateIncludeTasks(e.target.checked)}
+                    className="rounded accent-[var(--accent-color)]"
+                  />
+                  <span className="text-xs text-[var(--text-primary)] font-medium">
+                    Transférer aussi les <strong>{selected.tasks.length} ticket(s)</strong> rattaché(s) à cette macro
+                  </span>
+                </label>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMigrateModal(false)}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={!migrateTargetProjectId || isMigrating}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white accent-bg rounded-xl cursor-pointer disabled:opacity-50"
+                >
+                  {isMigrating ? <Loader2 size={13} className="animate-spin" /> : <ArrowRightLeft size={13} />}
+                  <span>Confirmer la migration</span>
                 </button>
               </div>
             </form>

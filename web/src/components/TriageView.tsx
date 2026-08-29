@@ -51,6 +51,8 @@ export const TriageView: React.FC = () => {
     toggleHideDone,
     parentFilter,
     setParentFilter,
+    projects,
+    migrateTasks,
   } = useApp()
 
   const [macros, setMacros] = useState<EpicMeta[]>([])
@@ -65,6 +67,7 @@ export const TriageView: React.FC = () => {
   const [batchSprint, setBatchSprint] = useState<{ id: string; name: string }>({ id: '', name: '' })
   const [batchTeam, setBatchTeam] = useState<{ id: string; name: string }>({ id: '', name: '' })
   const [batchMacro, setBatchMacro] = useState('')
+  const [batchProjectId, setBatchProjectId] = useState('')
 
   useEffect(() => {
     if (!currentProject?.id) {
@@ -428,6 +431,41 @@ export const TriageView: React.FC = () => {
               {batchBusy === 'team' ? '…' : 'OK'}
             </button>
           </div>
+
+          {/* Quick Project Migration */}
+          {projects.length > 1 && (
+            <div className="flex items-center gap-1">
+              <select
+                value={batchProjectId}
+                onChange={(e) => setBatchProjectId(e.target.value)}
+                className="px-2 py-1.5 text-xs rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] font-medium max-w-[170px]"
+              >
+                <option value="">Déplacer projet…</option>
+                {projects
+                  .filter(p => p.id !== currentProject?.id)
+                  .map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.issueTracker || 'local'})
+                    </option>
+                  ))}
+              </select>
+              <button
+                type="button"
+                disabled={!batchProjectId || batchBusy === 'project'}
+                onClick={() =>
+                  runBatch('project', async () => {
+                    const res = await migrateTasks(selectedIds, batchProjectId)
+                    if (res.success) setChecked({})
+                    return res.success
+                  })
+                }
+                className="px-2 py-1 rounded-lg text-xs font-bold cursor-pointer disabled:opacity-40 text-[var(--text-primary)] bg-[var(--bg-primary)] border border-[var(--border-color)] shrink-0 hover:bg-[var(--bg-tertiary)]"
+                title="Déplacer les tickets sélectionnés vers ce projet"
+              >
+                {batchBusy === 'project' ? '…' : 'OK'}
+              </button>
+            </div>
+          )}
 
           <button
             type="button"

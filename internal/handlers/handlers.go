@@ -717,6 +717,33 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Sub-action: /api/projects/{id}/epics/{key}/migrate — migrate macro and attached tasks to another project
+	if len(parts) >= 4 && parts[1] == "epics" && parts[3] == "migrate" && r.Method == http.MethodPost {
+		epicKey, err := url.PathUnescape(parts[2])
+		if err != nil {
+			epicKey = parts[2]
+		}
+		var req struct {
+			TargetProjectID string `json:"targetProjectId"`
+			MigrateTasks    bool   `json:"migrateTasks"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		meta, count, err := h.db.MigrateEpic(id, epicKey, req.TargetProjectID, req.MigrateTasks)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"epic":            meta,
+			"migratedTasks":   count,
+			"targetProjectId": req.TargetProjectID,
+		})
+		return
+	}
+
 	// Sub-action: /api/projects/{id}/epics/{key}/story — turn a shaping todo into
 	// a real story under that epic
 	if len(parts) >= 4 && parts[1] == "epics" && parts[3] == "story" && r.Method == http.MethodPost {
@@ -1168,6 +1195,27 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/tasks/migrate" && r.Method == http.MethodPost {
+		var req struct {
+			TaskIDs         []string `json:"taskIds"`
+			TargetProjectID string   `json:"targetProjectId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		count, err := h.db.MigrateTasks(req.TaskIDs, req.TargetProjectID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"migratedCount":   count,
+			"targetProjectId": req.TargetProjectID,
+		})
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		q := r.URL.Query().Get("q")
@@ -1427,6 +1475,9 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/pin"):
 		subAction = "pin"
 		id = strings.TrimSuffix(rawPath, "/pin")
+	case strings.HasSuffix(rawPath, "/migrate"):
+		subAction = "migrate"
+		id = strings.TrimSuffix(rawPath, "/migrate")
 	case strings.HasSuffix(rawPath, "/tty-agent"):
 		subAction = "tty-agent"
 		id = strings.TrimSuffix(rawPath, "/tty-agent")
@@ -1896,6 +1947,27 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"message": "Synchronisation unitaire effectuée avec succès",
 			"task":    task,
+		})
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/migrate — migrate task to another compatible project
+	if subAction == "migrate" && r.Method == http.MethodPost {
+		var req struct {
+			TargetProjectID string `json:"targetProjectId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid payload: "+err.Error())
+			return
+		}
+		count, err := h.db.MigrateTasks([]string{id}, req.TargetProjectID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"migratedCount":   count,
+			"targetProjectId": req.TargetProjectID,
 		})
 		return
 	}

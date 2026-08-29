@@ -1279,6 +1279,33 @@ func (r *Runner) SetGithubIssueMilestone(repo string, repoPath string, issueNumb
 	return nil
 }
 
+func (r *Runner) TransferGithubIssue(sourceRepo string, sourceRepoPath string, issueNumber int, targetRepo string, targetRepoPath string) (int, string, error) {
+	sourceRepo, sourceRepoPath = ResolveGithubRepo(sourceRepo, sourceRepoPath)
+	targetRepo, targetRepoPath = ResolveGithubRepo(targetRepo, targetRepoPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
+	}
+
+	output, err := r.runCommand(ctx, sourceRepoPath, ghPath, "issue", "transfer", fmt.Sprintf("%d", issueNumber), targetRepo, "-R", sourceRepo)
+	if err != nil {
+		return 0, "", fmt.Errorf("erreur transfert issue GitHub #%d vers %s: %w (output: %s)", issueNumber, targetRepo, err, output)
+	}
+
+	newUrl := strings.TrimSpace(output)
+	newNum := issueNumber
+	if idx := strings.LastIndex(newUrl, "/"); idx != -1 {
+		if n, parseErr := strconv.Atoi(strings.TrimSpace(newUrl[idx+1:])); parseErr == nil && n > 0 {
+			newNum = n
+		}
+	}
+	return newNum, newUrl, nil
+}
+
 // -------------------------------------------------------------
 // JIRA CLI (acli) INTEGRATION
 // -------------------------------------------------------------

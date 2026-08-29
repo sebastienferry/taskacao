@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -657,4 +658,297 @@ func (d *DB) appendActivityStep(activityID string, step string) {
 		return
 	}
 	_, _ = d.conn.Exec("UPDATE task_activities SET steps = ? WHERE id = ?", string(payload), activityID)
+}
+
+// IsProjectCompatible checks whether two projects can share tasks and macros.
+func IsProjectCompatible(p1, p2 *models.Project) bool {
+	if p1 == nil || p2 == nil {
+		return false
+	}
+	t1 := strings.ToLower(strings.TrimSpace(p1.IssueTracker))
+	t2 := strings.ToLower(strings.TrimSpace(p2.IssueTracker))
+	if t1 == "" {
+		t1 = "local"
+	}
+	if t2 == "" {
+		t2 = "local"
+	}
+	// Same tracker type, or either is local
+	if t1 == t2 || t1 == "local" || t2 == "local" {
+		return true
+	}
+	// Both have github configured
+	if (p1.GithubRepo != "" || t1 == "github") && (p2.GithubRepo != "" || t2 == "github") {
+		return true
+	}
+	return false
+}
+
+// MigrateEpic moves a macro and optionally its attached tasks from one project to another compatible project.
+func (d *DB) MigrateEpic(sourceProjectID string, epicKey string, targetProjectID string, migrateTasks bool) (*models.EpicMeta, int, error) {
+	sourceProjectID = strings.TrimSpace(sourceProjectID)
+	epicKey = strings.TrimSpace(epicKey)
+	targetProjectID = strings.TrimSpace(targetProjectID)
+
+	if sourceProjectID == "" || epicKey == "" || targetProjectID == "" {
+		return nil, 0, fmt.Errorf("projet source, clé de macro et projet cible obligatoires")
+	}
+	if sourceProjectID == targetProjectID {
+		return nil, 0, fmt.Errorf("le projet cible doit être différent du projet source")
+	}
+
+	sourceProj, err := d.GetProjectByID(sourceProjectID)
+	if err != nil || sourceProj == nil {
+		return nil, 0, fmt.Errorf("projet source non trouvé")
+	}
+	targetProj, err := d.GetProjectByID(targetProjectID)
+	if err != nil || targetProj == nil {
+		return nil, 0, fmt.Errorf("projet cible non trouvé")
+	}
+
+	if !IsProjectCompatible(sourceProj, targetProj) {
+		return nil, 0, fmt.Errorf("les projets %s et %s ne sont pas compatibles (trackers différents)", sourceProj.Name, targetProj.Name)
+	}
+
+	d.mu.Lock()
+	d.ensureEpicsTable()
+	d.mu.Unlock()
+
+	// 1. Read existing epic data from source project
+	var horizon, description, todosJSON, title, status string
+	var closed int
+	d.mu.RLock()
+	err = d.conn.QueryRow(`
+		SELECT horizon, description, todos, title, status, closed
+		FROM epics
+		WHERE project_id = ? AND key = ?
+	`, sourceProjectID, epicKey).Scan(&horizon, &description, &todosJSON, &title, &status, &closed)
+	d.mu.RUnlock()
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			title = epicKey
+		} else {
+			return nil, 0, err
+		}
+	}
+	if title == "" {
+		title = epicKey
+	}
+
+	targetEpicKey := epicKey
+
+	// 2. Handle GitHub milestones migration if target is GitHub
+	if targetProj.IssueTracker == "github" || targetProj.GithubRepo != "" {
+		targetMilestones, _ := d.runner.ListGithubMilestones(targetProj.GithubRepo, targetProj.RepoPath)
+		var existingNum int
+		for _, m := range targetMilestones {
+			if strings.EqualFold(strings.TrimSpace(m.Title), strings.TrimSpace(title)) {
+				existingNum = m.Number
+				break
+			}
+		}
+		if existingNum > 0 {
+			targetEpicKey = fmt.Sprintf("M-%d", existingNum)
+		} else {
+			newNum, createErr := d.runner.CreateGithubMilestone(targetProj.GithubRepo, targetProj.RepoPath, title, description)
+			if createErr == nil && newNum > 0 {
+				targetEpicKey = fmt.Sprintf("M-%d", newNum)
+			}
+		}
+	}
+
+	// 3. Insert or update epic in target project
+	d.mu.Lock()
+	_, err = d.conn.Exec(`
+		INSERT INTO epics (project_id, key, horizon, description, todos, title, status, closed, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(project_id, key) DO UPDATE SET
+			horizon = excluded.horizon,
+			description = excluded.description,
+			todos = excluded.todos,
+			title = excluded.title,
+			status = excluded.status,
+			closed = excluded.closed,
+			updated_at = CURRENT_TIMESTAMP
+	`, targetProjectID, targetEpicKey, horizon, description, todosJSON, title, status, closed)
+
+	// Delete from source project
+	_, _ = d.conn.Exec("DELETE FROM epics WHERE project_id = ? AND key = ?", sourceProjectID, epicKey)
+	d.mu.Unlock()
+
+	if err != nil {
+		return nil, 0, fmt.Errorf("erreur enregistrement macro cible: %w", err)
+	}
+
+	// 4. Migrate tasks if requested
+	migratedTasksCount := 0
+	if migrateTasks {
+		d.mu.RLock()
+		rows, err := d.conn.Query(`
+			SELECT id, key, title, source, external_url
+			FROM tasks
+			WHERE project_id = ? AND (parent_key = ? OR parent_title = ?)
+		`, sourceProjectID, epicKey, title)
+		d.mu.RUnlock()
+
+		if err == nil {
+			type taskToMigrate struct {
+				id          string
+				key         string
+				title       string
+				source      sql.NullString
+				externalUrl sql.NullString
+			}
+			var tasksList []taskToMigrate
+			for rows.Next() {
+				var t taskToMigrate
+				if scanErr := rows.Scan(&t.id, &t.key, &t.title, &t.source, &t.externalUrl); scanErr == nil {
+					tasksList = append(tasksList, t)
+				}
+			}
+			rows.Close()
+
+			for _, t := range tasksList {
+				newID := t.id
+				newKey := t.key
+				newExternalUrl := t.externalUrl.String
+
+				if (sourceProj.IssueTracker == "github" || sourceProj.GithubRepo != "") &&
+					(targetProj.IssueTracker == "github" || targetProj.GithubRepo != "") &&
+					sourceProj.GithubRepo != "" && targetProj.GithubRepo != "" &&
+					sourceProj.GithubRepo != targetProj.GithubRepo {
+
+					var issueNum int
+					_, _ = fmt.Sscanf(strings.TrimPrefix(t.key, "#"), "%d", &issueNum)
+					if issueNum > 0 {
+						num, u, transferErr := d.runner.TransferGithubIssue(sourceProj.GithubRepo, sourceProj.RepoPath, issueNum, targetProj.GithubRepo, targetProj.RepoPath)
+						if transferErr == nil && num > 0 {
+							newKey = fmt.Sprintf("#%d", num)
+							newID = fmt.Sprintf("gh-%s-%d", targetProjectID, num)
+							if u != "" {
+								newExternalUrl = u
+							}
+							_ = d.runner.SetGithubIssueMilestone(targetProj.GithubRepo, targetProj.RepoPath, num, title)
+						}
+					}
+				}
+
+				d.mu.Lock()
+				_, updateErr := d.conn.Exec(`
+					UPDATE tasks
+					SET id = ?, key = ?, project_id = ?, parent_key = ?, parent_title = ?, parent_type = 'macro', external_url = ?, updated_at = CURRENT_TIMESTAMP
+					WHERE id = ?
+				`, newID, newKey, targetProjectID, targetEpicKey, title, newExternalUrl, t.id)
+				d.mu.Unlock()
+
+				if updateErr == nil {
+					migratedTasksCount++
+				}
+			}
+		}
+	}
+
+	var todos []models.EpicTodo
+	if todosJSON != "" {
+		_ = json.Unmarshal([]byte(todosJSON), &todos)
+	}
+	res := &models.EpicMeta{
+		ProjectID:   targetProjectID,
+		Key:         targetEpicKey,
+		Title:       title,
+		Horizon:     horizon,
+		Description: description,
+		Todos:       todos,
+		Status:      status,
+		Closed:      closed == 1,
+	}
+
+	return res, migratedTasksCount, nil
+}
+
+// MigrateTasks moves a slice of tasks from their current project to another compatible project.
+func (d *DB) MigrateTasks(taskIDs []string, targetProjectID string) (int, error) {
+	targetProjectID = strings.TrimSpace(targetProjectID)
+	if targetProjectID == "" {
+		return 0, fmt.Errorf("projet cible obligatoire")
+	}
+	targetProj, err := d.GetProjectByID(targetProjectID)
+	if err != nil || targetProj == nil {
+		return 0, fmt.Errorf("projet cible non trouvé")
+	}
+
+	migratedCount := 0
+	for _, taskID := range taskIDs {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			continue
+		}
+		task, err := d.GetTaskByID(taskID)
+		if err != nil || task == nil {
+			continue
+		}
+		if task.ProjectID == targetProjectID {
+			continue
+		}
+
+		sourceProj, _ := d.GetProjectByID(task.ProjectID)
+		if sourceProj != nil && !IsProjectCompatible(sourceProj, targetProj) {
+			continue
+		}
+
+		newID := task.ID
+		newKey := task.Key
+		newExternalUrl := ""
+		if task.ExternalURL != nil {
+			newExternalUrl = *task.ExternalURL
+		}
+		newParentKey := task.ParentKey
+		newParentTitle := task.ParentTitle
+
+		if sourceProj != nil &&
+			(sourceProj.IssueTracker == "github" || sourceProj.GithubRepo != "") &&
+			(targetProj.IssueTracker == "github" || targetProj.GithubRepo != "") &&
+			sourceProj.GithubRepo != "" && targetProj.GithubRepo != "" &&
+			sourceProj.GithubRepo != targetProj.GithubRepo {
+
+			var issueNum int
+			_, _ = fmt.Sscanf(strings.TrimPrefix(task.Key, "#"), "%d", &issueNum)
+			if issueNum > 0 {
+				num, u, transferErr := d.runner.TransferGithubIssue(sourceProj.GithubRepo, sourceProj.RepoPath, issueNum, targetProj.GithubRepo, targetProj.RepoPath)
+				if transferErr == nil && num > 0 {
+					newKey = fmt.Sprintf("#%d", num)
+					newID = fmt.Sprintf("gh-%s-%d", targetProjectID, num)
+					if u != "" {
+						newExternalUrl = u
+					}
+					// If task had a milestone, check if milestone exists in target project
+					if newParentTitle != "" {
+						targetMilestones, _ := d.runner.ListGithubMilestones(targetProj.GithubRepo, targetProj.RepoPath)
+						for _, m := range targetMilestones {
+							if strings.EqualFold(strings.TrimSpace(m.Title), strings.TrimSpace(newParentTitle)) {
+								newParentKey = fmt.Sprintf("M-%d", m.Number)
+								_ = d.runner.SetGithubIssueMilestone(targetProj.GithubRepo, targetProj.RepoPath, num, newParentTitle)
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+
+		d.mu.Lock()
+		_, updateErr := d.conn.Exec(`
+			UPDATE tasks
+			SET id = ?, key = ?, project_id = ?, parent_key = ?, parent_title = ?, external_url = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, newID, newKey, targetProjectID, newParentKey, newParentTitle, newExternalUrl, task.ID)
+		d.mu.Unlock()
+
+		if updateErr == nil {
+			migratedCount++
+		}
+	}
+
+	return migratedCount, nil
 }

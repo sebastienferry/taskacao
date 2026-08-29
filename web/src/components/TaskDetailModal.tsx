@@ -43,7 +43,7 @@ import { InteractiveTerminal } from './InteractiveTerminal'
 import { TaskComments } from './TaskComments'
 import { LookupField, type LookupOption } from './LookupField'
 import { MarkdownEditor } from './Markdown'
-import { sprintLookup, epicLookup } from '../lib/lookups'
+import { sprintLookup, epicLookup, isProjectCompatible } from '../lib/lookups'
 
 export const TaskDetailModal: React.FC = () => {
   const {
@@ -53,6 +53,7 @@ export const TaskDetailModal: React.FC = () => {
     setDiffTask,
     updateTask,
     deleteTask,
+    migrateTasks,
     runSkill,
     isSkillRunning,
     runningSkillId,
@@ -1435,16 +1436,30 @@ export const TaskDetailModal: React.FC = () => {
             value={taskProjectId}
             onChange={async (e) => {
               const val = e.target.value
-              setTaskProjectId(val)
+              if (!val || val === taskProjectId) return
+              const sourceProj = projects.find(p => p.id === (selectedTask?.projectId || taskProjectId))
+              const targetProj = projects.find(p => p.id === val)
               if (selectedTask) {
-                await updateTask(selectedTask.id, { projectId: val })
+                if (sourceProj && targetProj && !isProjectCompatible(sourceProj, targetProj)) {
+                  if (!confirm(`Attention: Le projet "${targetProj.name}" a un tracker différent de "${sourceProj.name}". Déplacer ce ticket vers ce projet quand même ?`)) {
+                    return
+                  }
+                }
+                setTaskProjectId(val)
+                const res = await migrateTasks([selectedTask.id], val)
+                if (res.success) {
+                  const updated = tasks.find(t => t.id === selectedTask.id)
+                  if (updated) setSelectedTask(updated)
+                }
+              } else {
+                setTaskProjectId(val)
               }
             }}
             className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] font-medium"
           >
             {projects.map(p => (
               <option key={p.id} value={p.id}>
-                {p.name}
+                {p.name} ({p.issueTracker || 'local'})
               </option>
             ))}
           </select>
