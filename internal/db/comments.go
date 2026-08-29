@@ -49,7 +49,59 @@ func (d *DB) GetTaskComments(taskIDOrKey string) ([]models.TaskComment, error) {
 		return nil, fmt.Errorf("tâche non trouvée")
 	}
 
-	switch d.taskTrackerSource(task) {
+	var proj *models.Project
+	if task.ProjectID != "" {
+		proj, _ = d.GetProjectByID(task.ProjectID)
+	}
+	settings, _ := d.GetSettings()
+
+	source := d.taskTrackerSource(task)
+	switch source {
+	case "github":
+		repo := ""
+		repoPath := ""
+		if proj != nil {
+			repo = proj.GithubRepo
+			repoPath = proj.RepoPath
+		}
+		if repo == "" && settings != nil {
+			repo = settings.GithubRepo
+			repoPath = settings.RepoPath
+		}
+		comments, err := d.runner.GetGithubIssueComments(repo, repoPath, task.Key)
+		if err == nil {
+			for i := range comments {
+				comments[i].TaskID = task.ID
+			}
+			return comments, nil
+		}
+		local, _ := d.getLocalComments(task.ID)
+		if len(local) > 0 {
+			return local, nil
+		}
+		return nil, err
+
+	case "linear":
+		repoPath := ""
+		if proj != nil {
+			repoPath = proj.RepoPath
+		}
+		if repoPath == "" && settings != nil {
+			repoPath = settings.RepoPath
+		}
+		comments, err := d.runner.GetLinearIssueComments(repoPath, task.Key)
+		if err == nil {
+			for i := range comments {
+				comments[i].TaskID = task.ID
+			}
+			return comments, nil
+		}
+		local, _ := d.getLocalComments(task.ID)
+		if len(local) > 0 {
+			return local, nil
+		}
+		return nil, err
+
 	default:
 		return d.getLocalComments(task.ID)
 	}

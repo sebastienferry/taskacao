@@ -48,6 +48,7 @@ export const CommandPalette: React.FC = () => {
     skills,
     runSkill,
     openInEditor,
+    openExternalTerminal,
     syncCurrentProject,
     syncJira,
     currentProject,
@@ -232,7 +233,7 @@ export const CommandPalette: React.FC = () => {
       id: 'toggle_terminal',
       title: isTerminalPanelOpen ? '🖥️ Fermer le terminal du workspace' : '🖥️ Ouvrir le terminal du workspace (CLI)',
       icon: <TerminalIcon size={16} className="text-indigo-400" />,
-      shortcut: 'Ctrl+`',
+      shortcut: 'Cmd+$',
       keywords: ['terminal', 'cli', 'shell', 'zsh', 'console', 'tty', 'pty', 'commande'],
       action: () => {
         toggleTerminalPanel()
@@ -292,6 +293,17 @@ export const CommandPalette: React.FC = () => {
       action: () => {
         setIsCommandPaletteOpen(false)
         openInEditor()
+      },
+    },
+    {
+      id: 'open_external_terminal',
+      title: `🖥 Ouvrir le terminal externe OS (${settings.externalTerminalCommand || 'Terminal'})`,
+      icon: <TerminalIcon size={16} className="text-amber-400" />,
+      shortcut: 'Shift+T',
+      keywords: ['terminal', 'console', 'tty', 'iterm', 'ghostty', 'warp', 'alacritty', 'ouvrir', 'shell'],
+      action: () => {
+        setIsCommandPaletteOpen(false)
+        openExternalTerminal()
       },
     },
     {

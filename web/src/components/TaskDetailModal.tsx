@@ -17,6 +17,8 @@ import {
   ExternalLink,
   Loader2,
   CheckCircle2,
+  Clock,
+  AlertCircle,
   History,
   Terminal,
   PanelRight,
@@ -67,6 +69,8 @@ export const TaskDetailModal: React.FC = () => {
     settings,
     updateSettings,
     openInEditor,
+    openExternalTerminal,
+    setIsTerminalPanelOpen,
     addToast,
     skillLabel,
     skillCommand,
@@ -170,8 +174,36 @@ export const TaskDetailModal: React.FC = () => {
   const [isExpandedSpec, setIsExpandedSpec] = useState(false)
   const [copiedSpec, setCopiedSpec] = useState(false)
   const [isMaximized, setIsMaximized] = useState(false)
-  const [isTtyOpen, setIsTtyOpen] = useState(false)
-  const [isTtyExpanded, setIsTtyExpanded] = useState(false)
+  const [isTtyOpen, setIsTtyOpenState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('taskflow_modal_tty_open') === 'true'
+    } catch {
+      return false
+    }
+  })
+  const setIsTtyOpen = (open: boolean) => {
+    setIsTtyOpenState(open)
+    try {
+      localStorage.setItem('taskflow_modal_tty_open', String(open))
+    } catch {}
+  }
+
+  const [isTtyExpanded, setIsTtyExpandedState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('taskflow_modal_tty_expanded') === 'true'
+    } catch {
+      return false
+    }
+  })
+  const setIsTtyExpanded = (expanded: boolean | ((prev: boolean) => boolean)) => {
+    setIsTtyExpandedState(prev => {
+      const next = typeof expanded === 'function' ? expanded(prev) : expanded
+      try {
+        localStorage.setItem('taskflow_modal_tty_expanded', String(next))
+      } catch {}
+      return next
+    })
+  }
   const [ttyCommand, setTtyCommand] = useState('')
 
   const detailMode: DetailMode = settings.detailMode || 'panel'
@@ -1099,6 +1131,15 @@ export const TaskDetailModal: React.FC = () => {
 
               <button
                 type="button"
+                onClick={() => selectedTask && openExternalTerminal({ taskId: selectedTask.id, skillId: 'clarify' })}
+                className="p-1.5 rounded-xl text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all cursor-pointer shadow-xs active:scale-95"
+                title="Lancer /clarify-issue dans le terminal externe OS"
+              >
+                <ExternalLink size={13} />
+              </button>
+
+              <button
+                type="button"
                 onClick={() => handleTriggerSkill('clarify', clarifyPrompt)}
                 disabled={isSkillRunning}
                 className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-white bg-amber-600 hover:bg-amber-500 transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
@@ -1235,6 +1276,15 @@ export const TaskDetailModal: React.FC = () => {
               >
                 <Terminal size={13} />
                 <span>{isTtyOpen && ttyCommand === specifyCliCommand ? 'Masquer TTY' : `Lancer Console TTY ${specifySkillLabel}`}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => selectedTask && openExternalTerminal({ taskId: selectedTask.id, skillId: 'specify' })}
+                className="p-1.5 rounded-xl text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 transition-all cursor-pointer shadow-xs active:scale-95"
+                title="Lancer /specify-issue dans le terminal externe OS"
+              >
+                <ExternalLink size={13} />
               </button>
 
               <button
@@ -1708,7 +1758,7 @@ export const TaskDetailModal: React.FC = () => {
         <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
           Pipeline d'Avancement des Skills
         </label>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {skills.map((s, index) => {
               const isRecommended = nextSkill?.id === s.id
               const isCurrentRunning = isSkillRunning && runningSkillId === s.id
@@ -1826,9 +1876,31 @@ export const TaskDetailModal: React.FC = () => {
             </span>
           </div>
           <div className="p-3.5 rounded-xl bg-slate-950 text-slate-200 border border-slate-800 font-mono text-xs space-y-2 max-h-56 overflow-y-auto leading-relaxed shadow-inner">
-            <div className="flex items-center gap-2 text-emerald-400 font-bold text-[11px] pb-1 border-b border-slate-800">
-              <CheckCircle2 size={13} />
-              <span>{latestActivity.summary}</span>
+            <div className={`flex items-center gap-2 font-bold text-[11px] pb-1 border-b border-slate-800 ${
+              latestActivity.status === 'running'
+                ? 'text-indigo-400'
+                : latestActivity.status === 'queued' || latestActivity.status === 'pending'
+                ? 'text-amber-400'
+                : latestActivity.status === 'failed'
+                ? 'text-rose-400'
+                : 'text-emerald-400'
+            }`}>
+              {latestActivity.status === 'running' ? (
+                <Loader2 size={13} className="animate-spin text-indigo-400" />
+              ) : latestActivity.status === 'queued' || latestActivity.status === 'pending' ? (
+                <Clock size={13} className="text-amber-400" />
+              ) : latestActivity.status === 'failed' ? (
+                <AlertCircle size={13} className="text-rose-400" />
+              ) : (
+                <CheckCircle2 size={13} className="text-emerald-400" />
+              )}
+              <span>
+                {latestActivity.status === 'running'
+                  ? `[En cours] ${latestActivity.summary || 'Exécution de la skill...'}`
+                  : latestActivity.status === 'queued' || latestActivity.status === 'pending'
+                  ? `[En file d'attente] ${latestActivity.summary || 'En attente d\'un worker...'}`
+                  : latestActivity.summary}
+              </span>
             </div>
             {latestActivity.output && (
               <pre className="whitespace-pre-wrap text-[11px] text-slate-300 font-mono">
@@ -1899,17 +1971,33 @@ export const TaskDetailModal: React.FC = () => {
 
               {/* Right: Quick switcher to Modal, PR Link, Delete, Close */}
               <div className="flex items-center gap-1.5 shrink-0">
-                {/* Discuss with Agent Button */}
+                {/* Integrated TTY Terminal Button */}
                 <button
                   type="button"
                   onClick={() => {
-                    if (selectedTask) setChatTask(selectedTask)
+                    if (selectedTask) {
+                      setChatTask(selectedTask)
+                      setIsTerminalPanelOpen(true)
+                    }
                   }}
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-[var(--accent-color)] hover:opacity-90 transition-all shadow-xs cursor-pointer active:scale-95"
-                  title="💬 Discuter en direct avec l'agent Copilot"
+                  title="📟 Ouvrir le terminal interactif intégré (xterm)"
                 >
-                  <MessageSquare size={12} />
-                  <span>Discuter</span>
+                  <Terminal size={12} />
+                  <span>Terminal Intégré</span>
+                </button>
+
+                {/* External TTY Terminal Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedTask) openExternalTerminal({ taskId: selectedTask.id })
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all cursor-pointer shadow-xs active:scale-95"
+                  title="💻 Lancer dans une vraie fenêtre de terminal OS externe (Terminal.app, iTerm...)"
+                >
+                  <ExternalLink size={12} className="text-amber-400" />
+                  <span className="hidden sm:inline">Terminal Externe</span>
                 </button>
 
                 {/* Open in Editor Button */}
@@ -1923,6 +2011,19 @@ export const TaskDetailModal: React.FC = () => {
                 >
                   <Code2 size={12} className="text-cyan-400" />
                   <span className="hidden sm:inline">Code</span>
+                </button>
+
+                {/* Git Diff Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedTask) setDiffTask(selectedTask)
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 transition-all cursor-pointer shadow-xs active:scale-95"
+                  title="Inspecter le diff Git et les modifications de code pour cette tâche"
+                >
+                  <Code2 size={12} className="text-indigo-400" />
+                  <span className="hidden sm:inline">Diff Git</span>
                 </button>
 
                 {/* Switch to Modal Button */}
@@ -2135,17 +2236,33 @@ export const TaskDetailModal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Discuss with Agent Button */}
+            {/* Integrated TTY Terminal Button */}
             <button
               type="button"
               onClick={() => {
-                if (selectedTask) setChatTask(selectedTask)
+                if (selectedTask) {
+                  setChatTask(selectedTask)
+                  setIsTerminalPanelOpen(true)
+                }
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-[var(--accent-color)] hover:opacity-90 transition-all shadow-xs cursor-pointer active:scale-95"
-              title="💬 Discuter en direct avec l'agent Copilot"
+              title="📟 Ouvrir le terminal interactif intégré (xterm)"
             >
-              <MessageSquare size={13} />
-              <span>Discuter avec l'agent</span>
+              <Terminal size={13} />
+              <span>Terminal Intégré</span>
+            </button>
+
+            {/* External TTY Terminal Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedTask) openExternalTerminal({ taskId: selectedTask.id })
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all cursor-pointer shadow-xs active:scale-95"
+              title="💻 Lancer dans une vraie fenêtre de console OS (Terminal.app, iTerm...)"
+            >
+              <ExternalLink size={13} className="text-amber-400" />
+              <span>Terminal Externe</span>
             </button>
 
             {/* Open in Editor Button */}
@@ -2159,6 +2276,19 @@ export const TaskDetailModal: React.FC = () => {
             >
               <Code2 size={13} className="text-cyan-400" />
               <span>Code</span>
+            </button>
+
+            {/* Git Diff Button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedTask) setDiffTask(selectedTask)
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 transition-all cursor-pointer shadow-xs active:scale-95"
+              title="Inspecter le diff Git et les modifications de code pour cette tâche"
+            >
+              <Code2 size={13} className="text-indigo-400" />
+              <span>Diff Git</span>
             </button>
 
             {/* Switch to Right Panel Button */}

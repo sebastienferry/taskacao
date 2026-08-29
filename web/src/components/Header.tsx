@@ -274,7 +274,7 @@ export const Header: React.FC = () => {
               ? 'bg-[var(--accent-light)] border-[var(--accent-color)]/50 accent-text'
               : 'bg-[var(--bg-tertiary)]/70 border-[var(--border-color)] text-[var(--text-secondary)] hover:text-indigo-300 hover:border-indigo-500/40 hover:bg-indigo-500/10'
           }`}
-          title={`${isTerminalPanelOpen ? 'Fermer' : 'Ouvrir'} le terminal du workspace (Ctrl + backquote)`}
+          title={`${isTerminalPanelOpen ? 'Fermer' : 'Ouvrir'} le terminal du workspace (Cmd+$ / Ctrl+$)`}
         >
           <TerminalIcon size={13} className={isTerminalPanelOpen ? '' : 'text-indigo-400'} />
           <span className="hidden md:inline">CLI</span>

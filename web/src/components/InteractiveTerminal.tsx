@@ -96,6 +96,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
           const { cols, rows } = termRef.current
           ws.send(JSON.stringify({ type: 'resize', cols, rows }))
         }
+        termRef.current?.focus()
         if (initialCommand) {
           setTimeout(() => {
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -142,9 +143,12 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   useEffect(() => {
     if (!terminalContainerRef.current) return
 
+    terminalContainerRef.current.innerHTML = ''
+
     const term = new Terminal({
       cursorBlink: true,
-      cursorStyle: 'bar',
+      cursorStyle: 'block',
+      cursorInactiveStyle: 'outline',
       fontSize: 12,
       lineHeight: 1.25,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
@@ -154,6 +158,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
         cursor: '#818cf8',
         cursorAccent: '#0a0f1d',
         selectionBackground: '#4338ca55',
+        selectionInactiveBackground: '#4338ca33',
         black: '#0f172a',
         red: '#f87171',
         green: '#4ade80',
@@ -182,10 +187,20 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
     term.loadAddon(webLinksAddon)
 
     term.open(terminalContainerRef.current)
-    fitAddon.fit()
+    try {
+      fitAddon.fit()
+    } catch {
+      // ignore initial fit error if not yet rendered
+    }
 
     termRef.current = term
     fitAddonRef.current = fitAddon
+
+    // Immédiat puis différé pour garantir le focus dès l'affichage
+    term.focus()
+    const focusTimer = setTimeout(() => {
+      term.focus()
+    }, 60)
 
     // Handle user keystrokes in xterm
     term.onData((data) => {
@@ -213,6 +228,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
     connectWs()
 
     return () => {
+      clearTimeout(focusTimer)
       resizeObserver.disconnect()
       if (wsRef.current) {
         wsRef.current.close()
@@ -229,6 +245,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
         const { cols, rows } = termRef.current
         wsRef.current.send(JSON.stringify({ type: 'resize', cols, rows }))
       }
+      termRef.current?.focus()
     }, 200)
     return () => clearTimeout(timer)
   }, [isExpanded])
@@ -472,7 +489,13 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
       {/* Terminal Viewport */}
       <div
         ref={terminalContainerRef}
-        className="flex-1 w-full h-full p-2 overflow-hidden bg-[#0a0f1d]"
+        onMouseDown={() => {
+          setTimeout(() => termRef.current?.focus(), 0)
+        }}
+        onClick={() => {
+          termRef.current?.focus()
+        }}
+        className="flex-1 w-full h-full overflow-hidden bg-[#0a0f1d] cursor-text p-1"
         style={{ minHeight: '320px' }}
       />
     </div>

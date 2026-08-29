@@ -372,12 +372,29 @@ func InternalStatusForStage(stage string) (models.Status, bool) {
 // résolution, mais la chaîne autonome tourne dans le worker : elle ne peut pas
 // dépendre de l'interface, qui peut être fermée.
 
-// StageOfTask returns a task's workflow stage: the column it sits in when the
-// project maps stages to columns, its workflow label otherwise.
+// StageOfTask returns a task's workflow stage: explicit workflow label first,
+// then the board column mapping, then fallback to internal status.
 func (d *DB) StageOfTask(task *models.Task) string {
 	if task == nil {
 		return ""
 	}
+
+	// 1. Les labels de workflow explicites ont priorité absolue dans la vue agentique.
+	// On vérifie de l'étape la plus avancée à la moins avancée.
+	for i := len(workflowStageOrder) - 1; i >= 0; i-- {
+		stage := workflowStageOrder[i]
+		for _, label := range task.Labels {
+			clean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(label), "#"))
+			if clean == "closed" || clean == "done" {
+				clean = "finished"
+			}
+			if clean == stage {
+				return stage
+			}
+		}
+	}
+
+	// 2. Colonne du board configurée pour le projet si pas de label explicite
 	if task.ProjectID != "" {
 		if proj, _ := d.GetProjectByID(task.ProjectID); proj != nil {
 			if stage := StageForTrackerStatus(proj, task.TrackerStatus); stage != "" {
@@ -385,15 +402,8 @@ func (d *DB) StageOfTask(task *models.Task) string {
 			}
 		}
 	}
-	for _, stage := range workflowStageOrder {
-		for _, label := range task.Labels {
-			if strings.EqualFold(strings.TrimPrefix(label, "#"), stage) {
-				return stage
-			}
-		}
-	}
 
-	// Repli sur le statut interne, comme le fait l'interface. Sans lui, un
+	// 3. Repli sur le statut interne, comme le fait l'interface. Sans lui, un
 	// ticket clos sans label de workflow était rendu comme « new », et l'app
 	// proposait de clarifier un ticket déjà terminé.
 	switch task.Status {
@@ -421,10 +431,10 @@ type StageStep struct {
 }
 
 var stageSteps = map[string]StageStep{
-	"new":         {SkillID: "clarify", Interactive: true, Label: "Clarifier en session TTY"},
-	"clarified":   {SkillID: "specify", Interactive: false, Label: "Spécifier en autonomie"},
-	"specified":   {SkillID: "implement", Interactive: false, Label: "Implémenter en autonomie"},
-	"implemented": {SkillID: "create_pr", Interactive: false, Label: "Créer la MR, la fusion reste manuelle"},
+	"new":         {SkillID: "clarify", Interactive: false, Label: "Clarifier les exigences"},
+	"clarified":   {SkillID: "specify", Interactive: false, Label: "Spécifier la solution (SDD)"},
+	"specified":   {SkillID: "implement", Interactive: false, Label: "Implémenter le code et tests"},
+	"implemented": {SkillID: "create_pr", Interactive: false, Label: "Créer la PR/MR, la fusion reste manuelle"},
 	"reviewed":    {SkillID: "handoff", Interactive: false, Label: "Handoff et nettoyage local"},
 }
 
@@ -434,7 +444,6 @@ func NextStep(stage string) (StageStep, bool) {
 	return step, ok
 }
 
-// AutonomousStopStage is where an autonomous run stops on its own: the code is
-// written and waiting for the user's review. Going further would create the MR
-// and close the ticket without a human ever looking at the diff.
-const AutonomousStopStage = "implemented"
+// AutonomousStopStage is where an autonomous run stops on its own: the PR is opened
+// and waiting for the user to review and merge. Merging is strictly reserved for the human user.
+const AutonomousStopStage = "reviewed"

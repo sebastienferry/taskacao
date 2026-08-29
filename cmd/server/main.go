@@ -174,6 +174,25 @@ func main() {
 			handleCliStageCommand(port, os.Args[2:])
 			return
 		}
+		if cmd == "sync-skills" || cmd == "install-skills" {
+			dbPath, _ := resolveDBPath(os.Getenv("DB_PATH"))
+			database, err := db.NewDB(dbPath)
+			if err != nil {
+				log.Fatalf("Fatal database error: %v", err)
+			}
+			defer database.Close()
+
+			target := "."
+			if len(os.Args) > 2 {
+				target = os.Args[2]
+			}
+			n, err := database.WriteAllProjectSkillsToRepo(target)
+			if err != nil {
+				log.Fatalf("Error writing skills: %v", err)
+			}
+			fmt.Printf("✅ %d skill files synchronized across all agent directories (.agents, .agy, .claude, .gemini, .skills)\n", n)
+			return
+		}
 	}
 
 	dbPath, dbOrigin := resolveDBPath(os.Getenv("DB_PATH"))
@@ -234,6 +253,8 @@ func main() {
 	mux.HandleFunc("/api/settings", h.HandleSettings)
 	mux.HandleFunc("/api/open-editor", h.HandleOpenEditor)
 	mux.HandleFunc("/api/editor/open", h.HandleOpenEditor)
+	mux.HandleFunc("/api/open-terminal", h.HandleOpenExternalTerminal)
+	mux.HandleFunc("/api/terminal/external", h.HandleOpenExternalTerminal)
 
 	// Interactive PTY Terminal Routes & WebSocket
 	mux.HandleFunc("/ws/terminal", h.HandleTerminalWs)

@@ -1525,6 +1525,9 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/pin"):
 		subAction = "pin"
 		id = strings.TrimSuffix(rawPath, "/pin")
+	case strings.HasSuffix(rawPath, "/sync"):
+		subAction = "sync"
+		id = strings.TrimSuffix(rawPath, "/sync")
 	case strings.HasSuffix(rawPath, "/migrate"):
 		subAction = "migrate"
 		id = strings.TrimSuffix(rawPath, "/migrate")
@@ -1706,10 +1709,12 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		status, _ := h.db.GetGitStatus(repoPath)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"message":  fmt.Sprintf("Bascule effectuée avec succès sur la branche '%s'", branch),
 			"branch":   branch,
 			"repoPath": repoPath,
+			"status":   status,
 		})
 		return
 	}
@@ -1768,6 +1773,25 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, launch)
+		return
+	}
+
+	// Sub-action: /api/tasks/{id}/tty-external — open a native external terminal for the task
+	if (subAction == "tty-external" || subAction == "terminal-external") && r.Method == http.MethodPost {
+		var req struct {
+			Command         string `json:"command"`
+			SkillID         string `json:"skillId"`
+			TerminalCommand string `json:"terminalCommand"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&req)
+		}
+		res, err := h.LaunchTaskExternalTerminal(id, req.Command, req.SkillID, req.TerminalCommand)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 		return
 	}
 
@@ -1917,15 +1941,6 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		step, ok := db.NextStep(stage)
 		if !ok {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("aucun pas suivant depuis l'étape %s", stage))
-			return
-		}
-		// Un pas interactif n'est pas mis en file : l'interface ouvre le terminal
-		// de la tâche et y injecte la commande, pour que l'utilisateur voie et
-		// réponde à l'agent.
-		if step.Interactive {
-			writeJSON(w, http.StatusOK, map[string]interface{}{
-				"mode": "interactive", "stage": stage, "skillId": step.SkillID, "label": step.Label,
-			})
 			return
 		}
 		_, act, err := h.db.EnqueueSkillOnTask(task.ID, step.SkillID, "")
@@ -2571,6 +2586,180 @@ func (h *Handler) HandleOpenEditor(w http.ResponseWriter, r *http.Request) {
 		"editor":  editorCmd,
 		"message": fmt.Sprintf("Opened %s in %s", targetPath, editorCmd),
 	})
+}
+
+// HandleOpenExternalTerminal opens an external system terminal window on the requested path or task.
+func (h *Handler) HandleOpenExternalTerminal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		Path            string `json:"path"`
+		TaskID          string `json:"taskId"`
+		ProjectID       string `json:"projectId"`
+		Command         string `json:"command"`
+		SkillID         string `json:"skillId"`
+		TerminalCommand string `json:"terminalCommand"`
+	}
+
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	if req.TaskID != "" {
+		res, err := h.LaunchTaskExternalTerminal(req.TaskID, req.Command, req.SkillID, req.TerminalCommand)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+
+	settings, _ := h.db.GetSettings()
+	termCmd := req.TerminalCommand
+	if termCmd == "" && settings != nil && settings.ExternalTerminalCommand != "" {
+		termCmd = settings.ExternalTerminalCommand
+	}
+
+	targetPath := req.Path
+	var proj *models.Project
+	if targetPath == "" && req.ProjectID != "" {
+		p, err := h.db.GetProjectByID(req.ProjectID)
+		if err == nil && p != nil {
+			proj = p
+			if p.RepoPath != "" {
+				targetPath = p.RepoPath
+			}
+		}
+	}
+
+	if targetPath == "" && settings != nil && settings.RepoPath != "" {
+		targetPath = settings.RepoPath
+	}
+	if targetPath == "" {
+		targetPath, _ = os.Getwd()
+	}
+
+	envVars := make(map[string]string)
+	if proj != nil {
+		envVars["TASKFLOW_PROJECT_ID"] = proj.ID
+		envVars["TASKFLOW_PROJECT_NAME"] = proj.Name
+		if proj.GithubRepo != "" {
+			envVars["TASKFLOW_GITHUB_REPO"] = proj.GithubRepo
+		}
+	}
+
+	if err := h.db.GetRunner().OpenExternalTerminal(termCmd, targetPath, req.Command, envVars); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to open external terminal in '%s': %v", targetPath, err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"path":    targetPath,
+		"command": req.Command,
+		"message": fmt.Sprintf("Opened external terminal in %s", targetPath),
+	})
+}
+
+// LaunchTaskExternalTerminal launches an external terminal window for a specific task.
+func (h *Handler) LaunchTaskExternalTerminal(taskID, command, skillID, customTermCmd string) (map[string]interface{}, error) {
+	task, err := h.db.GetTaskByID(taskID)
+	if err != nil || task == nil {
+		return nil, fmt.Errorf("task not found: %s", taskID)
+	}
+
+	settings, _ := h.db.GetSettings()
+	if customTermCmd == "" && settings != nil && settings.ExternalTerminalCommand != "" {
+		customTermCmd = settings.ExternalTerminalCommand
+	}
+
+	repoPath := h.db.ResolveTaskRepoPath(task)
+	if repoPath == "" && settings != nil {
+		repoPath = settings.RepoPath
+	}
+	if repoPath == "" {
+		repoPath = "."
+	}
+
+	targetPath := ""
+	if task.WorktreePath != nil && *task.WorktreePath != "" {
+		if _, statErr := os.Stat(*task.WorktreePath); statErr == nil {
+			targetPath = *task.WorktreePath
+		}
+	}
+
+	var proj *models.Project
+	if task.ProjectID != "" {
+		proj, _ = h.db.GetProjectByID(task.ProjectID)
+	}
+
+	useWorktrees := true
+	if proj != nil {
+		useWorktrees = proj.UseWorktrees
+	}
+
+	if targetPath == "" && useWorktrees {
+		wtPath, _, wtErr := h.db.EnsureTaskWorktree(repoPath, task)
+		if wtErr == nil && wtPath != "" {
+			targetPath = wtPath
+		}
+	}
+	if targetPath == "" {
+		targetPath = repoPath
+	}
+
+	envVars := map[string]string{
+		"TASKFLOW_TASK_ID":    task.ID,
+		"TASKFLOW_TASK_KEY":   task.Key,
+		"TASKFLOW_TASK_TITLE": task.Title,
+		"TASKFLOW_TASK_PATH":  targetPath,
+	}
+	if task.ProjectID != "" {
+		envVars["TASKFLOW_PROJECT_ID"] = task.ProjectID
+	}
+	if task.BranchName != nil && *task.BranchName != "" {
+		envVars["TASKFLOW_TASK_BRANCH"] = *task.BranchName
+	}
+	if proj != nil && proj.GithubRepo != "" {
+		envVars["TASKFLOW_GITHUB_REPO"] = proj.GithubRepo
+	}
+
+	// If command is empty but skillID is provided, compose skill call command
+	if command == "" && skillID != "" {
+		trackerName := task.Source
+		if trackerName == "" && settings != nil {
+			trackerName = settings.IssueTracker
+		}
+		skillCmd := h.db.ProjectSkillCommand(task, skillID)
+		call := runner.SkillCallLineWithCommand(skillCmd, task, strings.ToLower(trackerName))
+
+		agentLaunch, _ := runner.InteractiveAgentLaunch(settings)
+		if agentLaunch != "" {
+			command = fmt.Sprintf("%s\n%s", agentLaunch, call)
+		} else {
+			command = call
+		}
+	} else if command == "" {
+		if agentLaunch, err := runner.InteractiveAgentLaunch(settings); err == nil && agentLaunch != "" {
+			command = agentLaunch
+		}
+	}
+
+	if err := h.db.GetRunner().OpenExternalTerminal(customTermCmd, targetPath, command, envVars); err != nil {
+		return nil, fmt.Errorf("failed to open external terminal: %w", err)
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"taskId":  task.ID,
+		"path":    targetPath,
+		"command": command,
+		"message": fmt.Sprintf("Opened external terminal for %s in %s", task.Key, targetPath),
+	}, nil
 }
 
 // TerminalRunner exposes the PTY manager so the worker can run a workflow step

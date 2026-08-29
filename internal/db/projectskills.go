@@ -297,6 +297,19 @@ func (d *DB) WriteProjectSkillToRepo(projectIDOrPath, skillID string) (int, erro
 	return written, nil
 }
 
+// WriteAllProjectSkillsToRepo regenerates all workflow skills across all agent directories.
+func (d *DB) WriteAllProjectSkillsToRepo(projectIDOrPath string) (int, error) {
+	total := 0
+	for _, s := range StageSkills {
+		n, err := d.WriteProjectSkillToRepo(projectIDOrPath, s.ID)
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
 func (d *DB) projectSkillEntry(projectIDOrPath, skillID string) (*models.SkillEditorEntry, error) {
 	entries, err := d.ListProjectSkillEditor(projectIDOrPath)
 	if err != nil {

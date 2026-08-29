@@ -19,13 +19,21 @@ import {
   CheckSquare,
   Square,
   GripVertical,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  SlidersHorizontal,
+  Archive,
+  RotateCcw,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import {
   calculateSprintDates,
+  shiftSubsequentSprintDates,
   generateDefaultSprints,
   formatDateFR,
   formatDateISO,
+  formatDateInput,
   getMonday,
   getSprintRelativeInfo,
 } from '../lib/sprints'
@@ -65,8 +73,24 @@ export const SprintTimelineView: React.FC = () => {
     return formatDateISO(getMonday(new Date()))
   })
 
+  // Sprint Details & Dates Edit State
   const [editingSprintIndex, setEditingSprintIndex] = useState<number | null>(null)
   const [editSprintName, setEditSprintName] = useState<string>('')
+  const [editSprintStartDate, setEditSprintStartDate] = useState<string>('')
+  const [editSprintEndDate, setEditSprintEndDate] = useState<string>('')
+  const [editSprintState, setEditSprintState] = useState<'active' | 'future' | 'closed'>('future')
+  const [editShiftSubsequent, setEditShiftSubsequent] = useState<boolean>(true)
+
+  // Close Sprint Modal State
+  const [closingSprint, setClosingSprint] = useState<{ sprint: TrackerSprint; index: number } | null>(null)
+  const [closeSprintDestination, setCloseSprintDestination] = useState<'next' | 'backlog' | 'keep'>('next')
+  const [closeSprintActivateNext, setCloseSprintActivateNext] = useState<boolean>(true)
+  const [isClosingSprintBusy, setIsClosingSprintBusy] = useState<boolean>(false)
+
+  // Fold/Collapse Closed Sprints State
+  const [collapsedSprints, setCollapsedSprints] = useState<Record<string, boolean>>({})
+  const [hideClosedSprints, setHideClosedSprints] = useState<boolean>(false)
+
   const [backlogSearch, setBacklogSearch] = useState<string>('')
   const [isBacklogOpen, setIsBacklogOpen] = useState<boolean>(true)
   const [dragOverSprint, setDragOverSprint] = useState<string | null>(null)
@@ -279,13 +303,17 @@ export const SprintTimelineView: React.FC = () => {
     await saveSprints(updated)
   }
 
-  // Rename a sprint
-  const handleStartRename = (index: number, currentName: string) => {
+  // Edit Sprint Details & Dates
+  const handleStartEditSprint = (index: number, sprint: TrackerSprint) => {
     setEditingSprintIndex(index)
-    setEditSprintName(currentName)
+    setEditSprintName(sprint.name || `Sprint ${index + 1}`)
+    setEditSprintStartDate(formatDateInput(sprint.startDate))
+    setEditSprintEndDate(formatDateInput(sprint.endDate))
+    setEditSprintState((sprint.state as any) || 'future')
+    setEditShiftSubsequent(true)
   }
 
-  const handleSaveRename = async (index: number) => {
+  const handleSaveEditSprint = async (index: number) => {
     if (!editSprintName.trim()) {
       setEditingSprintIndex(null)
       return
@@ -293,17 +321,122 @@ export const SprintTimelineView: React.FC = () => {
     const oldName = sprints[index].name
     const newName = editSprintName.trim()
 
-    const updated = sprints.map((sp, i) => (i === index ? { ...sp, name: newName } : sp))
+    let updated = sprints.map((sp, i) => {
+      if (i === index) {
+        return {
+          ...sp,
+          name: newName,
+          startDate: editSprintStartDate || sp.startDate,
+          endDate: editSprintEndDate || sp.endDate,
+          state: editSprintState,
+        }
+      }
+      return sp
+    })
+
+    if (editShiftSubsequent && editSprintEndDate) {
+      updated = shiftSubsequentSprintDates(updated, index, durationDays)
+    }
+
     setEditingSprintIndex(null)
     await saveSprints(updated)
 
-    // Re-link tasks to new name
-    const tasksToUpdate = tasks.filter(
-      t => (t.sprint || '').toLowerCase() === oldName.toLowerCase()
-    )
-    for (const t of tasksToUpdate) {
-      await setTaskSprint(t.id, newName, newName)
+    // Re-link tasks to new name if renamed
+    if (oldName.toLowerCase() !== newName.toLowerCase()) {
+      const tasksToUpdate = tasks.filter(
+        t => (t.sprint || '').toLowerCase() === oldName.toLowerCase()
+      )
+      for (const t of tasksToUpdate) {
+        await setTaskSprint(t.id, newName, newName)
+      }
     }
+  }
+
+  // Close Sprint Handlers
+  const handleStartCloseSprint = (sprint: TrackerSprint, index: number) => {
+    setClosingSprint({ sprint, index })
+    setCloseSprintDestination(index < sprints.length - 1 ? 'next' : 'backlog')
+    setCloseSprintActivateNext(true)
+  }
+
+  const handleConfirmCloseSprint = async () => {
+    if (!closingSprint || !currentProject?.id) return
+    const { sprint, index } = closingSprint
+    setIsClosingSprintBusy(true)
+
+    try {
+      const sprintKey = sprint.name.toLowerCase().trim()
+      const sprintTasks = tasksBySprint.get(sprintKey) || []
+      const unfinishedTasks = sprintTasks.filter(
+        t => !(t.status === 'finished' || t.status === 'done' || resolveTaskStage(t, currentProject) === 'finished')
+      )
+
+      const nextSprint = index < sprints.length - 1 ? sprints[index + 1] : null
+
+      // 1. Move unfinished tasks based on choice
+      if (unfinishedTasks.length > 0) {
+        const unfinishedIds = unfinishedTasks.map(t => t.id)
+        if (closeSprintDestination === 'next' && nextSprint) {
+          await setTasksSprint(currentProject.id, unfinishedIds, nextSprint.id || nextSprint.name, nextSprint.name)
+        } else if (closeSprintDestination === 'backlog') {
+          await setTasksSprint(currentProject.id, unfinishedIds, '', '')
+        }
+      }
+
+      // 2. Update sprint states
+      const updatedSprints = sprints.map((sp, i) => {
+        if (i === index) {
+          return { ...sp, state: 'closed' }
+        }
+        if (i === index + 1 && closeSprintActivateNext && sp.state !== 'closed') {
+          return { ...sp, state: 'active' }
+        }
+        return sp
+      })
+
+      await saveSprints(updatedSprints)
+
+      addToast({
+        type: 'success',
+        title: `${sprint.name} clôturé !`,
+        description: unfinishedTasks.length > 0
+          ? `${unfinishedTasks.length} tâche(s) non terminée(s) ${
+              closeSprintDestination === 'next' && nextSprint
+                ? `déplacée(s) vers ${nextSprint.name}`
+                : closeSprintDestination === 'backlog'
+                ? 'renvoyée(s) au backlog'
+                : 'conservée(s) dans le sprint'
+            }.`
+          : 'Toutes les tâches étaient complétées.',
+      })
+
+      setClosingSprint(null)
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Erreur lors de la clôture',
+        description: err.message,
+      })
+    } finally {
+      setIsClosingSprintBusy(false)
+    }
+  }
+
+  const handleReopenSprint = async (index: number) => {
+    const updated = sprints.map((sp, i) => (i === index ? { ...sp, state: 'active' } : sp))
+    await saveSprints(updated)
+    addToast({
+      type: 'info',
+      title: `${sprints[index].name} réouvert`,
+      description: 'Le statut du sprint a été repassé en Actif.',
+    })
+  }
+
+  const toggleCollapseSprint = (sprintName: string) => {
+    setCollapsedSprints(prev => ({
+      ...prev,
+      [sprintName]: !prev[sprintName],
+    }))
   }
 
   // Drag & Drop Handlers with Multi-selection support
@@ -485,6 +618,27 @@ export const SprintTimelineView: React.FC = () => {
               </button>
             </div>
 
+            {/* Toggle Closed Sprints */}
+            {sprints.some(s => s.state === 'closed') && (
+              <button
+                type="button"
+                onClick={() => setHideClosedSprints(!hideClosedSprints)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer shadow-xs ${
+                  hideClosedSprints
+                    ? 'bg-slate-500/15 text-slate-300 border-slate-500/30 hover:bg-slate-500/25'
+                    : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+                }`}
+                title={hideClosedSprints ? "Afficher les sprints clôturés" : "Masquer les sprints clôturés"}
+              >
+                <Archive size={12} className={hideClosedSprints ? "text-slate-400" : "text-[var(--text-muted)]"} />
+                <span>
+                  {hideClosedSprints
+                    ? `Clôturés masqués (${sprints.filter(s => s.state === 'closed').length})`
+                    : `Clôturés (${sprints.filter(s => s.state === 'closed').length})`}
+                </span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleRecalculateAll}
@@ -551,6 +705,12 @@ export const SprintTimelineView: React.FC = () => {
               const progressPct =
                 sprintTasks.length > 0 ? Math.round((doneTasks.length / sprintTasks.length) * 100) : 0
 
+              if (hideClosedSprints && sprint.state === 'closed') {
+                return null
+              }
+
+              const isCollapsed = Boolean(collapsedSprints[sprint.name])
+
               return (
                 <div
                   key={sprint.id || sprint.name}
@@ -562,13 +722,15 @@ export const SprintTimelineView: React.FC = () => {
                       isBacklogOpen ? 'w-12 h-12' : 'w-8 h-8 rounded-xl'
                     }`}
                   >
-                    {rel.type === 'current' ? (
+                    {sprint.state === 'closed' ? (
+                      <CheckCircle2 size={isBacklogOpen ? 20 : 15} className="text-slate-400" />
+                    ) : rel.type === 'current' ? (
                       <span className="relative flex h-3.5 w-3.5">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                         <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500"></span>
                       </span>
                     ) : rel.type === 'past' ? (
-                      <CheckCircle2 size={isBacklogOpen ? 20 : 15} className="text-slate-400" />
+                      <CheckCircle2 size={isBacklogOpen ? 20 : 15} className="text-amber-400" />
                     ) : (
                       <CalendarDays size={isBacklogOpen ? 18 : 14} className="text-cyan-400" />
                     )}
@@ -584,112 +746,268 @@ export const SprintTimelineView: React.FC = () => {
                     } ${
                       isOver
                         ? 'border-[var(--accent-color)] ring-2 ring-[var(--accent-glow)] bg-[var(--accent-light)]/20'
+                        : sprint.state === 'closed'
+                        ? 'border-[var(--border-color)]/60 opacity-90'
                         : rel.type === 'current'
                         ? 'border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.1)]'
                         : 'border-[var(--border-color)] hover:border-[var(--border-color)]/80'
                     }`}
                   >
-                    {/* Sprint Header */}
-                    <div
-                      className={`border-b border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[var(--bg-tertiary)]/30 ${
-                        isBacklogOpen ? 'p-3.5' : 'px-3 py-2'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        {editingSprintIndex === index ? (
+                    {/* Sprint Header (Edit Mode vs Display Mode) */}
+                    {editingSprintIndex === index ? (
+                      <div className="p-3.5 bg-[var(--bg-primary)] border-b border-[var(--border-color)] space-y-2.5 animate-in fade-in duration-150">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-[var(--accent-color)] flex items-center gap-1.5">
+                            <SlidersHorizontal size={13} />
+                            <span>Modifier les dates et paramètres de {sprint.name}</span>
+                          </span>
                           <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditSprint(index)}
+                              className="flex items-center gap-1 px-3 py-1 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-all cursor-pointer shadow-xs"
+                              title="Enregistrer les modifications"
+                            >
+                              <Check size={13} />
+                              <span>Enregistrer</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingSprintIndex(null)}
+                              className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                              title="Annuler"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 text-xs">
+                          {/* Nom */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                              Nom du sprint
+                            </label>
                             <input
                               type="text"
                               value={editSprintName}
                               onChange={e => setEditSprintName(e.target.value)}
-                              className="px-2 py-0.5 text-xs font-bold rounded bg-[var(--bg-primary)] border border-[var(--accent-color)] text-[var(--text-primary)]"
-                              autoFocus
-                              onKeyDown={e => {
-                                if (e.key === 'Enter') handleSaveRename(index)
-                                if (e.key === 'Escape') setEditingSprintIndex(null)
-                              }}
+                              placeholder="Ex: Sprint 1"
+                              className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
                             />
-                            <button
-                              onClick={() => handleSaveRename(index)}
-                              className="p-1 text-emerald-400 hover:text-emerald-300"
-                            >
-                              <Check size={13} />
-                            </button>
-                            <button
-                              onClick={() => setEditingSprintIndex(null)}
-                              className="p-1 text-rose-400 hover:text-rose-300"
-                            >
-                              <X size={13} />
-                            </button>
                           </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5">
-                            <h3
-                              className={`${
-                                isBacklogOpen ? 'text-sm' : 'text-xs'
-                              } font-extrabold text-[var(--text-primary)]`}
-                            >
-                              {sprint.name}
-                            </h3>
-                            <button
-                              onClick={() => handleStartRename(index, sprint.name)}
-                              className="opacity-40 hover:opacity-100 text-[var(--text-muted)] p-0.5 transition-opacity cursor-pointer"
-                              title="Renommer le sprint"
-                            >
-                              <Edit2 size={10} />
-                            </button>
-                          </div>
-                        )}
 
-                        <span
-                          className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${
-                            rel.type === 'current'
-                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 animate-pulse'
-                              : rel.type === 'past'
-                              ? 'bg-slate-500/15 text-slate-400 border-slate-500/30'
-                              : 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30'
-                          }`}
-                        >
-                          {rel.label}
-                        </span>
+                          {/* Date Début */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                              Date de début
+                            </label>
+                            <input
+                              type="date"
+                              value={editSprintStartDate}
+                              onChange={e => setEditSprintStartDate(e.target.value)}
+                              className="w-full px-2.5 py-1.5 text-xs font-mono rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] cursor-pointer"
+                            />
+                          </div>
+
+                          {/* Date Fin */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                              Date de fin
+                            </label>
+                            <input
+                              type="date"
+                              value={editSprintEndDate}
+                              onChange={e => setEditSprintEndDate(e.target.value)}
+                              className="w-full px-2.5 py-1.5 text-xs font-mono rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] cursor-pointer"
+                            />
+                          </div>
+
+                          {/* Statut */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                              Statut du cycle
+                            </label>
+                            <select
+                              value={editSprintState}
+                              onChange={e => setEditSprintState(e.target.value as any)}
+                              className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] cursor-pointer"
+                            >
+                              <option value="active">🟢 En cours (Active)</option>
+                              <option value="future">🔵 À venir (Future)</option>
+                              <option value="closed">⚪ Clôturé (Closed)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Décalage option */}
+                        <div className="flex items-center gap-2 pt-0.5">
+                          <label className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={editShiftSubsequent}
+                              onChange={e => setEditShiftSubsequent(e.target.checked)}
+                              className="rounded text-[var(--accent-color)] w-3.5 h-3.5 cursor-pointer"
+                            />
+                            <span>Décaler automatiquement les dates des sprints suivants pour préserver l'enchaînement</span>
+                          </label>
+                        </div>
                       </div>
+                    ) : (
+                      <div
+                        className={`border-b border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                          sprint.state === 'closed'
+                            ? 'bg-slate-500/10'
+                            : 'bg-[var(--bg-tertiary)]/30'
+                        } ${isBacklogOpen ? 'p-3.5' : 'px-3 py-2'}`}
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3
+                            className={`${
+                              isBacklogOpen ? 'text-sm' : 'text-xs'
+                            } font-extrabold text-[var(--text-primary)]`}
+                          >
+                            {sprint.name}
+                          </h3>
 
-                      {/* Dates & Quick Stats */}
-                      <div className="flex items-center gap-2.5 text-xs">
-                        <div className="flex items-center gap-1 text-[var(--text-muted)] font-mono text-[10.5px]">
-                          <CalendarDays size={11} className="text-[var(--accent-color)]" />
-                          <span>
-                            {formatDateFR(sprint.startDate)} ➔ {formatDateFR(sprint.endDate)}
+                          {/* State Badges */}
+                          {sprint.state === 'closed' ? (
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full border bg-slate-500/15 text-slate-400 border-slate-500/30 flex items-center gap-1">
+                              <CheckCircle2 size={10} className="text-slate-400" />
+                              Clôturé
+                            </span>
+                          ) : sprint.state === 'active' || rel.type === 'current' ? (
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full border bg-emerald-500/15 text-emerald-400 border-emerald-500/30 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
+                              En cours
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full border bg-cyan-500/15 text-cyan-400 border-cyan-500/30">
+                              À venir
+                            </span>
+                          )}
+
+                          <span
+                            className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${
+                              rel.type === 'current'
+                                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 animate-pulse'
+                                : rel.type === 'past'
+                                ? 'bg-slate-500/15 text-slate-400 border-slate-500/30'
+                                : 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30'
+                            }`}
+                          >
+                            {rel.label}
                           </span>
                         </div>
 
-                        {sprintTasks.length > 0 && (
-                          <div className="flex items-center gap-1.5 pl-2.5 border-l border-[var(--border-color)]">
-                            <div className="w-14 h-1.5 rounded-full bg-[var(--bg-primary)] overflow-hidden border border-[var(--border-color)]">
-                              <div
-                                className="h-full bg-emerald-500 transition-all duration-300"
-                                style={{ width: `${progressPct}%` }}
-                              />
-                            </div>
-                            <span className="text-[9.5px] font-mono font-bold text-[var(--text-secondary)]">
-                              {progressPct}% ({doneTasks.length}/{sprintTasks.length})
+                        {/* Dates & Quick Stats & Actions */}
+                        <div className="flex items-center gap-2 flex-wrap text-xs">
+                          {/* Clickable Date Range Button */}
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditSprint(index, sprint)}
+                            className="flex items-center gap-1 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] px-2 py-0.5 rounded-lg border border-transparent hover:border-[var(--border-color)] font-mono text-[10.5px] transition-colors cursor-pointer"
+                            title="Cliquer pour modifier les dates du sprint"
+                          >
+                            <CalendarDays size={11} className="text-[var(--accent-color)]" />
+                            <span>
+                              {formatDateFR(sprint.startDate)} ➔ {formatDateFR(sprint.endDate)}
                             </span>
-                          </div>
-                        )}
+                            <Edit2 size={9} className="opacity-40 hover:opacity-100 ml-0.5" />
+                          </button>
 
+                          {/* Progress bar */}
+                          {sprintTasks.length > 0 && (
+                            <div className="flex items-center gap-1.5 pl-2 border-l border-[var(--border-color)]">
+                              <div className="w-14 h-1.5 rounded-full bg-[var(--bg-primary)] overflow-hidden border border-[var(--border-color)]">
+                                <div
+                                  className={`h-full transition-all duration-300 ${
+                                    sprint.state === 'closed' ? 'bg-slate-400' : 'bg-emerald-500'
+                                  }`}
+                                  style={{ width: `${progressPct}%` }}
+                                />
+                              </div>
+                              <span className="text-[9.5px] font-mono font-bold text-[var(--text-secondary)]">
+                                {progressPct}% ({doneTasks.length}/{sprintTasks.length})
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-1 pl-1">
+                            {/* Close Sprint / Reopen Sprint Button */}
+                            {sprint.state === 'closed' ? (
+                              <button
+                                type="button"
+                                onClick={() => handleReopenSprint(index)}
+                                className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10.5px] font-semibold text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 transition-all cursor-pointer shadow-xs"
+                                title="Réouvrir ce sprint (repasser en statut Actif)"
+                              >
+                                <RotateCcw size={11} />
+                                <span>Réouvrir</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleStartCloseSprint(sprint, index)}
+                                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10.5px] font-bold text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 transition-all cursor-pointer shadow-xs active:scale-95"
+                                title="Clôturer ce sprint et choisir la destination des tâches non terminées"
+                              >
+                                <CheckCircle2 size={12} className="text-emerald-400" />
+                                <span>Clôturer</span>
+                              </button>
+                            )}
+
+                            {/* Edit Sprint Button */}
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditSprint(index, sprint)}
+                              className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                              title="Modifier les dates et le statut"
+                            >
+                              <SlidersHorizontal size={12} />
+                            </button>
+
+                            {/* Delete Sprint Button */}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSprint(index)}
+                              className="p-1 rounded-lg text-[var(--text-muted)] hover:text-rose-400 transition-colors cursor-pointer"
+                              title="Supprimer ce sprint"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+
+                            {/* Collapse/Expand for Closed Sprints */}
+                            {sprint.state === 'closed' && (
+                              <button
+                                type="button"
+                                onClick={() => toggleCollapseSprint(sprint.name)}
+                                className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                                title={isCollapsed ? "Déplier le sprint" : "Replier le sprint"}
+                              >
+                                {isCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Collapsed State for Closed Sprints */}
+                    {sprint.state === 'closed' && isCollapsed ? (
+                      <div className="p-3 text-center text-xs text-[var(--text-muted)] bg-[var(--bg-primary)]/40 flex items-center justify-between">
+                        <span>
+                          Sprint clôturé ({sprintTasks.length} tâche{sprintTasks.length > 1 ? 's' : ''}, {doneTasks.length} terminée{doneTasks.length > 1 ? 's' : ''})
+                        </span>
                         <button
                           type="button"
-                          onClick={() => handleDeleteSprint(index)}
-                          className="p-1 rounded text-[var(--text-muted)] hover:text-rose-400 transition-colors ml-0.5 cursor-pointer"
-                          title="Supprimer ce sprint"
+                          onClick={() => toggleCollapseSprint(sprint.name)}
+                          className="text-[11px] text-[var(--accent-color)] hover:underline font-semibold cursor-pointer"
                         >
-                          <Trash2 size={12} />
+                          Afficher les tâches
                         </button>
                       </div>
-                    </div>
-
-                    {/* Mode 1: Compact View (Backlog Hidden, NO Drag & Drop) */}
-                    {!isBacklogOpen ? (
+                    ) : !isBacklogOpen ? (
                       <div className="p-2.5">
                         {sprintTasks.length === 0 ? (
                           <p className="text-[11px] text-[var(--text-muted)] italic px-1">
@@ -1174,6 +1492,218 @@ export const SprintTimelineView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Close Sprint Modal Dialog */}
+      {closingSprint && (
+        <div className="fixed top-0 left-0 h-[var(--app-h)] w-[var(--app-w)] z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="relative w-full max-w-lg rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/40">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  <CheckCircle2 size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[var(--text-primary)]">
+                    Clôturer {closingSprint.sprint.name}
+                  </h3>
+                  <span className="text-[10.5px] text-[var(--text-muted)]">
+                    Bilan du cycle et réaffectation des tâches restantes
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClosingSprint(null)}
+                className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4 text-xs">
+              {(() => {
+                const sprintKey = closingSprint.sprint.name.toLowerCase().trim()
+                const sprintTasks = tasksBySprint.get(sprintKey) || []
+                const doneTasks = sprintTasks.filter(
+                  t => t.status === 'finished' || t.status === 'done' || resolveTaskStage(t, currentProject) === 'finished'
+                )
+                const unfinishedTasks = sprintTasks.filter(
+                  t => !(t.status === 'finished' || t.status === 'done' || resolveTaskStage(t, currentProject) === 'finished')
+                )
+                const nextSprint = closingSprint.index < sprints.length - 1 ? sprints[closingSprint.index + 1] : null
+
+                return (
+                  <>
+                    {/* Stats summary cards */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex flex-col">
+                        <span className="text-[10px] uppercase tracking-wider font-bold text-emerald-400">
+                          Tâches Terminées
+                        </span>
+                        <span className="text-2xl font-extrabold text-emerald-300 mt-1">
+                          {doneTasks.length}
+                        </span>
+                        <span className="text-[10px] text-[var(--text-muted)] mt-1">
+                          Livrées dans ce cycle
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex flex-col">
+                        <span className="text-[10px] uppercase tracking-wider font-bold text-amber-400">
+                          Tâches Non Terminées
+                        </span>
+                        <span className="text-2xl font-extrabold text-amber-300 mt-1">
+                          {unfinishedTasks.length}
+                        </span>
+                        <span className="text-[10px] text-[var(--text-muted)] mt-1">
+                          {unfinishedTasks.length === 0 ? 'Aucun reliquat !' : 'À transférer ou reporter'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {unfinishedTasks.length > 0 ? (
+                      <div className="space-y-2 pt-1">
+                        <label className="block text-[11.5px] font-bold text-[var(--text-primary)]">
+                          Que faire des {unfinishedTasks.length} tâche(s) non terminée(s) ?
+                        </label>
+
+                        <div className="space-y-2">
+                          {nextSprint && (
+                            <label
+                              className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                                closeSprintDestination === 'next'
+                                  ? 'bg-[var(--accent-light)]/20 border-[var(--accent-color)] ring-1 ring-[var(--accent-color)] shadow-xs'
+                                  : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-[var(--border-color)]/80'
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                name="close_dest"
+                                checked={closeSprintDestination === 'next'}
+                                onChange={() => setCloseSprintDestination('next')}
+                                className="mt-0.5 text-[var(--accent-color)] cursor-pointer"
+                              />
+                              <div className="space-y-0.5">
+                                <span className="font-bold text-[var(--text-primary)] block">
+                                  Transférer vers {nextSprint.name} (Recommandé)
+                                </span>
+                                <span className="text-[10.5px] text-[var(--text-muted)] block leading-snug">
+                                  Les tâches ouvertes rejoindront la liste des priorités du prochain cycle.
+                                </span>
+                              </div>
+                            </label>
+                          )}
+
+                          <label
+                            className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                              closeSprintDestination === 'backlog'
+                                ? 'bg-[var(--accent-light)]/20 border-[var(--accent-color)] ring-1 ring-[var(--accent-color)] shadow-xs'
+                                : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-[var(--border-color)]/80'
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="close_dest"
+                              checked={closeSprintDestination === 'backlog'}
+                              onChange={() => setCloseSprintDestination('backlog')}
+                              className="mt-0.5 text-[var(--accent-color)] cursor-pointer"
+                            />
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-[var(--text-primary)] block">
+                                Renvoyer vers le Backlog général
+                              </span>
+                              <span className="text-[10.5px] text-[var(--text-muted)] block leading-snug">
+                                Les tâches redeviendront non planifiées dans le backlog sans assignation de sprint.
+                              </span>
+                            </div>
+                          </label>
+
+                          <label
+                            className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                              closeSprintDestination === 'keep'
+                                ? 'bg-[var(--accent-light)]/20 border-[var(--accent-color)] ring-1 ring-[var(--accent-color)] shadow-xs'
+                                : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:border-[var(--border-color)]/80'
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="close_dest"
+                              checked={closeSprintDestination === 'keep'}
+                              onChange={() => setCloseSprintDestination('keep')}
+                              className="mt-0.5 text-[var(--accent-color)] cursor-pointer"
+                            />
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-[var(--text-primary)] block">
+                                Conserver dans ce sprint clôturé
+                              </span>
+                              <span className="text-[10.5px] text-[var(--text-muted)] block leading-snug">
+                                Les tâches resteront associées à {closingSprint.sprint.name} pour l'historique.
+                              </span>
+                            </div>
+                          </label>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-center space-y-1">
+                        <p className="font-bold text-emerald-300">Félicitations ! 🎉</p>
+                        <p className="text-[11px] text-[var(--text-muted)]">
+                          Toutes les tâches de ce sprint ont été menées à terme. Aucune réaffectation n'est nécessaire.
+                        </p>
+                      </div>
+                    )}
+
+                    {nextSprint && nextSprint.state === 'future' && (
+                      <div className="p-3 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] flex items-center justify-between">
+                        <div>
+                          <span className="font-semibold text-[var(--text-primary)] block text-xs">
+                            Activer automatiquement {nextSprint.name}
+                          </span>
+                          <span className="text-[10px] text-[var(--text-muted)] block">
+                            Passe le statut du prochain sprint à "En cours".
+                          </span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={closeSprintActivateNext}
+                          onChange={e => setCloseSprintActivateNext(e.target.checked)}
+                          className="rounded text-[var(--accent-color)] w-4 h-4 cursor-pointer"
+                        />
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-[var(--border-color)] bg-[var(--bg-tertiary)]/30">
+              <button
+                type="button"
+                onClick={() => setClosingSprint(null)}
+                disabled={isClosingSprintBusy}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] border border-[var(--border-color)] transition-colors cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCloseSprint}
+                disabled={isClosingSprintBusy}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                {isClosingSprintBusy ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <CheckCircle2 size={13} />
+                )}
+                <span>Confirmer la clôture</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

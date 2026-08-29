@@ -36,18 +36,18 @@ already there, with the project's checks green.
 ## Ticket Transition & Status Update
 The agent executing this skill is responsible for advancing the ticket to the next agentic status upon completion:
 - **Stage Transition**: Advance ticket from `specified` to `implemented`.
-- **TaskFlow Local Handler (Recommended)**:
-  Call TaskFlow's local transition handler to update SQLite state, record test green checks, and queue tracker synchronization:
-  ```bash
-  curl -s -X POST "${TASKFLOW_API_URL:-http://127.0.0.1:8090}/api/tasks/${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID}/stage" \
-    -H "Content-Type: application/json" \
-    -d '{
-      "stage": "implemented",
-      "note": "<Paste implementation and test output report here>"
-    }'
-  ```
-  *(Or via CLI: `taskflow stage ${TASKFLOW_TASK_KEY:-$TASKFLOW_TASK_ID} implemented`)*
-- **Tracker CLI Fallback** (Only if the local TaskFlow server is unreachable):
-  - **GitHub CLI**: `gh issue edit <NUMBER> --add-label "implemented" --remove-label "specified"` && `gh issue comment <NUMBER> --body "..."`
-  - **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "implemented" --remove-label "specified"` && `linear issue comment add <ISSUE_KEY> --body "..."`
+- **Step 1: Check and use Local Handler (Recommended if TaskFlow is running)**:
+  Call TaskFlow's local transition handler to update local state, record branch/PR, and automatically queue two-way synchronization to GitHub/Linear:
+  - **Via TaskFlow CLI**:
+    ```bash
+    taskflow stage <KEY> implemented ["<optional summary note>"]
+    ```
+  - **Via HTTP API** (port 8090 or 8080):
+    ```bash
+    curl -s -X POST http://localhost:8090/api/tasks/stage -H "Content-Type: application/json" -d '{"taskKey": "<KEY>", "stage": "implemented"}' || curl -s -X POST http://localhost:8080/api/tasks/stage -H "Content-Type: application/json" -d '{"taskKey": "<KEY>", "stage": "implemented"}'
+    ```
+- **Step 2: Fallback to Direct Tracker CLI (Only if local TaskFlow handler is unreachable)**:
+  - **GitHub CLI**: `gh issue edit <NUMBER> --add-label "implemented" --remove-label "specified"`
+  - **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label "implemented" --remove-label "specified"`
+- **Comments**: Post the stage summary report as a comment on the ticket via `taskflow stage <KEY> implemented "<REPORT_NOTE>"` or `gh issue comment <NUMBER> --body "..."` / `linear issue comment add <ISSUE_KEY> --body "..."`.
 - **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).

@@ -49,6 +49,7 @@ export const ListView: React.FC = () => {
     hideDone,
     toggleHideDone,
     openInEditor,
+    openExternalTerminal,
     settings,
     boardGrouping,
     setBoardGrouping,
@@ -732,9 +733,18 @@ export const ListView: React.FC = () => {
             <button
               onClick={() => setChatTask(task)}
               className="p-1 rounded text-[var(--text-muted)] hover:text-cyan-400 hover:bg-cyan-500/10 transition-colors cursor-pointer"
-              title="💬 Discuter avec l'agent Copilot"
+              title="💬 Ouvrir le terminal interactif intégré"
             >
               <MessageSquare size={13} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openExternalTerminal({ taskId: task.id })}
+              className="p-1 rounded text-[var(--text-muted)] hover:text-amber-400 hover:bg-amber-500/10 transition-colors cursor-pointer"
+              title="💻 Lancer dans un terminal externe OS"
+            >
+              <ExternalLink size={13} />
             </button>
 
             <button

@@ -31,6 +31,7 @@ import {
   RotateCcw,
   Bot,
   Info,
+  ExternalLink,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { BoardColumnsEditor } from './BoardColumnsEditor'
@@ -46,6 +47,7 @@ import type {
   SpecFramework,
   SpecFrameworkStatus,
   SpecFrameworkInstallResult,
+  TtyMode,
 } from '../types'
 import { ACCENT_COLORS, accentBadgeStyle, normalizeAccentColor, DEFAULT_PROJECT_ACCENT } from '../lib/accents'
 
@@ -168,6 +170,8 @@ export const ProjectModal: React.FC = () => {
   const [aiProvider, setAiProvider] = useState<AIProvider | ''>('')
   const [aiCommandTemplate, setAiCommandTemplate] = useState('')
   const [useCustomAgent, setUseCustomAgent] = useState(false)
+  const [parallelism, setParallelism] = useState<number>(1)
+  const [ttyMode, setTtyMode] = useState<TtyMode>('integrated')
 
   // Section 4: Compétences IA & Framework SDD
   const [specFramework, setSpecFramework] = useState<SpecFramework>('speckit')
@@ -405,6 +409,8 @@ export const ProjectModal: React.FC = () => {
       setAiProvider(editingProject.aiProvider || '')
       setAiCommandTemplate(editingProject.aiCommandTemplate || '')
       setSpecFramework(editingProject.specFramework || settings.specFramework || 'speckit')
+      setParallelism(editingProject.parallelism && editingProject.parallelism >= 1 && editingProject.parallelism <= 3 ? editingProject.parallelism : 1)
+      setTtyMode(editingProject.ttyMode || 'integrated')
 
       setIssueTracker(editingProject.issueTracker || 'linear')
       setTrackerUrl(editingProject.trackerUrl || '')
@@ -447,6 +453,8 @@ export const ProjectModal: React.FC = () => {
       setAiProvider('')
       setAiCommandTemplate('')
       setSpecFramework(settings.specFramework || 'speckit')
+      setParallelism(1)
+      setTtyMode('integrated')
 
       setIssueTracker('linear')
       setTrackerUrl('')
@@ -598,6 +606,8 @@ export const ProjectModal: React.FC = () => {
         aiProvider: useCustomAgent && aiProvider ? (aiProvider as AIProvider) : undefined,
         aiCommandTemplate: useCustomAgent && aiCommandTemplate.trim() ? aiCommandTemplate.trim() : undefined,
         specFramework,
+        parallelism,
+        ttyMode,
         issueTracker,
         trackerUrl: trackerUrl.trim(),
         linearTeam: linearTeam.trim().toUpperCase(),
@@ -1260,6 +1270,88 @@ export const ProjectModal: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              {/* Parallelism Setting */}
+              <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)]">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/20">
+                      <Layers size={16} />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-[var(--text-primary)] block">
+                        Parallélisme d'Exécution IA (Workers)
+                      </span>
+                      <span className="text-[10px] text-[var(--text-muted)] block">
+                        Nombre de compétences ou agents pouvant s'exécuter simultanément en arrière-plan pour ce projet (1 à 3).
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 bg-[var(--bg-secondary)] p-1 rounded-xl border border-[var(--border-color)] self-start sm:self-auto shrink-0">
+                    {[1, 2, 3].map(val => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setParallelism(val)}
+                        className={`px-3 py-1 text-xs font-mono font-bold rounded-lg transition-all cursor-pointer ${
+                          parallelism === val
+                            ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                            : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
+                        }`}
+                      >
+                        {val} {val === 1 ? 'worker' : 'workers'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* TTY Terminal Mode Setting */}
+              <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)]">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center shrink-0 border border-cyan-500/20">
+                      <Terminal size={16} />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-[var(--text-primary)] block">
+                        Mode de Terminal Interactif (TTY)
+                      </span>
+                      <span className="text-[10px] text-[var(--text-muted)] block">
+                        Choisissez le terminal par défaut pour les sessions et tâches de ce projet.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 bg-[var(--bg-secondary)] p-1 rounded-xl border border-[var(--border-color)] self-start sm:self-auto shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setTtyMode('integrated')}
+                      className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                        ttyMode === 'integrated'
+                          ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
+                      }`}
+                    >
+                      <Terminal size={13} />
+                      Terminal Intégré
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTtyMode('external')}
+                      className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                        ttyMode === 'external'
+                          ? 'bg-[var(--accent-color)] text-white shadow-xs'
+                          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
+                      }`}
+                    >
+                      <ExternalLink size={13} />
+                      Terminal Externe (OS)
+                    </button>
+                  </div>
+                </div>
+              </div>
 
               {/* Stage Mapping Table Card */}
               <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-2.5">

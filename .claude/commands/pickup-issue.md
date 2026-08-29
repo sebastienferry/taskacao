@@ -1,6 +1,6 @@
 ---
-name: pickup-issue
-description: Pick a ticket and autonomously execute all development steps up to Pull Request creation.
+description: Exécute en autonomie complète toutes les étapes d'un ticket jusqu'à la création de la Pull Request.
+argument-hint: <TICKET-KEY> [contexte]
 ---
 # Pickup Issue (Auto-Pilot to PR)
 
@@ -67,3 +67,6 @@ The agent executing the pickup skill is responsible for advancing the ticket thr
 - **HTTP API Alternative** (if CLI not in PATH): `curl -s -X POST http://localhost:8090/api/tasks/stage -H "Content-Type: application/json" -d '{"taskKey":"<KEY>","stage":"<STAGE>"}'`
 - **Fallback to Tracker CLI** (only if TaskFlow is unreachable): `gh issue edit <NUMBER> --add-label "<STAGE>"` / `linear issue update <KEY> --add-label "<STAGE>"`
 - **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).
+
+## Ticket
+$ARGUMENTS

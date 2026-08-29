@@ -123,6 +123,8 @@ type Project struct {
 	AIProvider        string            `json:"aiProvider,omitempty"`        // "agy", "claude", "vibe", "gemini", "cursor", "custom"
 	AICommandTemplate string            `json:"aiCommandTemplate,omitempty"` // e.g. 'agy -p "{prompt}"'
 	SpecFramework     string            `json:"specFramework,omitempty"`     // "speckit", "openspec"
+	Parallelism       int               `json:"parallelism"`                 // 1 to 3 concurrent AI background workers
+	TtyMode           string            `json:"ttyMode,omitempty"`           // "integrated" or "external"
 	TaskCount         int               `json:"taskCount"`
 	CreatedAt         time.Time         `json:"createdAt"`
 	UpdatedAt         time.Time         `json:"updatedAt"`
@@ -283,6 +285,8 @@ type CreateProjectRequest struct {
 	AIProvider        string            `json:"aiProvider,omitempty"`
 	AICommandTemplate string            `json:"aiCommandTemplate,omitempty"`
 	SpecFramework     string            `json:"specFramework,omitempty"`
+	Parallelism       int               `json:"parallelism,omitempty"`
+	TtyMode           string            `json:"ttyMode,omitempty"`
 }
 
 type UpdateProjectRequest struct {
@@ -313,6 +317,19 @@ type UpdateProjectRequest struct {
 	AIProvider        *string              `json:"aiProvider,omitempty"`
 	AICommandTemplate *string              `json:"aiCommandTemplate,omitempty"`
 	SpecFramework     *string              `json:"specFramework,omitempty"`
+	Parallelism       *int                 `json:"parallelism,omitempty"`
+	TtyMode           *string              `json:"ttyMode,omitempty"`
+}
+
+// NormalizeParallelism keeps the concurrent background agent workers count between 1 and 3.
+func NormalizeParallelism(p int) int {
+	if p < 1 {
+		return 1
+	}
+	if p > 3 {
+		return 3
+	}
+	return p
 }
 
 type InstalledSkillInfo struct {
@@ -334,6 +351,8 @@ var SkillDirNames = map[string]string{
 	"create_pr": "create-pr",
 	"review":    "create-pr",
 	"handoff":   "handoff-issue",
+	"pickup":    "pickup-issue",
+	"pick":      "pickup-issue",
 }
 
 // SkillAgentDirs are the per-repository directories the agent CLIs read their
@@ -574,9 +593,10 @@ type Settings struct {
 	PromptImplement    string    `json:"promptImplement"`
 	PromptCreatePR     string    `json:"promptCreatePr"`
 	PromptPick         string    `json:"promptPick"`
-	EditorCommand      string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
-	SpecFramework      string    `json:"specFramework"` // "speckit", "openspec"
-	UpdatedAt          time.Time `json:"updatedAt"`
+	EditorCommand           string    `json:"editorCommand"` // "code", "cursor", "zed", "subl", etc.
+	ExternalTerminalCommand string    `json:"externalTerminalCommand,omitempty"` // e.g. "Terminal", "iTerm", "Ghostty", "alacritty", "kitty"
+	SpecFramework           string    `json:"specFramework"` // "speckit", "openspec"
+	UpdatedAt               time.Time `json:"updatedAt"`
 }
 
 // SpecFrameworkInstallRequest asks Taskacao to bootstrap a Spec-Driven Design

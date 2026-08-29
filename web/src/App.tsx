@@ -26,24 +26,40 @@ import { ToastContainer } from './components/ToastContainer'
 import { Loader2 } from 'lucide-react'
 
 const MainContent: React.FC = () => {
-  const { activeView, isLoading, error, tasks, isTrackerSetupOpen, setIsTrackerSetupOpen } = useApp()
+  const {
+    activeView,
+    isLoading,
+    error,
+    tasks,
+    isTrackerSetupOpen,
+    setIsTrackerSetupOpen,
+    isTerminalPanelOpen,
+    terminalDockPosition,
+  } = useApp()
+
+  const dockPos = terminalDockPosition || 'right'
 
   return (
     <>
     <div className="flex flex-col h-[var(--app-h)] w-[var(--app-w)] overflow-hidden bg-[var(--bg-primary)]">
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Navigation Sidebar */}
         <Sidebar />
 
+        {/* Docked workspace CLI on LEFT */}
+        {isTerminalPanelOpen && dockPos === 'left' && (
+          <WorkspaceTerminalPanel position="left" />
+        )}
+
         {/* Main Workspace Area */}
-        <div className="flex-1 flex flex-col h-full overflow-hidden">
+        <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0 min-h-0">
           <Header />
 
           {/* Bascule à chaud entre les tickets épinglés */}
           <PinnedBar />
 
           {/* Dynamic View Body */}
-          <main className="flex-1 flex flex-col overflow-hidden relative">
+          <main className="flex-1 flex flex-col overflow-hidden relative min-h-0">
             {isLoading && tasks.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center gap-3 text-[var(--text-muted)]">
                 <Loader2 size={28} className="animate-spin text-[var(--accent-color)]" />
@@ -74,10 +90,17 @@ const MainContent: React.FC = () => {
               <ActivitiesView />
             )}
           </main>
+
+          {/* Docked workspace CLI on BOTTOM */}
+          {isTerminalPanelOpen && dockPos === 'bottom' && (
+            <WorkspaceTerminalPanel position="bottom" />
+          )}
         </div>
 
-        {/* Docked workspace CLI, side by side with the views */}
-        <WorkspaceTerminalPanel />
+        {/* Docked workspace CLI on RIGHT */}
+        {isTerminalPanelOpen && dockPos === 'right' && (
+          <WorkspaceTerminalPanel position="right" />
+        )}
       </div>
 
       {/* Global Bottom Status Bar with CWD Git Branch, Project, Engine & Live Jobs */}

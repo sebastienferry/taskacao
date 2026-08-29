@@ -54,14 +54,14 @@ var StageSkills = []StageSkill{
 		Command:     "/clarify-issue",
 		FromStage:   "new",
 		ToStage:     "clarified",
-		Interactive: true,
+		Interactive: false,
 		Description: "Analyse les ambiguïtés techniques et produit 3 à 5 questions de cadrage.",
 		Icon:        "HelpCircle",
 		Color:       "amber",
 		Steps: []string{
 			"Lecture du ticket et du code concerné",
 			"Détection des ambiguïtés et des dépendances",
-			"Questions de cadrage posées en session interactive",
+			"Questions de cadrage et options recommandées",
 			"Label 'clarified' et transition posés par TaskFlow",
 		},
 		title:           "Clarify Issue",
@@ -76,19 +76,19 @@ would be expensive to reverse later, not for a list of everything unknown.`,
    if two readings lead to different code.
 3. Name the critical dependencies: other services, other teams, migrations, data
    you do not have.
-4. Ask 3 to 5 numbered questions. Prefer closed questions. For each one, state the
-   option you recommend and why, so silence still leaves a usable default.
-5. Wait for the answers. Then write the settled scope: what was decided, what was
-   explicitly dropped, what stays open on purpose.`,
+4. Formulate 3 to 5 numbered questions with your recommended options:
+   - **Autonomous execution** (default background / pipeline run): Adopt the recommended options as the settled scope, document the rationale in the report, and advance the ticket.
+   - **Interactive TTY session** (when running in an interactive terminal): Ask the questions directly to the user and incorporate their answers.
+5. Record the settled scope and advance the ticket locally via TaskFlow handler.`,
 		guardTitle: "Do not",
 		guard: `- Do not write production code at this stage, and do not start the specification.
-- Do not invent an answer to your own question and move on.
+- Do not invent an answer to your own question and move on without stating your assumption.
 - Do not pad the list to reach five questions.`,
 		report: `- Restated request and scope.
 - Ambiguities, worst first.
 - Critical dependencies.
 - Numbered questions with your recommended option.
-- After the answers: the settled scope.`,
+- Settled scope and assumptions.`,
 	},
 	{
 		ID:          "specify",
@@ -235,6 +235,70 @@ and a local workspace with nothing stale in it.`,
 - What was cleaned locally, and what could not be, with the reason.
 - Follow-up tickets worth creating.`,
 	},
+	{
+		ID:          "pickup",
+		Name:        "Pickup & Auto-Pilot to PR",
+		DirName:     models.SkillDirNames["pickup"],
+		Command:     "/pickup-issue",
+		FromStage:   "new",
+		ToStage:     "reviewed",
+		Interactive: false,
+		Description: "Exécute en autonomie complète toutes les étapes d'un ticket jusqu'à la création de la Pull Request.",
+		Icon:        "Sparkles",
+		Color:       "purple",
+		Steps: []string{
+			"Cadrage des ambiguïtés (Clarify)",
+			"Rédaction de la spécification technique SDD (Specify)",
+			"Implémentation incrémentale et passage des tests (Code)",
+			"Revue du diff, commit et ouverture de la PR/MR (Create PR)",
+			"Mise à jour à chaque étape via le handler local TaskFlow",
+		},
+		title:           "Pickup Issue (Auto-Pilot to PR)",
+		frontmatterDesc: "Pick a ticket and autonomously execute all development steps up to Pull Request creation.",
+		goal: `Autonomously take a ticket from its current stage through clarification, specification,
+implementation, and testing, all the way to opening a clean Pull Request, updating each stage via TaskFlow.`,
+		readFirst: `- The ticket: key, title, description, parent macro, and tracker comments.
+- The project's code and existing patterns.
+- The project SDD framework (OpenSpec or Spec Kit).`,
+		stepsBody: `1. **Pick & Inspect**:
+   - Identify the ticket key (<KEY>) and target branch name (<KEY>-<title-slug>).
+   - Check the current ticket stage and start from where it currently is.
+   - Switch or create the work branch ` + tick + `<KEY>-<title-slug>` + tick + `. Never implement on the default branch.
+
+2. **Step 1: Clarification (if not already clarified)**:
+   - Restate the requirements and resolve ambiguities with sensible technical choices.
+   - Transition ticket locally: ` + tick + `taskflow stage <KEY> clarified` + tick + `
+
+3. **Step 2: Specification (if not already specified)**:
+   - Write the formal technical specification in ` + tick + `openspec/changes/<KEY>-<title-slug>/` + tick + ` or ` + tick + `specs/<KEY>-<title-slug>/` + tick + `.
+   - Validate the specification structure and checklist.
+   - Transition ticket locally: ` + tick + `taskflow stage <KEY> specified` + tick + `
+
+4. **Step 3: Implementation & Validation**:
+   - Implement the changes incrementally on the work branch following the spec checklist.
+   - Add automated tests covering the new behavior and edge cases.
+   - Run the project's build, linters, and test suite until all checks pass (100% green).
+   - Transition ticket locally: ` + tick + `taskflow stage <KEY> implemented --branch "<KEY>-<title-slug>"` + tick + `
+
+5. **Step 4: Review, Push & Pull Request**:
+   - Review the complete diff against the default branch to ensure cleanliness.
+   - Commit all changes with a clean conventional commit message.
+   - Push the branch to the remote repository: ` + tick + `git push -u origin <KEY>-<title-slug>` + tick + `
+   - Open the Pull Request / Merge Request via GitHub CLI (` + tick + `gh pr create` + tick + `) or GitLab/Linear tooling.
+   - Transition ticket locally: ` + tick + `taskflow stage <KEY> reviewed --pr-url "<PR_URL>"` + tick + `
+
+6. **Step 5: Stop before merge**:
+   - Report the PR URL, test results, and summary of changes.
+   - Do NOT merge into the default branch (merging is strictly reserved for the human user).`,
+		guardTitle: "Do not",
+		guard: `- Do not merge into the default branch (merging is reserved for the human user).
+- Do not push or open a PR if the test suite is failing.
+- Do not skip the local handler stage transitions.`,
+		report: `- The created Pull Request URL.
+- The work branch and files modified.
+- The test results demonstrating that build, lint, and tests pass.
+- Summary of settled scope and key architectural decisions.`,
+	},
 }
 
 // StageSkillByID returns the unified skill for an internal id. "review" is the
@@ -243,6 +307,9 @@ func StageSkillByID(skillID string) (StageSkill, bool) {
 	skillID = strings.TrimSpace(skillID)
 	if skillID == "review" {
 		skillID = "create_pr"
+	}
+	if skillID == "pick" || skillID == "pick_issue" || skillID == "pickup_issue" || skillID == "pickup-issue" || skillID == "pick-issue" {
+		skillID = "pickup"
 	}
 	for _, s := range StageSkills {
 		if s.ID == skillID {
@@ -299,18 +366,51 @@ func specifyFrameworkBody(specFramework string) (readFirst, steps string) {
 // new -> clarified -> specified -> implemented -> reviewed -> finished
 func renderTicketTransitionContract(s StageSkill) string {
 	var b strings.Builder
+	if s.ID == "pickup" {
+		b.WriteString("## Ticket Transition & Autonomous Pipeline Contract\n")
+		b.WriteString("The agent executing the pickup skill is responsible for advancing the ticket through each stage autonomously up to PR creation:\n")
+		b.WriteString("- **Step 1 (Clarify)**: Advance ticket to `clarified` via `taskflow stage <KEY> clarified`\n")
+		b.WriteString("- **Step 2 (Specify)**: Advance ticket to `specified` via `taskflow stage <KEY> specified`\n")
+		b.WriteString("- **Step 3 (Implement)**: Advance ticket to `implemented` via `taskflow stage <KEY> implemented --branch \"<KEY>-<title-slug>\"`\n")
+		b.WriteString("- **Step 4 (Review & PR)**: Advance ticket to `reviewed` via `taskflow stage <KEY> reviewed --pr-url \"<PR_URL>\"`\n")
+		b.WriteString("- **HTTP API Alternative** (if CLI not in PATH): `curl -s -X POST http://localhost:8090/api/tasks/stage -H \"Content-Type: application/json\" -d '{\"taskKey\":\"<KEY>\",\"stage\":\"<STAGE>\"}'`\n")
+		b.WriteString("- **Fallback to Tracker CLI** (only if TaskFlow is unreachable): `gh issue edit <NUMBER> --add-label \"<STAGE>\"` / `linear issue update <KEY> --add-label \"<STAGE>\"`\n")
+		b.WriteString("- **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).\n")
+		return b.String()
+	}
+
 	b.WriteString("## Ticket Transition & Status Update\n")
 	b.WriteString("The agent executing this skill is responsible for advancing the ticket to the next agentic status upon completion:\n")
-	if s.ToStage == "finished" {
-		fmt.Fprintf(&b, "- **Stage Transition**: Advance ticket from `%s` to `%s`.\n", s.FromStage, s.ToStage)
-		fmt.Fprintf(&b, "- **GitHub CLI**: `gh issue edit <NUMBER> --add-label \"%s\" --remove-label \"%s\"` then `gh issue close <NUMBER>`\n", s.ToStage, s.FromStage)
-		fmt.Fprintf(&b, "- **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label \"%s\" --remove-label \"%s\" --state \"Done\"`\n", s.ToStage, s.FromStage)
+	fmt.Fprintf(&b, "- **Stage Transition**: Advance ticket from `%s` to `%s`.\n", s.FromStage, s.ToStage)
+	b.WriteString("- **Step 1: Check and use Local Handler (Recommended if TaskFlow is running)**:\n")
+	b.WriteString("  Call TaskFlow's local transition handler to update local state, record branch/PR, and automatically queue two-way synchronization to GitHub/Linear:\n")
+	b.WriteString("  - **Via TaskFlow CLI**:\n")
+	if s.ID == "code" {
+		fmt.Fprintf(&b, "    ```bash\n    taskflow stage <KEY> %s --branch \"<KEY>-<title-slug>\" [\"<optional summary note>\"]\n    ```\n", s.ToStage)
+	} else if s.ID == "create_pr" {
+		fmt.Fprintf(&b, "    ```bash\n    taskflow stage <KEY> %s --pr-url \"<PR_URL>\" [\"<optional summary note>\"]\n    ```\n", s.ToStage)
 	} else {
-		fmt.Fprintf(&b, "- **Stage Transition**: Advance ticket from `%s` to `%s`.\n", s.FromStage, s.ToStage)
-		fmt.Fprintf(&b, "- **GitHub CLI**: `gh issue edit <NUMBER> --add-label \"%s\" --remove-label \"%s\"`\n", s.ToStage, s.FromStage)
-		fmt.Fprintf(&b, "- **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label \"%s\" --remove-label \"%s\"`\n", s.ToStage, s.FromStage)
+		fmt.Fprintf(&b, "    ```bash\n    taskflow stage <KEY> %s [\"<optional summary note>\"]\n    ```\n", s.ToStage)
 	}
-	b.WriteString("- **Comments**: Post the stage summary report as a comment on the ticket via `gh issue comment <NUMBER> --body \"...\"` or `linear issue comment add <ISSUE_KEY> --body \"...\"`.\n")
+	b.WriteString("  - **Via HTTP API** (port 8090 or 8080):\n")
+	b.WriteString("    ```bash\n")
+	if s.ID == "code" {
+		fmt.Fprintf(&b, "    curl -s -X POST http://localhost:8090/api/tasks/stage -H \"Content-Type: application/json\" -d '{\"taskKey\": \"<KEY>\", \"stage\": \"%s\", \"branch\": \"<KEY>-<title-slug>\"}' || curl -s -X POST http://localhost:8080/api/tasks/stage -H \"Content-Type: application/json\" -d '{\"taskKey\": \"<KEY>\", \"stage\": \"%s\", \"branch\": \"<KEY>-<title-slug>\"}'\n", s.ToStage, s.ToStage)
+	} else if s.ID == "create_pr" {
+		fmt.Fprintf(&b, "    curl -s -X POST http://localhost:8090/api/tasks/stage -H \"Content-Type: application/json\" -d '{\"taskKey\": \"<KEY>\", \"stage\": \"%s\", \"prUrl\": \"<PR_URL>\"}' || curl -s -X POST http://localhost:8080/api/tasks/stage -H \"Content-Type: application/json\" -d '{\"taskKey\": \"<KEY>\", \"stage\": \"%s\", \"prUrl\": \"<PR_URL>\"}'\n", s.ToStage, s.ToStage)
+	} else {
+		fmt.Fprintf(&b, "    curl -s -X POST http://localhost:8090/api/tasks/stage -H \"Content-Type: application/json\" -d '{\"taskKey\": \"<KEY>\", \"stage\": \"%s\"}' || curl -s -X POST http://localhost:8080/api/tasks/stage -H \"Content-Type: application/json\" -d '{\"taskKey\": \"<KEY>\", \"stage\": \"%s\"}'\n", s.ToStage, s.ToStage)
+	}
+	b.WriteString("    ```\n")
+	b.WriteString("- **Step 2: Fallback to Direct Tracker CLI (Only if local TaskFlow handler is unreachable)**:\n")
+	if s.ToStage == "finished" {
+		fmt.Fprintf(&b, "  - **GitHub CLI**: `gh issue edit <NUMBER> --add-label \"%s\" --remove-label \"%s\"` then `gh issue close <NUMBER>`\n", s.ToStage, s.FromStage)
+		fmt.Fprintf(&b, "  - **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label \"%s\" --remove-label \"%s\" --state \"Done\"`\n", s.ToStage, s.FromStage)
+	} else {
+		fmt.Fprintf(&b, "  - **GitHub CLI**: `gh issue edit <NUMBER> --add-label \"%s\" --remove-label \"%s\"`\n", s.ToStage, s.FromStage)
+		fmt.Fprintf(&b, "  - **Linear CLI**: `linear issue update <ISSUE_KEY> --add-label \"%s\" --remove-label \"%s\"`\n", s.ToStage, s.FromStage)
+	}
+	b.WriteString("- **Comments**: Post the stage summary report as a comment on the ticket via `taskflow stage <KEY> " + s.ToStage + " \"<REPORT_NOTE>\"` or `gh issue comment <NUMBER> --body \"...\"` / `linear issue comment add <ISSUE_KEY> --body \"...\"`.\n")
 	b.WriteString("- **Safety Rules**: Always work on the ticket branch (`<KEY>-<title-slug>`). Never delete anything remote and never merge into the default branch (merging is strictly reserved for the human user).\n")
 	return b.String()
 }

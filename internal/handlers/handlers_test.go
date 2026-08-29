@@ -330,5 +330,49 @@ func TestHandleTaskStageTransition(t *testing.T) {
 	}
 }
 
+func TestHandleGitBranchesAndCheckoutWithAll(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
 
+	database, err := db.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer database.Close()
 
+	h := handlers.NewHandler(database)
+
+	// 1. GET /api/git/branches?projectId=all should succeed using repo fallback
+	reqBranches, err := http.NewRequest(http.MethodGet, "/api/git/branches?projectId=all", nil)
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	rrBranches := httptest.NewRecorder()
+	h.HandleGitBranches(rrBranches, reqBranches)
+
+	if rrBranches.Code != http.StatusOK {
+		t.Fatalf("Expected status 200 for branches, got %d: %s", rrBranches.Code, rrBranches.Body.String())
+	}
+
+	var info models.GitBranchesInfo
+	if err := json.Unmarshal(rrBranches.Body.Bytes(), &info); err != nil {
+		t.Fatalf("Failed to decode branches JSON: %v", err)
+	}
+	if info.CurrentBranch == "" {
+		t.Errorf("Expected non-empty current branch")
+	}
+
+	// 2. POST /api/git/checkout with projectId="all" and current branch should succeed cleanly
+	checkoutBody := `{"projectId": "all", "branch": "` + info.CurrentBranch + `", "create": false}`
+	reqCheckout, err := http.NewRequest(http.MethodPost, "/api/git/checkout", strings.NewReader(checkoutBody))
+	if err != nil {
+		t.Fatalf("Failed to create checkout request: %v", err)
+	}
+	reqCheckout.Header.Set("Content-Type", "application/json")
+	rrCheckout := httptest.NewRecorder()
+	h.HandleGitCheckout(rrCheckout, reqCheckout)
+
+	if rrCheckout.Code != http.StatusOK {
+		t.Fatalf("Expected status 200 for checkout, got %d: %s", rrCheckout.Code, rrCheckout.Body.String())
+	}
+}

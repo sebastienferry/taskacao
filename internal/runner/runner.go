@@ -1401,6 +1401,172 @@ func (r *Runner) AddIssueComment(source string, repo string, repoPath string, ke
 	return nil
 }
 
+func (r *Runner) GetGithubIssueComments(repo string, repoPath string, key string) ([]models.TaskComment, error) {
+	repo, repoPath = ResolveGithubRepo(repo, repoPath)
+	num, err := cleanGithubIssueNum(key)
+	if err != nil {
+		return nil, fmt.Errorf("invalid github issue number: %s", key)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	ghPath, _ := FindCliTool("gh")
+	if ghPath == "" {
+		ghPath = "gh"
+	}
+
+	cleanNum := strconv.Itoa(num)
+	var args []string
+	if repo != "" {
+		args = []string{"issue", "view", cleanNum, "-R", repo, "--json", "comments"}
+	} else {
+		args = []string{"issue", "view", cleanNum, "--json", "comments"}
+	}
+
+	output, err := r.runCommand(ctx, repoPath, ghPath, args...)
+	if err != nil {
+		// Fallback to gh api
+		endpoint := fmt.Sprintf("repos/%s/issues/%d/comments", repo, num)
+		var apiArgs []string
+		if repo != "" {
+			apiArgs = []string{"api", endpoint, "-R", repo}
+		} else {
+			apiArgs = []string{"api", endpoint}
+		}
+		output, err = r.runCommand(ctx, repoPath, ghPath, apiArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("gh comments failed: %w (output: %s)", err, output)
+		}
+		var apiComments []struct {
+			ID        int64  `json:"id"`
+			NodeID    string `json:"node_id"`
+			Body      string `json:"body"`
+			CreatedAt string `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}
+		if jsonErr := json.Unmarshal([]byte(output), &apiComments); jsonErr == nil {
+			var comments []models.TaskComment
+			for _, c := range apiComments {
+				var t *time.Time
+				if parsed, pErr := time.Parse(time.RFC3339, c.CreatedAt); pErr == nil {
+					t = &parsed
+				}
+				idStr := strconv.FormatInt(c.ID, 10)
+				if c.NodeID != "" {
+					idStr = c.NodeID
+				}
+				comments = append(comments, models.TaskComment{
+					ID:        idStr,
+					Author:    c.User.Login,
+					Body:      c.Body,
+					CreatedAt: t,
+					Source:    "github",
+				})
+			}
+			return comments, nil
+		}
+		return nil, err
+	}
+
+	var resp struct {
+		Comments []struct {
+			ID        string `json:"id"`
+			Body      string `json:"body"`
+			CreatedAt string `json:"createdAt"`
+			Author    struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		} `json:"comments"`
+	}
+	if err := json.Unmarshal([]byte(output), &resp); err != nil {
+		return nil, fmt.Errorf("unmarshal github comments failed: %w", err)
+	}
+
+	var comments []models.TaskComment
+	for _, c := range resp.Comments {
+		var t *time.Time
+		if parsed, pErr := time.Parse(time.RFC3339, c.CreatedAt); pErr == nil {
+			t = &parsed
+		}
+		comments = append(comments, models.TaskComment{
+			ID:        c.ID,
+			Author:    c.Author.Login,
+			Body:      c.Body,
+			CreatedAt: t,
+			Source:    "github",
+		})
+	}
+	return comments, nil
+}
+
+func (r *Runner) GetLinearIssueComments(repoPath string, key string) ([]models.TaskComment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	linPath, _ := FindCliTool("linear")
+	if linPath == "" {
+		linPath = "linear"
+	}
+
+	output, err := r.runCommand(ctx, repoPath, linPath, "issue", "view", key, "--json")
+	if err != nil {
+		return nil, fmt.Errorf("linear issue view failed: %w", err)
+	}
+
+	var resp struct {
+		Comments struct {
+			Nodes []struct {
+				ID        string `json:"id"`
+				Body      string `json:"body"`
+				CreatedAt string `json:"createdAt"`
+				User      struct {
+					Name        string `json:"name"`
+					DisplayName string `json:"displayName"`
+				} `json:"user"`
+			} `json:"nodes"`
+		} `json:"comments"`
+		CommentsList []struct {
+			ID        string `json:"id"`
+			Body      string `json:"body"`
+			CreatedAt string `json:"createdAt"`
+			User      struct {
+				Name        string `json:"name"`
+				DisplayName string `json:"displayName"`
+			} `json:"user"`
+		} `json:"commentsList"`
+	}
+	if err := json.Unmarshal([]byte(output), &resp); err != nil {
+		return nil, fmt.Errorf("parse linear comments failed: %w", err)
+	}
+
+	var comments []models.TaskComment
+	nodes := resp.Comments.Nodes
+	if len(nodes) == 0 && len(resp.CommentsList) > 0 {
+		nodes = resp.CommentsList
+	}
+	for _, n := range nodes {
+		author := n.User.DisplayName
+		if author == "" {
+			author = n.User.Name
+		}
+		var t *time.Time
+		if parsed, pErr := time.Parse(time.RFC3339, n.CreatedAt); pErr == nil {
+			t = &parsed
+		}
+		comments = append(comments, models.TaskComment{
+			ID:        n.ID,
+			Author:    author,
+			Body:      n.Body,
+			CreatedAt: t,
+			Source:    "linear",
+		})
+	}
+	return comments, nil
+}
+
 // installedSkillPath returns the SKILL.md of a workflow skill inside a checkout,
 // whichever agent directory holds it. Empty when the skill is not installed.
 func installedSkillPath(repoDir, skillID string) string {
@@ -2244,6 +2410,114 @@ func (r *Runner) OpenInEditor(editorCmd string, targetPath string) error {
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to open in '%s': %w", editorCmd, err)
+	}
+	return nil
+}
+
+// OpenExternalTerminal opens a native host terminal window in the given directory,
+// with contextual environment variables and an optional initial command line.
+func (r *Runner) OpenExternalTerminal(customTermCmd string, targetPath string, initialCommand string, envVars map[string]string) error {
+	if targetPath == "" {
+		targetPath = "."
+	}
+	targetPath = filepath.Clean(targetPath)
+	if abs, err := filepath.Abs(targetPath); err == nil {
+		targetPath = abs
+	}
+
+	customTermCmd = strings.TrimSpace(customTermCmd)
+
+	// Create a temporary launcher script
+	tmpFile, err := os.CreateTemp("", "taskflow-term-*.command")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary terminal script: %w", err)
+	}
+	scriptPath := tmpFile.Name()
+
+	var sb strings.Builder
+	sb.WriteString("#!/bin/bash\n")
+	sb.WriteString("# TaskFlow External Terminal Session\n\n")
+
+	customPath := GetDynamicCustomPath()
+	if customPath != "" {
+		sb.WriteString(fmt.Sprintf("export PATH=%q:$PATH\n", customPath))
+	}
+
+	for k, v := range envVars {
+		if strings.TrimSpace(k) != "" {
+			sb.WriteString(fmt.Sprintf("export %s=%q\n", k, v))
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("cd %q || exit 1\n\n", targetPath))
+	sb.WriteString("echo -e \"\\033[1;36m┌──────────────────────────────────────────────────┐\\033[0m\"\n")
+	sb.WriteString("echo -e \"\\033[1;36m│          TaskFlow External Terminal             │\\033[0m\"\n")
+	sb.WriteString("echo -e \"\\033[1;36m└──────────────────────────────────────────────────┘\\033[0m\"\n")
+	sb.WriteString(fmt.Sprintf("echo -e \"\\033[0;32m📁 Dossier :\\033[0m %s\"\n", targetPath))
+	if taskKey, ok := envVars["TASKFLOW_TASK_KEY"]; ok && taskKey != "" {
+		sb.WriteString(fmt.Sprintf("echo -e \"\\033[0;35m🎯 Tâche   :\\033[0m %s\"\n", taskKey))
+	}
+	sb.WriteString("echo \"\"\n\n")
+
+	initialCommand = strings.TrimSpace(initialCommand)
+	if initialCommand != "" {
+		sb.WriteString(fmt.Sprintf("echo -e \"\\033[0;33m▶ Exécution :\\033[0m %s\"\n", initialCommand))
+		sb.WriteString(fmt.Sprintf("%s\n\n", initialCommand))
+	}
+
+	sb.WriteString("exec \"${SHELL:-/bin/zsh}\" -l\n")
+
+	if _, err := tmpFile.WriteString(sb.String()); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("failed to write terminal script: %w", err)
+	}
+	tmpFile.Close()
+
+	if err := os.Chmod(scriptPath, 0755); err != nil {
+		return fmt.Errorf("failed to make terminal script executable: %w", err)
+	}
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		if customTermCmd != "" {
+			parts := strings.Fields(customTermCmd)
+			if len(parts) == 1 && !strings.Contains(parts[0], "/") {
+				cmd = exec.Command("open", "-a", parts[0], scriptPath)
+			} else {
+				args := append(parts[1:], scriptPath)
+				cmd = exec.Command(parts[0], args...)
+			}
+		} else {
+			cmd = exec.Command("open", scriptPath)
+		}
+	case "windows":
+		cmd = exec.Command("cmd.exe", "/c", "start", scriptPath)
+	default: // linux / unix
+		if customTermCmd != "" {
+			parts := strings.Fields(customTermCmd)
+			args := append(parts[1:], scriptPath)
+			cmd = exec.Command(parts[0], args...)
+		} else if _, err := exec.LookPath("x-terminal-emulator"); err == nil {
+			cmd = exec.Command("x-terminal-emulator", "-e", scriptPath)
+		} else if _, err := exec.LookPath("gnome-terminal"); err == nil {
+			cmd = exec.Command("gnome-terminal", "--", scriptPath)
+		} else if _, err := exec.LookPath("konsole"); err == nil {
+			cmd = exec.Command("konsole", "-e", scriptPath)
+		} else if _, err := exec.LookPath("xterm"); err == nil {
+			cmd = exec.Command("xterm", "-e", scriptPath)
+		} else {
+			cmd = exec.Command("sh", scriptPath)
+		}
+	}
+
+	if cmd == nil {
+		return fmt.Errorf("unable to determine terminal launcher for OS %s", runtime.GOOS)
+	}
+
+	cmd.Env = append(os.Environ(), "PATH="+GetDynamicCustomPath()+":"+os.Getenv("PATH"))
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start external terminal: %w", err)
 	}
 	return nil
 }

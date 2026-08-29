@@ -183,3 +183,85 @@ export const stageForTrackerStatuses = (
   }
   return null
 }
+
+export interface NextStepInfo {
+  currentStage: WorkflowStage
+  nextSkillId: string | null
+  stepLabel: string
+  stepDescription: string
+  stepTooltip: string
+  autoTooltip: string
+  remainingSteps: string[]
+}
+
+/**
+ * Informations descriptives et tooltips détaillés pour avancer d'un pas
+ * ou en autonomie dans le workflow agentique.
+ */
+export const getNextStepInfo = (task: Task, project?: Project | null): NextStepInfo => {
+  const currentStage = resolveTaskStage(task, project)
+
+  switch (currentStage) {
+    case 'new':
+      return {
+        currentStage: 'new',
+        nextSkillId: 'clarify',
+        stepLabel: 'Clarifier',
+        stepDescription: 'Clarifier les exigences et questions non tranchées',
+        stepTooltip: "Avancer d'un pas : Clarifier les exigences (clarify-issue)",
+        autoTooltip: "Avancer en autonomie : Clarifier ➔ Spécifier ➔ Coder ➔ Créer PR",
+        remainingSteps: ['Clarifier', 'Spécifier', 'Coder', 'Créer PR'],
+      }
+    case 'clarified':
+      return {
+        currentStage: 'clarified',
+        nextSkillId: 'specify',
+        stepLabel: 'Spécifier',
+        stepDescription: 'Rédiger la spécification technique (Spec Kit / OpenSpec)',
+        stepTooltip: "Avancer d'un pas : Spécifier la solution technique (specify-issue)",
+        autoTooltip: "Avancer en autonomie : Spécifier ➔ Coder ➔ Créer PR",
+        remainingSteps: ['Spécifier', 'Coder', 'Créer PR'],
+      }
+    case 'specified':
+      return {
+        currentStage: 'specified',
+        nextSkillId: 'implement',
+        stepLabel: 'Coder',
+        stepDescription: 'Implémenter le code sur la branche et passer les tests',
+        stepTooltip: "Avancer d'un pas : Implémenter le code et tests (code-issue)",
+        autoTooltip: "Avancer en autonomie : Coder ➔ Créer PR",
+        remainingSteps: ['Coder', 'Créer PR'],
+      }
+    case 'implemented':
+      return {
+        currentStage: 'implemented',
+        nextSkillId: 'create_pr',
+        stepLabel: 'Créer PR',
+        stepDescription: 'Revue de code peer-review et ouverture de la Pull Request',
+        stepTooltip: "Avancer d'un pas : Revue de code & Création de PR (create-pr)",
+        autoTooltip: "Avancer en autonomie : Revue & Création de PR",
+        remainingSteps: ['Créer PR'],
+      }
+    case 'reviewed':
+      return {
+        currentStage: 'reviewed',
+        nextSkillId: null,
+        stepLabel: 'Merge',
+        stepDescription: 'Fusionner la Pull Request / branche et finaliser (#finished)',
+        stepTooltip: "Avancer d'un pas : Fusionner la PR et finaliser le ticket (#finished)",
+        autoTooltip: "PR prête : la fusion finale reste manuelle (#finished)",
+        remainingSteps: ['Merge / Finaliser'],
+      }
+    case 'finished':
+    default:
+      return {
+        currentStage: 'finished',
+        nextSkillId: null,
+        stepLabel: 'Terminé',
+        stepDescription: 'Ticket finalisé et validé',
+        stepTooltip: 'Ticket terminé (#finished)',
+        autoTooltip: 'Ticket déjà terminé',
+        remainingSteps: [],
+      }
+  }
+}

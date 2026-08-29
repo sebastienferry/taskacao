@@ -58,6 +58,7 @@ export const ProfileModal: React.FC = () => {
   const [defaultView, setDefaultView] = useState<ViewMode>(settings.defaultView)
   const [detailMode, setDetailMode] = useState<DetailMode>(settings.detailMode || 'panel')
   const [editorCommand, setEditorCommand] = useState(settings.editorCommand || 'code')
+  const [externalTerminalCommand, setExternalTerminalCommand] = useState(settings.externalTerminalCommand || '')
 
   // Agentic AI & CLI Configuration
   const [aiProvider, setAiProvider] = useState<AIProvider>(settings.aiProvider || 'agy')
@@ -91,6 +92,7 @@ export const ProfileModal: React.FC = () => {
       setDefaultView(settings.defaultView)
       setDetailMode(settings.detailMode || 'panel')
       setEditorCommand(settings.editorCommand || 'code')
+      setExternalTerminalCommand(settings.externalTerminalCommand || '')
       setAiProvider(settings.aiProvider || 'agy')
       setAiCommandTemplate(settings.aiCommandTemplate || 'agy -p "{prompt}"')
       setSpecFramework(settings.specFramework || 'speckit')
@@ -144,6 +146,7 @@ export const ProfileModal: React.FC = () => {
       defaultView,
       detailMode,
       editorCommand: editorCommand.trim() || 'code',
+      externalTerminalCommand: externalTerminalCommand.trim(),
       aiProvider,
       aiCommandTemplate: aiCommandTemplate.trim() || `${aiProvider} -p "{prompt}"`,
       specFramework,
@@ -459,6 +462,56 @@ export const ProfileModal: React.FC = () => {
                     value={editorCommand}
                     onChange={e => setEditorCommand(e.target.value)}
                     placeholder="Ex: code, cursor, zed"
+                    className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
+                  />
+                </div>
+              </div>
+
+              {/* Default External Terminal */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
+                    <Terminal size={13} className="text-[var(--accent-color)]" />
+                    <span>Application de Terminal externe</span>
+                  </label>
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono">Défaut : Terminal OS par défaut</span>
+                </div>
+
+                {/* Quick Presets */}
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                  {[
+                    { cmd: '', label: 'Auto (OS)' },
+                    { cmd: 'Terminal', label: 'Terminal.app' },
+                    { cmd: 'iTerm', label: 'iTerm2' },
+                    { cmd: 'Ghostty', label: 'Ghostty' },
+                    { cmd: 'Alacritty', label: 'Alacritty' },
+                    { cmd: 'kitty', label: 'Kitty' },
+                  ].map(preset => {
+                    const isSelected = externalTerminalCommand === preset.cmd
+                    return (
+                      <button
+                        key={preset.cmd}
+                        type="button"
+                        onClick={() => setExternalTerminalCommand(preset.cmd)}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-semibold border transition-all cursor-pointer text-center ${
+                          isSelected
+                            ? 'bg-[var(--accent-light)] border-[var(--accent-color)] accent-text shadow-xs'
+                            : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Custom Command Input */}
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="text"
+                    value={externalTerminalCommand}
+                    onChange={e => setExternalTerminalCommand(e.target.value)}
+                    placeholder="Ex: Terminal, iTerm, Ghostty, alacritty, gnome-terminal"
                     className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
                   />
                 </div>

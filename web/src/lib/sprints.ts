@@ -35,6 +35,14 @@ export const formatDateFR = (dateStr?: string): string => {
   })
 }
 
+/** Formate une date pour input type="date" */
+export const formatDateInput = (dateStr?: string): string => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return dateStr
+  return formatDateISO(d)
+}
+
 /** Calcule les dates consécutives pour une liste de sprints */
 export const calculateSprintDates = (
   sprints: TrackerSprint[],
@@ -55,13 +63,16 @@ export const calculateSprintDates = (
     end.setDate(end.getDate() + Math.max(1, durationDays) - 1)
     end.setHours(23, 59, 59, 999)
 
+    // Si le sprint a été explicitement clôturé, on conserve son état
     let state = sprint.state || 'future'
-    if (today > end) {
-      state = 'closed'
-    } else if (today >= start && today <= end) {
-      state = 'active'
-    } else {
-      state = 'future'
+    if (sprint.state !== 'closed') {
+      if (today > end) {
+        state = 'closed'
+      } else if (today >= start && today <= end) {
+        state = 'active'
+      } else {
+        state = 'future'
+      }
     }
 
     const nextStart = new Date(end)
@@ -79,6 +90,50 @@ export const calculateSprintDates = (
   })
 }
 
+/** Décale consécutivement les sprints suivants après modification de date */
+export const shiftSubsequentSprintDates = (
+  sprints: TrackerSprint[],
+  changedIndex: number,
+  defaultDurationDays: number = 14
+): TrackerSprint[] => {
+  const result = [...sprints]
+  if (changedIndex < 0 || changedIndex >= result.length) return result
+
+  const baseSprint = result[changedIndex]
+  if (!baseSprint.endDate) return result
+
+  let prevEnd = new Date(baseSprint.endDate)
+
+  for (let i = changedIndex + 1; i < result.length; i++) {
+    const nextStart = new Date(prevEnd)
+    nextStart.setDate(nextStart.getDate() + 1)
+    nextStart.setHours(0, 0, 0, 0)
+
+    // Calcul de la durée précédente du sprint i, ou durée par défaut
+    let currDuration = defaultDurationDays
+    if (result[i].startDate && result[i].endDate) {
+      const s = new Date(result[i].startDate!)
+      const e = new Date(result[i].endDate!)
+      const diffDays = Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24)) + 1
+      if (diffDays > 0) currDuration = diffDays
+    }
+
+    const nextEnd = new Date(nextStart)
+    nextEnd.setDate(nextEnd.getDate() + Math.max(1, currDuration) - 1)
+    nextEnd.setHours(23, 59, 59, 999)
+
+    result[i] = {
+      ...result[i],
+      startDate: formatDateISO(nextStart),
+      endDate: formatDateISO(nextEnd),
+    }
+
+    prevEnd = nextEnd
+  }
+
+  return result
+}
+
 /** Génère une liste de sprints par défaut */
 export const generateDefaultSprints = (
   count: number = 4,
@@ -89,15 +144,25 @@ export const generateDefaultSprints = (
   const placeholders: TrackerSprint[] = Array.from({ length: count }, (_, i) => ({
     id: `sprint-${i + 1}`,
     name: `Sprint ${i + 1}`,
-    state: 'future',
+    state: i === 0 ? 'active' : 'future',
   }))
   return calculateSprintDates(placeholders, formatDateISO(start), durationDays)
 }
 
 /** Calcule les jours restants ou le délai jusqu'à un sprint */
 export const getSprintRelativeInfo = (sprint: TrackerSprint): { label: string; type: 'current' | 'future' | 'past' } => {
+  if (sprint.state === 'closed') {
+    return {
+      label: 'Sprint clôturé',
+      type: 'past',
+    }
+  }
+
   if (!sprint.startDate || !sprint.endDate) {
-    return { label: sprint.state === 'active' ? 'En cours' : sprint.state === 'closed' ? 'Terminé' : 'À venir', type: 'future' }
+    return {
+      label: sprint.state === 'active' ? 'En cours' : 'À venir',
+      type: sprint.state === 'active' ? 'current' : 'future',
+    }
   }
 
   const today = new Date()
@@ -106,9 +171,12 @@ export const getSprintRelativeInfo = (sprint: TrackerSprint): { label: string; t
   const end = new Date(sprint.endDate)
   end.setHours(23, 59, 59, 999)
 
-  if (today >= start && today <= end) {
+  if (sprint.state === 'active' || (today >= start && today <= end)) {
     const diffMs = end.getTime() - today.getTime()
     const daysLeft = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+    if (daysLeft < 0) {
+      return { label: `En cours (dépassé de ${Math.abs(daysLeft)}j)`, type: 'current' }
+    }
     return {
       label: daysLeft <= 1 ? "Dernier jour du sprint !" : `En cours (${daysLeft} jours restants)`,
       type: 'current',
@@ -125,7 +193,7 @@ export const getSprintRelativeInfo = (sprint: TrackerSprint): { label: string; t
   }
 
   return {
-    label: "Sprint terminé",
+    label: "Échéance dépassée",
     type: 'past',
   }
 }

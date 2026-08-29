@@ -15,6 +15,8 @@ export type Status =
 
 export type TaskSource = 'linear' | 'github' | 'jira' | 'local'
 
+export type TerminalDockPosition = 'bottom' | 'left' | 'right'
+
 export type ActivityStatus = 'queued' | 'pending' | 'running' | 'completed' | 'failed' | 'canceled'
 
 export interface TaskActivity {
@@ -130,6 +132,8 @@ export interface TrackerBoard {
   type: string
 }
 
+export type TtyMode = 'integrated' | 'external'
+
 export interface Project {
   id: string
   name: string
@@ -190,6 +194,9 @@ export interface Project {
   aiProvider?: AIProvider
   aiCommandTemplate?: string
   specFramework?: SpecFramework
+  parallelism?: number
+  /** Mode d'exécution des terminaux : 'integrated' (web xterm) ou 'external' (vrai terminal OS). */
+  ttyMode?: TtyMode
   createdAt: string
   updatedAt: string
 }
@@ -487,6 +494,8 @@ export interface UserSettings {
   promptCreatePr: string
   promptPick: string
   editorCommand: string
+  /** Commande ou nom de l'application de terminal externe (ex: "Terminal", "iTerm", "Ghostty"). */
+  externalTerminalCommand?: string
   specFramework?: SpecFramework
   updatedAt: string
 }

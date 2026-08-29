@@ -50,11 +50,54 @@ type SkillJob struct {
 	Op *TrackerOp
 }
 
+// ProjectLimiter limits concurrency of background AI agent skill workers per project (1 to 3).
+type ProjectLimiter struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	running map[string]int
+}
+
+func newProjectLimiter() *ProjectLimiter {
+	l := &ProjectLimiter{
+		running: make(map[string]int),
+	}
+	l.cond = sync.NewCond(&l.mu)
+	return l
+}
+
+func (l *ProjectLimiter) Acquire(projectID string, limit int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for {
+		if limit < 1 {
+			limit = 1
+		}
+		if limit > 3 {
+			limit = 3
+		}
+		if l.running[projectID] < limit {
+			l.running[projectID]++
+			return
+		}
+		l.cond.Wait()
+	}
+}
+
+func (l *ProjectLimiter) Release(projectID string) {
+	l.mu.Lock()
+	if l.running[projectID] > 0 {
+		l.running[projectID]--
+	}
+	l.cond.Broadcast()
+	l.mu.Unlock()
+}
+
 type DB struct {
 	conn     *sql.DB
 	runner   *runner.Runner
 	mu       sync.RWMutex
 	jobQueue chan SkillJob
+	limiter  *ProjectLimiter
 	// auto porte l'état de la boucle de synchronisation de fond.
 	auto      *autoSync
 	cancelMap map[string]context.CancelFunc
@@ -77,6 +120,7 @@ func NewDB(dbPath string) (*DB, error) {
 		conn:      conn,
 		runner:    runner.NewRunner(),
 		jobQueue:  make(chan SkillJob, 100),
+		limiter:   newProjectLimiter(),
 		cancelMap: make(map[string]context.CancelFunc),
 	}
 	if err := db.initSchema(); err != nil {
@@ -154,6 +198,7 @@ func (d *DB) initSchema() error {
 			project_type TEXT NOT NULL DEFAULT 'standard',
 			is_default INTEGER NOT NULL DEFAULT 0,
 			stage_mapping TEXT NOT NULL DEFAULT '{}',
+			parallelism INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
@@ -239,7 +284,9 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN ai_command_template TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN spec_framework TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN jira_project TEXT NOT NULL DEFAULT '';")
-	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN project_type TEXT NOT NULL DEFAULT 'standard';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN parallelism INTEGER NOT NULL DEFAULT 1;")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN tty_mode TEXT NOT NULL DEFAULT 'integrated';")
+	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN external_terminal_command TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default';")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN branch_name TEXT;")
@@ -1686,10 +1733,85 @@ func (d *DB) GetTaskGitDiff(taskIDOrKey string) (*models.GitDiffResult, error) {
 
 // EnsureTaskGitBranch ensures that the project git repository is switched to the task's dedicated branch.
 // It auto-commits any pending changes on previous branches, creates the branch if non-existent, and switches to it.
+// resolveRepoPathUnsafe resolves the actual disk directory of a git repository
+// from a project ID, a slug, a raw path, or global fallback settings.
+func (d *DB) resolveRepoPathUnsafe(projectIDOrPath string) string {
+	projectIDOrPath = strings.TrimSpace(projectIDOrPath)
+	if projectIDOrPath != "" && projectIDOrPath != "all" {
+		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
+			if fi, err := os.Stat(proj.RepoPath); err == nil && fi.IsDir() {
+				return proj.RepoPath
+			}
+		}
+		if fi, err := os.Stat(projectIDOrPath); err == nil && fi.IsDir() {
+			return projectIDOrPath
+		}
+	}
+	settings, _ := d.getSettingsUnsafe()
+	if settings != nil && settings.RepoPath != "" {
+		if fi, err := os.Stat(settings.RepoPath); err == nil && fi.IsDir() {
+			return settings.RepoPath
+		}
+	}
+	var defaultRepoPath string
+	_ = d.conn.QueryRow("SELECT repo_path FROM projects WHERE is_default = 1 AND repo_path != '' LIMIT 1").Scan(&defaultRepoPath)
+	if defaultRepoPath != "" {
+		if fi, err := os.Stat(defaultRepoPath); err == nil && fi.IsDir() {
+			return defaultRepoPath
+		}
+	}
+	var firstRepoPath string
+	_ = d.conn.QueryRow("SELECT repo_path FROM projects WHERE repo_path != '' ORDER BY is_default DESC, name ASC LIMIT 1").Scan(&firstRepoPath)
+	if firstRepoPath != "" {
+		if fi, err := os.Stat(firstRepoPath); err == nil && fi.IsDir() {
+			return firstRepoPath
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return "."
+}
+
+// freeBranchFromWorktrees checks if targetBranch is currently checked out in a linked worktree.
+// If it is, it detaches HEAD in that worktree so the main repository can switch to it freely.
+func (d *DB) freeBranchFromWorktrees(repoPath string, targetBranch string) {
+	if repoPath == "" || targetBranch == "" {
+		return
+	}
+	out, err := exec.Command("git", "-C", repoPath, "worktree", "list", "--porcelain").Output()
+	if err != nil {
+		return
+	}
+	lines := strings.Split(string(out), "\n")
+	var currentWt string
+	targetRef := "refs/heads/" + targetBranch
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "worktree ") {
+			currentWt = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		} else if strings.HasPrefix(line, "branch ") {
+			ref := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+			if (ref == targetRef || ref == targetBranch) && currentWt != "" && currentWt != repoPath {
+				_ = exec.Command("git", "-C", currentWt, "checkout", "--detach").Run()
+			}
+		}
+	}
+}
+
 func (d *DB) EnsureTaskGitBranch(repoPath string, task *models.Task) (string, error) {
-	if repoPath == "" || task == nil {
+	if task == nil {
 		return "", nil
 	}
+	d.mu.RLock()
+	if repoPath == "" || repoPath == "all" {
+		repoPath = d.ResolveTaskRepoPath(task)
+	}
+	if repoPath == "" || repoPath == "all" {
+		repoPath = d.resolveRepoPathUnsafe(task.ProjectID)
+	}
+	d.mu.RUnlock()
 
 	gitDir := filepath.Join(repoPath, ".git")
 	if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() {
@@ -1735,22 +1857,28 @@ func (d *DB) EnsureTaskGitBranch(repoPath string, task *models.Task) (string, er
 	if len(strings.TrimSpace(string(statusOut))) > 0 {
 		_ = exec.Command("git", "-C", repoPath, "add", "-A").Run()
 		commitMsg := fmt.Sprintf("chore: auto-save progress on '%s' before switching to task '%s'", currentBranch, task.Key)
-		_ = exec.Command("git", "-C", repoPath, "commit", "-m", commitMsg).Run()
+		_ = exec.Command("git", "-c", "user.name=TaskFlow", "-c", "user.email=taskflow@local", "-C", repoPath, "commit", "-m", commitMsg).Run()
 	}
 
-	// 4. Check if target branch already exists
+	// 4. Free target branch if checked out in any worktree
+	d.freeBranchFromWorktrees(repoPath, targetBranch)
+
+	// 5. Check if target branch already exists
 	checkBranchCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", targetBranch)
 	if err := checkBranchCmd.Run(); err == nil {
 		// Branch exists: switch to it
 		switchCmd := exec.Command("git", "-C", repoPath, "checkout", targetBranch)
-		if out, err := switchCmd.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("erreur bascule branche %s: %s (%w)", targetBranch, string(out), err)
+		if _, err := switchCmd.CombinedOutput(); err != nil {
+			d.freeBranchFromWorktrees(repoPath, targetBranch)
+			switchCmd2 := exec.Command("git", "-C", repoPath, "checkout", targetBranch)
+			if out2, err2 := switchCmd2.CombinedOutput(); err2 != nil {
+				return "", fmt.Errorf("erreur bascule branche %s: %s (%w)", targetBranch, string(out2), err2)
+			}
 		}
 	} else {
 		// Branch does not exist: create and switch
 		createCmd := exec.Command("git", "-C", repoPath, "checkout", "-b", targetBranch)
 		if _, err := createCmd.CombinedOutput(); err != nil {
-			// Fallback with -B
 			createCmd2 := exec.Command("git", "-C", repoPath, "checkout", "-B", targetBranch)
 			if out2, err2 := createCmd2.CombinedOutput(); err2 != nil {
 				return "", fmt.Errorf("erreur création branche %s: %s (%w)", targetBranch, string(out2), err2)
@@ -1763,18 +1891,7 @@ func (d *DB) EnsureTaskGitBranch(repoPath string, task *models.Task) (string, er
 
 func (d *DB) GetGitStatus(projectIDOrPath string) (*models.GitStatusInfo, error) {
 	d.mu.RLock()
-	repoPath := projectIDOrPath
-	if projectIDOrPath != "" {
-		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
-			repoPath = proj.RepoPath
-		}
-	}
-	if repoPath == "" {
-		settings, _ := d.getSettingsUnsafe()
-		if settings != nil && settings.RepoPath != "" {
-			repoPath = settings.RepoPath
-		}
-	}
+	repoPath := d.resolveRepoPathUnsafe(projectIDOrPath)
 	d.mu.RUnlock()
 
 	return d.runner.GetCwdGitStatus(repoPath)
@@ -1782,18 +1899,7 @@ func (d *DB) GetGitStatus(projectIDOrPath string) (*models.GitStatusInfo, error)
 
 func (d *DB) GetGitBranches(projectIDOrPath string) (*models.GitBranchesInfo, error) {
 	d.mu.RLock()
-	repoPath := projectIDOrPath
-	if projectIDOrPath != "" {
-		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
-			repoPath = proj.RepoPath
-		}
-	}
-	if repoPath == "" {
-		settings, _ := d.getSettingsUnsafe()
-		if settings != nil && settings.RepoPath != "" {
-			repoPath = settings.RepoPath
-		}
-	}
+	repoPath := d.resolveRepoPathUnsafe(projectIDOrPath)
 	d.mu.RUnlock()
 
 	if repoPath == "" {
@@ -1887,18 +1993,7 @@ func (d *DB) GetGitBranches(projectIDOrPath string) (*models.GitBranchesInfo, er
 
 func (d *DB) SwitchGitBranch(projectIDOrPath, targetBranch string, create bool) (*models.GitStatusInfo, error) {
 	d.mu.RLock()
-	repoPath := projectIDOrPath
-	if projectIDOrPath != "" {
-		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
-			repoPath = proj.RepoPath
-		}
-	}
-	if repoPath == "" {
-		settings, _ := d.getSettingsUnsafe()
-		if settings != nil && settings.RepoPath != "" {
-			repoPath = settings.RepoPath
-		}
-	}
+	repoPath := d.resolveRepoPathUnsafe(projectIDOrPath)
 	d.mu.RUnlock()
 
 	if repoPath == "" {
@@ -1910,10 +2005,14 @@ func (d *DB) SwitchGitBranch(projectIDOrPath, targetBranch string, create bool) 
 		return nil, fmt.Errorf("nom de branche cible obligatoire")
 	}
 
+	// Clean origin/ or remotes/ prefixes if user selected a remote branch
+	targetBranch = strings.TrimPrefix(targetBranch, "remotes/")
+	targetBranch = strings.TrimPrefix(targetBranch, "origin/")
+
 	// Clean stale index.lock if present
 	lockPath := filepath.Join(repoPath, ".git", "index.lock")
 	if info, err := os.Stat(lockPath); err == nil {
-		if time.Since(info.ModTime()) > 3*time.Second {
+		if time.Since(info.ModTime()) > 2*time.Second {
 			_ = os.Remove(lockPath)
 		}
 	}
@@ -1927,15 +2026,18 @@ func (d *DB) SwitchGitBranch(projectIDOrPath, targetBranch string, create bool) 
 		return d.runner.GetCwdGitStatus(repoPath)
 	}
 
-	// 2. If uncommitted changes exist, safely commit them
+	// 2. If uncommitted changes exist, safely auto-commit them with fallback author identity
 	statusOut, _ := exec.Command("git", "-C", repoPath, "status", "--porcelain").Output()
 	if len(strings.TrimSpace(string(statusOut))) > 0 {
 		_ = exec.Command("git", "-C", repoPath, "add", "-A").Run()
 		commitMsg := fmt.Sprintf("chore: auto-save work on '%s' before switching to '%s'", currentBranch, targetBranch)
-		_ = exec.Command("git", "-C", repoPath, "commit", "-m", commitMsg).Run()
+		_ = exec.Command("git", "-c", "user.name=TaskFlow", "-c", "user.email=taskflow@local", "-C", repoPath, "commit", "-m", commitMsg).Run()
 	}
 
-	// 3. Checkout branch
+	// 3. Free target branch if checked out in any worktree
+	d.freeBranchFromWorktrees(repoPath, targetBranch)
+
+	// 4. Checkout branch
 	if create {
 		createCmd := exec.Command("git", "-C", repoPath, "checkout", "-b", targetBranch)
 		if _, err := createCmd.CombinedOutput(); err != nil {
@@ -1948,11 +2050,15 @@ func (d *DB) SwitchGitBranch(projectIDOrPath, targetBranch string, create bool) 
 		// Check if branch exists locally
 		if err := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", targetBranch).Run(); err == nil {
 			switchCmd := exec.Command("git", "-C", repoPath, "checkout", targetBranch)
-			if out, err := switchCmd.CombinedOutput(); err != nil {
-				return nil, fmt.Errorf("erreur bascule branche %s: %s (%w)", targetBranch, string(out), err)
+			if _, err := switchCmd.CombinedOutput(); err != nil {
+				d.freeBranchFromWorktrees(repoPath, targetBranch)
+				switchCmd2 := exec.Command("git", "-C", repoPath, "checkout", targetBranch)
+				if out2, err2 := switchCmd2.CombinedOutput(); err2 != nil {
+					return nil, fmt.Errorf("erreur bascule branche %s: %s (%w)", targetBranch, string(out2), err2)
+				}
 			}
 		} else {
-			// Try checkout remote or create
+			// Try checkout remote tracking or create
 			trackCmd := exec.Command("git", "-C", repoPath, "checkout", "--track", "origin/"+targetBranch)
 			if _, err := trackCmd.CombinedOutput(); err != nil {
 				// Fallback checkout -b
@@ -1969,18 +2075,7 @@ func (d *DB) SwitchGitBranch(projectIDOrPath, targetBranch string, create bool) 
 
 func (d *DB) CleanAllLocalBranches(projectIDOrPath string) (*models.CleanBranchesResult, error) {
 	d.mu.RLock()
-	repoPath := projectIDOrPath
-	if projectIDOrPath != "" {
-		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
-			repoPath = proj.RepoPath
-		}
-	}
-	if repoPath == "" {
-		settings, _ := d.getSettingsUnsafe()
-		if settings != nil && settings.RepoPath != "" {
-			repoPath = settings.RepoPath
-		}
-	}
+	repoPath := d.resolveRepoPathUnsafe(projectIDOrPath)
 	d.mu.RUnlock()
 
 	if repoPath == "" {
@@ -2053,18 +2148,7 @@ func (d *DB) DeleteGitBranch(projectIDOrPath string, branchName string, deleteRe
 	}
 
 	d.mu.RLock()
-	repoPath := projectIDOrPath
-	if projectIDOrPath != "" {
-		if proj, _ := d.getProjectByIDUnsafe(projectIDOrPath); proj != nil && proj.RepoPath != "" {
-			repoPath = proj.RepoPath
-		}
-	}
-	if repoPath == "" {
-		settings, _ := d.getSettingsUnsafe()
-		if settings != nil && settings.RepoPath != "" {
-			repoPath = settings.RepoPath
-		}
-	}
+	repoPath := d.resolveRepoPathUnsafe(projectIDOrPath)
 	d.mu.RUnlock()
 
 	if repoPath == "" {
@@ -3139,7 +3223,7 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	defer d.mu.RUnlock()
 
 	var s models.Settings
-	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, jiraMail, jiraTok, pClar, pSpec, pImpl, pPR, pPick, specFw sql.NullString
+	var detMode, aiProv, aiCmd, repoP, issTrk, linTm, ghRepo, jiraProj, jiraUrl, jiraMail, jiraTok, pClar, pSpec, pImpl, pPR, pPick, specFw, extTerm sql.NullString
 	var uiScale sql.NullInt64
 	var autoSyncEnabled, autoSyncInterval sql.NullInt64
 	var promptDigest sql.NullString
@@ -3147,7 +3231,7 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	err := d.conn.QueryRow(`
 		SELECT id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar,
 		       ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token,
-		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at
+		       prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, external_terminal_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at
 		FROM settings WHERE id = 1
 	`).Scan(
 		&s.ID,
@@ -3176,6 +3260,7 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 		&pPR,
 		&pPick,
 		&s.EditorCommand,
+		&extTerm,
 		&specFw,
 		&uiScale,
 		&autoSyncEnabled,
@@ -3281,6 +3366,9 @@ func (d *DB) GetSettings() (*models.Settings, error) {
 	if pPick.Valid {
 		s.PromptPick = pPick.String
 	}
+	if extTerm.Valid {
+		s.ExternalTerminalCommand = extTerm.String
+	}
 	s.SpecFramework = runner.NormalizeSpecFramework(specFw.String)
 
 	return &s, nil
@@ -3368,6 +3456,9 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 		if s.EditorCommand == "" {
 			s.EditorCommand = current.EditorCommand
 		}
+		if s.ExternalTerminalCommand == "" {
+			s.ExternalTerminalCommand = current.ExternalTerminalCommand
+		}
 		if s.SpecFramework == "" {
 			s.SpecFramework = current.SpecFramework
 		}
@@ -3429,8 +3520,8 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 
 	now := time.Now()
 	_, err := d.conn.Exec(`
-		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO settings (id, theme, accent_color, language, density, default_view, detail_mode, user_name, user_email, user_avatar, ai_provider, ai_command_template, repo_path, issue_tracker, linear_team, github_repo, jira_project, jira_url, jira_email, jira_api_token, prompt_clarify, prompt_specify, prompt_implement, prompt_create_pr, prompt_pick, editor_command, external_terminal_command, spec_framework, ui_scale, auto_sync_enabled, auto_sync_interval_sec, prompt_digest_agenda, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			theme = excluded.theme,
 			accent_color = excluded.accent_color,
@@ -3457,13 +3548,14 @@ func (d *DB) UpdateSettings(s models.Settings) (*models.Settings, error) {
 			prompt_create_pr = excluded.prompt_create_pr,
 			prompt_pick = excluded.prompt_pick,
 			editor_command = excluded.editor_command,
+			external_terminal_command = excluded.external_terminal_command,
 			spec_framework = excluded.spec_framework,
 			ui_scale = excluded.ui_scale,
 			auto_sync_enabled = excluded.auto_sync_enabled,
 			auto_sync_interval_sec = excluded.auto_sync_interval_sec,
 			prompt_digest_agenda = excluded.prompt_digest_agenda,
 			updated_at = excluded.updated_at
-	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.JiraProject, s.JiraUrl, s.JiraEmail, s.JiraAPIToken, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, s.SpecFramework, s.UIScale, autoSyncEnabledInt, s.AutoSyncIntervalSec, s.PromptDigestAgenda, now)
+	`, s.Theme, s.AccentColor, s.Language, s.Density, s.DefaultView, s.DetailMode, s.UserName, s.UserEmail, s.UserAvatar, s.AIProvider, s.AICommandTemplate, s.RepoPath, s.IssueTracker, s.LinearTeam, s.GithubRepo, s.JiraProject, s.JiraUrl, s.JiraEmail, s.JiraAPIToken, s.PromptClarify, s.PromptSpecify, s.PromptImplement, s.PromptCreatePR, s.PromptPick, s.EditorCommand, s.ExternalTerminalCommand, s.SpecFramework, s.UIScale, autoSyncEnabledInt, s.AutoSyncIntervalSec, s.PromptDigestAgenda, now)
 
 	if err != nil {
 		return nil, err
@@ -3549,8 +3641,44 @@ func (d *DB) GetAvailableSkills() []models.Skill {
 
 func (d *DB) startQueueWorker() {
 	for job := range d.jobQueue {
-		d.runJobGuarded(job)
+		go func(j SkillJob) {
+			projID := j.ProjectID
+			if projID == "" && j.TaskID != "" {
+				d.mu.RLock()
+				if t, _ := d.getTaskByIDUnsafe(j.TaskID); t != nil {
+					projID = t.ProjectID
+				}
+				d.mu.RUnlock()
+			}
+			if projID == "" {
+				projID = "default"
+			}
+
+			// Tracker operations are quick synchronizations, execute them directly
+			if j.SkillID == "tracker_op" {
+				d.runJobGuarded(j)
+				return
+			}
+
+			// Concurrency control per project (1 to 3 workers)
+			limit := d.GetProjectParallelism(projID)
+			d.limiter.Acquire(projID, limit)
+			defer d.limiter.Release(projID)
+
+			d.runJobGuarded(j)
+		}(job)
 	}
+}
+
+// GetProjectParallelism returns the configured background workers limit for a project (1 to 3, default 1).
+func (d *DB) GetProjectParallelism(projectID string) int {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	p, err := d.getProjectByIDUnsafe(projectID)
+	if err == nil && p != nil && p.Parallelism >= 1 && p.Parallelism <= 3 {
+		return p.Parallelism
+	}
+	return 1
 }
 
 // runJobGuarded isolates one job from the worker goroutine. A panic used to take
@@ -3924,17 +4052,15 @@ func (d *DB) processSkillJob(job SkillJob) {
 	// loin, l'agent créerait la MR et clôturerait sans qu'un humain ait vu le diff.
 	if job.AutoChain {
 		reached := d.StageOfTask(task)
-		if reached == AutonomousStopStage {
-			d.appendActivityStep(job.ActivityID, "⏸ Chaîne autonome arrêtée : le code attend ta revue")
-		} else if next, ok := NextStep(reached); ok && !next.Interactive {
+		if reached == AutonomousStopStage || reached == "finished" {
+			d.appendActivityStep(job.ActivityID, "⏸ Chaîne autonome terminée : Pull Request créée, la fusion reste manuelle")
+		} else if next, ok := NextStep(reached); ok {
 			d.appendActivityStep(job.ActivityID, "⏭ Chaîne autonome : "+next.Label)
 			go func(taskID, skillID string) {
 				if _, _, err := d.enqueueSkillOnTask(taskID, skillID, "", true); err != nil {
 					log.Printf("[autochain] %s: %v", taskID, err)
 				}
 			}(task.ID, next.SkillID)
-		} else if ok && next.Interactive {
-			d.appendActivityStep(job.ActivityID, "⏸ Chaîne autonome arrêtée : l'étape suivante demande une session interactive")
 		}
 	}
 
@@ -4675,20 +4801,12 @@ func (d *DB) EnqueueAutonomousRun(taskID string) (*models.Task, *models.TaskActi
 	}
 
 	stage := d.StageOfTask(task)
-	if stage == AutonomousStopStage || stage == "reviewed" || stage == "finished" {
+	if stage == AutonomousStopStage || stage == "finished" {
 		return nil, nil, fmt.Errorf("la tâche est déjà à l'étape %s : la suite demande une revue humaine", stage)
 	}
 	step, ok := NextStep(stage)
 	if !ok {
 		return nil, nil, fmt.Errorf("aucun pas suivant depuis l'étape %s", stage)
-	}
-	// La clarification est interactive par nature ; en autonomie on démarre donc
-	// à la spécification et on le dit à l'appelant par l'activité créée.
-	if step.Interactive {
-		step, ok = NextStep("clarified")
-		if !ok {
-			return nil, nil, fmt.Errorf("aucun pas autonome disponible")
-		}
 	}
 	return d.enqueueSkillOnTask(taskID, step.SkillID, "", true)
 }
@@ -5052,6 +5170,10 @@ func (d *DB) AddTaskComment(taskID string, body string) error {
 	d.mu.RLock()
 	task, err := d.getTaskByIDUnsafe(taskID)
 	settings, _ := d.getSettingsUnsafe()
+	var proj *models.Project
+	if task != nil && task.ProjectID != "" {
+		proj, _ = d.getProjectByIDUnsafe(task.ProjectID)
+	}
 	d.mu.RUnlock()
 
 	if err != nil || task == nil {
@@ -5060,7 +5182,11 @@ func (d *DB) AddTaskComment(taskID string, body string) error {
 
 	repo := ""
 	repoPath := ""
-	if settings != nil {
+	if proj != nil {
+		repo = proj.GithubRepo
+		repoPath = proj.RepoPath
+	}
+	if repo == "" && settings != nil {
 		repo = settings.GithubRepo
 		repoPath = settings.RepoPath
 	}
@@ -5417,7 +5543,7 @@ func parseStageColumns(raw string) map[string][]string {
 
 func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 	rows, err := d.conn.Query(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.parallelism, p.tty_mode, p.created_at, p.updated_at,
 		       COUNT(t.id) as task_count
 		FROM projects p
 		LEFT JOIN tasks t ON t.project_id = p.id
@@ -5437,9 +5563,9 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		var useWorktrees int
 		var trackerColumnsJSON, stageColumnsJSON, sprintsJSON, issueTypesJSON string
 		var monoRepo int
-		var aiProv, aiCmd, specFw, jiraProj, projType sql.NullString
+		var aiProv, aiCmd, specFw, jiraProj, projType, ttyMode sql.NullString
 		err := rows.Scan(
-			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.Parallelism, &ttyMode, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 		)
 		if err != nil {
 			return nil, err
@@ -5460,6 +5586,11 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		p.Sprints = parseSprints(sprintsJSON)
 		p.IssueTypes = parseIssueTypes(issueTypesJSON)
 		p.MonoRepo = monoRepo == 1
+		p.Parallelism = models.NormalizeParallelism(p.Parallelism)
+		p.TtyMode = "integrated"
+		if ttyMode.Valid && ttyMode.String != "" {
+			p.TtyMode = ttyMode.String
+		}
 		if aiProv.Valid {
 			p.AIProvider = aiProv.String
 		}
@@ -5498,14 +5629,14 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	var useWorktrees int
 	var trackerColumnsJSON, stageColumnsJSON, sprintsJSON, issueTypesJSON string
 	var monoRepo int
-	var aiProv, aiCmd, specFw, jiraProj, projType sql.NullString
+	var aiProv, aiCmd, specFw, jiraProj, projType, ttyMode sql.NullString
 	err := d.conn.QueryRow(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.parallelism, p.tty_mode, p.created_at, p.updated_at,
 		       (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count
 		FROM projects p
 		WHERE p.id = ? OR p.slug = ?
 	`, id, id).Scan(
-		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.Parallelism, &ttyMode, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -5529,6 +5660,11 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	p.Sprints = parseSprints(sprintsJSON)
 	p.IssueTypes = parseIssueTypes(issueTypesJSON)
 	p.MonoRepo = monoRepo == 1
+	p.Parallelism = models.NormalizeParallelism(p.Parallelism)
+	p.TtyMode = "integrated"
+	if ttyMode.Valid && ttyMode.String != "" {
+		p.TtyMode = ttyMode.String
+	}
 	if aiProv.Valid {
 		p.AIProvider = aiProv.String
 	}
@@ -5635,10 +5771,16 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 		useWorktreesInt = 0
 	}
 
+	parallelism := models.NormalizeParallelism(req.Parallelism)
+	ttyMode := strings.TrimSpace(req.TtyMode)
+	if ttyMode == "" {
+		ttyMode = "integrated"
+	}
+
 	_, err := d.conn.Exec(`
-		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, use_worktrees, board_id, tracker_columns, stage_columns, sprints, issue_types, mono_repo, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), useWorktreesInt, req.BoardID, "[]", "{}", "[]", string(issueTypesBytes), monoRepoInt, gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, now, now)
+		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, use_worktrees, board_id, tracker_columns, stage_columns, sprints, issue_types, mono_repo, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, parallelism, tty_mode, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), useWorktreesInt, req.BoardID, "[]", "{}", "[]", string(issueTypesBytes), monoRepoInt, gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, parallelism, ttyMode, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -5739,6 +5881,17 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if req.ProjectType != nil {
 		p.ProjectType = NormalizeProjectType(*req.ProjectType)
 	}
+	if req.Parallelism != nil {
+		p.Parallelism = models.NormalizeParallelism(*req.Parallelism)
+	} else {
+		p.Parallelism = models.NormalizeParallelism(p.Parallelism)
+	}
+	if req.TtyMode != nil && strings.TrimSpace(*req.TtyMode) != "" {
+		p.TtyMode = strings.TrimSpace(*req.TtyMode)
+	}
+	if p.TtyMode == "" {
+		p.TtyMode = "integrated"
+	}
 	if req.IsDefault != nil {
 		p.IsDefault = *req.IsDefault
 		if p.IsDefault {
@@ -5788,9 +5941,9 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 
 	_, err = d.conn.Exec(`
 		UPDATE projects
-		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, use_worktrees = ?, board_id = ?, tracker_columns = ?, stage_columns = ?, sprints = ?, issue_types = ?, mono_repo = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, updated_at = ?
+		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, use_worktrees = ?, board_id = ?, tracker_columns = ?, stage_columns = ?, sprints = ?, issue_types = ?, mono_repo = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, parallelism = ?, tty_mode = ?, updated_at = ?
 		WHERE id = ?
-	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), useWorktreesInt, p.BoardID, string(trackerColumnsBytes), string(stageColumnsBytes), string(sprintsBytes), string(issueTypesBytes), monoRepoInt, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.UpdatedAt, p.ID)
+	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), useWorktreesInt, p.BoardID, string(trackerColumnsBytes), string(stageColumnsBytes), string(sprintsBytes), string(issueTypesBytes), monoRepoInt, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.Parallelism, p.TtyMode, p.UpdatedAt, p.ID)
 	if err != nil {
 		return nil, err
 	}

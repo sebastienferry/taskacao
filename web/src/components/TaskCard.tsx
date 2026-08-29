@@ -9,7 +9,6 @@ import {
   GitBranch,
   GitPullRequest,
   ExternalLink,
-  MessageSquare,
   Code2,
   MoreHorizontal,
   ChevronsRight,
@@ -27,7 +26,7 @@ import { useApp } from '../context/AppContext'
 import { issueTypeStyle } from '../lib/issueTypes'
 import { Avatar } from './Avatar'
 import { shortElapsed, isElapsedStale } from '../lib/elapsed'
-import { skillForStage, stageFromColumn } from '../lib/workflow'
+import { skillForStage, stageFromColumn, getNextStepInfo } from '../lib/workflow'
 
 interface TaskCardProps {
   task: Task
@@ -40,7 +39,6 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     setSelectedTask,
     setChatTask,
     advanceTask,
-    launchInteractiveStep,
     isPinned,
     togglePin,
     setDiffTask,
@@ -49,6 +47,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     runningSkillId,
     activities,
     openInEditor,
+    openExternalTerminal,
+    setIsTerminalPanelOpen,
     deleteTask,
     moveTaskWorkflowStage,
     projects,
@@ -213,16 +213,15 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     }
   }
 
-  // Un pas du workflow. Le serveur décide de la skill depuis l'étape de la
-  // tâche ; un pas interactif — la clarification — ouvre le terminal de la tâche
-  // et y injecte la commande, pour qu'on voie et réponde à l'agent.
+  const nextStepInfo = getNextStepInfo(task, taskProject)
+  const isFinishedTask = nextStepInfo.currentStage === 'finished'
+
+  // Un pas du workflow. Le serveur lance l'étape en pleine autonomie en arrière-plan.
+  // Une session TTY interactive peut être ouverte manuellement via le bouton terminal.
   const handleAdvance = async (auto: boolean) => {
-    if (advancing) return
+    if (advancing || isFinishedTask) return
     setAdvancing(auto ? 'auto' : 'step')
-    const result = await advanceTask(task.id, auto)
-    if (result?.mode === 'interactive' && result.skillId) {
-      await launchInteractiveStep(task, result.skillId, result.label || 'Étape interactive')
-    }
+    await advanceTask(task.id, auto)
     setAdvancing(null)
   }
 
@@ -343,13 +342,21 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
   }
 
   const workflowAction = getWorkflowAction()
+  const isRunning = latestActivity?.status === 'running'
+  const isQueued = latestActivity?.status === 'queued' || latestActivity?.status === 'pending'
 
   return (
     <div
       draggable
       onDragStart={handleDragStartInternal}
       onClick={() => setSelectedTask(task)}
-      className={`group relative rounded-2xl border bg-[var(--bg-secondary)] border-[var(--border-color)] p-3 hover:border-[var(--accent-color)]/60 hover:shadow-md transition-all duration-150 cursor-grab active:cursor-grabbing select-none ${
+      className={`group relative rounded-2xl border bg-[var(--bg-secondary)] p-3 hover:shadow-md transition-all duration-150 cursor-grab active:cursor-grabbing select-none ${
+        isRunning
+          ? 'border-indigo-500/60 shadow-md shadow-indigo-500/10 ring-1 ring-indigo-500/20'
+          : isQueued
+          ? 'border-amber-500/50 shadow-md shadow-amber-500/10 ring-1 ring-amber-500/20'
+          : 'border-[var(--border-color)] hover:border-[var(--accent-color)]/60'
+      } ${
         isDragging ? 'opacity-40 scale-95 ring-2 ring-[var(--accent-color)] ring-dashed' : ''
       }`}
     >
@@ -493,17 +500,29 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
         </div>
       </div>
 
-      {/* Ligne 4 : Activité live + menu d'actions (...) */}
+      {/* Ligne 4 : Activité live / queued + menu d'actions (...) */}
       <div className="pt-2 border-t border-[var(--border-color)]/50 flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-        {/* Live Activity running pill if any */}
-        {latestActivity && latestActivity.status === 'running' && (
+        {/* Live / Queued Activity indicator */}
+        {latestActivity && (isRunning || isQueued) && (
           <span
             onClick={() => setChatTask(task)}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9.5px] font-mono font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 animate-pulse cursor-pointer"
-            title="Activité IA en cours d'exécution"
+            className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9.5px] font-mono font-bold cursor-pointer transition-colors ${
+              isRunning
+                ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 animate-pulse'
+                : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+            }`}
+            title={
+              isRunning
+                ? `Activité IA en cours d'exécution (${latestActivity.skillName || latestActivity.action}) - Cliquer pour ouvrir la console`
+                : `Activité IA en file d'attente (${latestActivity.skillName || latestActivity.action}) - Cliquer pour ouvrir la console`
+            }
           >
-            <Loader2 size={9} className="animate-spin text-indigo-400" />
-            <span>Live</span>
+            {isRunning ? (
+              <Loader2 size={9} className="animate-spin text-indigo-400" />
+            ) : (
+              <Clock size={9} className="text-amber-400" />
+            )}
+            <span>{isRunning ? 'Live' : 'Queued'}</span>
           </span>
         )}
 
@@ -528,26 +547,26 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
             son icône, le reste vit dans le menu (...) */}
         <button
           type="button"
-          disabled={advancing !== null}
+          disabled={advancing !== null || isFinishedTask}
           onClick={e => {
             e.stopPropagation()
             handleAdvance(false)
           }}
           className="ml-auto p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border border-transparent hover:border-[var(--accent-color)]/30 transition-colors cursor-pointer disabled:opacity-40"
-          title="Avancer d'un pas dans le workflow agentique"
+          title={nextStepInfo.stepTooltip}
         >
           {advancing === 'step' ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
         </button>
 
         <button
           type="button"
-          disabled={advancing !== null}
+          disabled={advancing !== null || isFinishedTask}
           onClick={e => {
             e.stopPropagation()
             handleAdvance(true)
           }}
           className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--accent-color)] hover:bg-[var(--accent-light)] border border-transparent hover:border-[var(--accent-color)]/30 transition-colors cursor-pointer disabled:opacity-40"
-          title="Avancer en autonomie jusqu'à l'étape de revue"
+          title={nextStepInfo.autoTooltip}
         >
           {advancing === 'auto' ? <Loader2 size={14} className="animate-spin" /> : <ChevronsRight size={14} />}
         </button>
@@ -637,11 +656,26 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
                 onClick={() => {
                   setIsMenuOpen(false)
                   setChatTask(task)
+                  setIsTerminalPanelOpen(true)
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                title="Ouvrir le terminal interactif dans l'application"
               >
-                <MessageSquare size={12} className="text-cyan-400" />
-                <span>Discuter avec l'agent</span>
+                <TerminalIcon size={12} className="text-cyan-400" />
+                <span>Lancer le terminal intégré</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMenuOpen(false)
+                  openExternalTerminal({ taskId: task.id })
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                title="Ouvrir une fenêtre de console native (Terminal.app, iTerm...)"
+              >
+                <ExternalLink size={12} className="text-amber-400" />
+                <span>Lancer le terminal externe</span>
               </button>
 
               <button
@@ -653,7 +687,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
                 title={`Ouvrir dans ${settings.editorCommand || 'VS Code'}`}
               >
-                <Code2 size={12} className="text-cyan-400" />
+                <Code2 size={12} className="text-blue-400" />
                 <span>Ouvrir dans l'éditeur</span>
               </button>
 
