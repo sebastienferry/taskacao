@@ -376,3 +376,90 @@ func TestHandleGitBranchesAndCheckoutWithAll(t *testing.T) {
 		t.Fatalf("Expected status 200 for checkout, got %d: %s", rrCheckout.Code, rrCheckout.Body.String())
 	}
 }
+
+func TestCloneTaskHandler(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	database, err := db.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer database.Close()
+
+	h := handlers.NewHandler(database)
+
+	// 1. Create a base task
+	baseTask, err := database.CreateTask(models.CreateTaskRequest{
+		Title:       "Original Story Title",
+		Description: "Story detailed description",
+		Priority:    models.PriorityHigh,
+		Labels:      []string{"Feature", "Backend"},
+		Assignee:    "John Doe",
+		Sprint:      "Sprint 42",
+		Source:      "local",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create base task: %v", err)
+	}
+
+	// 2. Clone via POST /api/tasks/{id}/clone with custom title
+	cloneBody := `{"title": "Cloned Custom Story", "sprint": "Sprint 43"}`
+	reqClone, err := http.NewRequest(http.MethodPost, "/api/tasks/"+baseTask.ID+"/clone", strings.NewReader(cloneBody))
+	if err != nil {
+		t.Fatalf("Failed to create clone request: %v", err)
+	}
+	reqClone.Header.Set("Content-Type", "application/json")
+	rrClone := httptest.NewRecorder()
+	h.HandleTaskDetail(rrClone, reqClone)
+
+	if rrClone.Code != http.StatusCreated {
+		t.Fatalf("Expected status 201 Created for clone, got %d: %s", rrClone.Code, rrClone.Body.String())
+	}
+
+	var clonedTask models.Task
+	if err := json.Unmarshal(rrClone.Body.Bytes(), &clonedTask); err != nil {
+		t.Fatalf("Failed to decode cloned task JSON: %v", err)
+	}
+
+	if clonedTask.ID == baseTask.ID {
+		t.Errorf("Cloned task must have a distinct ID, got same: %s", clonedTask.ID)
+	}
+	if clonedTask.Key == baseTask.Key {
+		t.Errorf("Cloned task must have a distinct Key, got same: %s", clonedTask.Key)
+	}
+	if clonedTask.Title != "Cloned Custom Story" {
+		t.Errorf("Expected title 'Cloned Custom Story', got '%s'", clonedTask.Title)
+	}
+	if clonedTask.Description != "Story detailed description" {
+		t.Errorf("Expected description to be preserved, got '%s'", clonedTask.Description)
+	}
+	if clonedTask.Priority != models.PriorityHigh {
+		t.Errorf("Expected priority High, got '%s'", clonedTask.Priority)
+	}
+	if clonedTask.Sprint != "Sprint 43" {
+		t.Errorf("Expected sprint 'Sprint 43', got '%s'", clonedTask.Sprint)
+	}
+	if clonedTask.Assignee != "John Doe" {
+		t.Errorf("Expected assignee 'John Doe', got '%s'", clonedTask.Assignee)
+	}
+	if clonedTask.Status != models.StatusToClarify {
+		t.Errorf("Expected initial status 'to_clarify', got '%s'", clonedTask.Status)
+	}
+
+	// 3. Clone with default parameters (no body)
+	reqCloneDefault, _ := http.NewRequest(http.MethodPost, "/api/tasks/"+baseTask.ID+"/clone", nil)
+	rrCloneDefault := httptest.NewRecorder()
+	h.HandleTaskDetail(rrCloneDefault, reqCloneDefault)
+
+	if rrCloneDefault.Code != http.StatusCreated {
+		t.Fatalf("Expected status 201 Created for default clone, got %d: %s", rrCloneDefault.Code, rrCloneDefault.Body.String())
+	}
+
+	var defaultCloned models.Task
+	_ = json.Unmarshal(rrCloneDefault.Body.Bytes(), &defaultCloned)
+	if defaultCloned.Title != "Original Story Title (Copie)" {
+		t.Errorf("Expected default title 'Original Story Title (Copie)', got '%s'", defaultCloned.Title)
+	}
+}
+

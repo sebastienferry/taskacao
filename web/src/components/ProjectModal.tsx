@@ -172,6 +172,7 @@ export const ProjectModal: React.FC = () => {
   const [useCustomAgent, setUseCustomAgent] = useState(false)
   const [parallelism, setParallelism] = useState<number>(1)
   const [ttyMode, setTtyMode] = useState<TtyMode>('integrated')
+  const [externalTerminalCommand, setExternalTerminalCommand] = useState('')
 
   // Section 4: Compétences IA & Framework SDD
   const [specFramework, setSpecFramework] = useState<SpecFramework>('speckit')
@@ -411,6 +412,7 @@ export const ProjectModal: React.FC = () => {
       setSpecFramework(editingProject.specFramework || settings.specFramework || 'speckit')
       setParallelism(editingProject.parallelism && editingProject.parallelism >= 1 && editingProject.parallelism <= 3 ? editingProject.parallelism : 1)
       setTtyMode(editingProject.ttyMode || 'integrated')
+      setExternalTerminalCommand(editingProject.externalTerminalCommand || '')
 
       setIssueTracker(editingProject.issueTracker || 'linear')
       setTrackerUrl(editingProject.trackerUrl || '')
@@ -455,6 +457,7 @@ export const ProjectModal: React.FC = () => {
       setSpecFramework(settings.specFramework || 'speckit')
       setParallelism(1)
       setTtyMode('integrated')
+      setExternalTerminalCommand('')
 
       setIssueTracker('linear')
       setTrackerUrl('')
@@ -608,6 +611,7 @@ export const ProjectModal: React.FC = () => {
         specFramework,
         parallelism,
         ttyMode,
+        externalTerminalCommand: externalTerminalCommand.trim() || undefined,
         issueTracker,
         trackerUrl: trackerUrl.trim(),
         linearTeam: linearTeam.trim().toUpperCase(),
@@ -1308,7 +1312,7 @@ export const ProjectModal: React.FC = () => {
               </div>
 
               {/* TTY Terminal Mode Setting */}
-              <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)]">
+              <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center shrink-0 border border-cyan-500/20">
@@ -1351,6 +1355,64 @@ export const ProjectModal: React.FC = () => {
                     </button>
                   </div>
                 </div>
+
+                {ttyMode === 'external' && (
+                  <div className="pt-2 border-t border-[var(--border-color)] space-y-2 animate-in fade-in duration-150">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                        Émulateur de Terminal pour ce projet (Optionnel)
+                      </label>
+                      <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                        Défaut : {settings.externalTerminalCommand || 'Auto (Profil)'}
+                      </span>
+                    </div>
+
+                    {/* Presets */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                      {[
+                        { cmd: '', label: 'Hériter du Profil', desc: settings.externalTerminalCommand || 'Auto (OS)' },
+                        { cmd: 'Ghostty', label: 'Ghostty', desc: 'macOS & Linux' },
+                        { cmd: 'Terminal', label: 'Terminal.app', desc: 'macOS natif' },
+                        { cmd: 'iTerm', label: 'iTerm2', desc: 'macOS' },
+                        { cmd: 'Alacritty', label: 'Alacritty', desc: 'GPU accéléré' },
+                        { cmd: 'kitty', label: 'Kitty', desc: 'GPU accéléré' },
+                        { cmd: 'WezTerm', label: 'WezTerm', desc: 'Multiplexeur' },
+                        { cmd: 'Warp', label: 'Warp', desc: 'AI Terminal' },
+                      ].map(preset => {
+                        const isSelected = externalTerminalCommand === preset.cmd
+                        return (
+                          <button
+                            key={preset.cmd}
+                            type="button"
+                            onClick={() => setExternalTerminalCommand(preset.cmd)}
+                            className={`py-1.5 px-2 rounded-xl text-left border transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-[var(--accent-light)] border-[var(--accent-color)] accent-text shadow-xs'
+                                : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'
+                            }`}
+                          >
+                            <div className="font-bold text-xs">{preset.label}</div>
+                            <div className="text-[9px] opacity-75">{preset.desc}</div>
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    {/* Custom Input */}
+                    <div className="space-y-1 pt-1">
+                      <input
+                        type="text"
+                        value={externalTerminalCommand}
+                        onChange={e => setExternalTerminalCommand(e.target.value)}
+                        placeholder={`Laissez vide pour hériter (${settings.externalTerminalCommand || 'Auto OS'}) ou personnalisez`}
+                        className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
+                      />
+                      <p className="text-[10px] text-[var(--text-muted)]">
+                        Supporte le placeholder <code className="text-amber-400 font-bold">{'{script}'}</code> (ex: <code className="text-[var(--text-secondary)]">ghostty -e {'{script}'}</code> ou <code className="text-[var(--text-secondary)]">open -na Ghostty --args -e {'{script}'}</code>).
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Stage Mapping Table Card */}

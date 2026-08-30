@@ -2478,10 +2478,42 @@ func (r *Runner) OpenExternalTerminal(customTermCmd string, targetPath string, i
 	}
 
 	var cmd *exec.Cmd
+	termTrimmed := strings.TrimSpace(customTermCmd)
+	termLower := strings.ToLower(termTrimmed)
+
 	switch runtime.GOOS {
 	case "darwin":
-		if customTermCmd != "" {
-			parts := strings.Fields(customTermCmd)
+		if strings.Contains(termTrimmed, "{script}") || strings.Contains(termTrimmed, "{cmd}") {
+			rendered := strings.ReplaceAll(termTrimmed, "{script}", shellQuote(scriptPath))
+			rendered = strings.ReplaceAll(rendered, "{cmd}", shellQuote(scriptPath))
+			cmd = exec.Command("sh", "-c", rendered)
+		} else if strings.Contains(termLower, "ghostty") {
+			// Ghostty on macOS runs specific commands via `open -na Ghostty.app --args -e <script>`
+			if _, statErr := os.Stat("/Applications/Ghostty.app"); statErr == nil {
+				cmd = exec.Command("open", "-na", "/Applications/Ghostty.app", "--args", "-e", scriptPath)
+			} else {
+				cmd = exec.Command("open", "-na", "Ghostty", "--args", "-e", scriptPath)
+			}
+		} else if strings.Contains(termLower, "alacritty") {
+			if bin, err := exec.LookPath("alacritty"); err == nil {
+				cmd = exec.Command(bin, "-e", scriptPath)
+			} else {
+				cmd = exec.Command("open", "-a", "Alacritty", scriptPath)
+			}
+		} else if strings.Contains(termLower, "kitty") {
+			if bin, err := exec.LookPath("kitty"); err == nil {
+				cmd = exec.Command(bin, scriptPath)
+			} else {
+				cmd = exec.Command("open", "-a", "kitty", scriptPath)
+			}
+		} else if strings.Contains(termLower, "wezterm") {
+			if bin, err := exec.LookPath("wezterm"); err == nil {
+				cmd = exec.Command(bin, "start", "--", scriptPath)
+			} else {
+				cmd = exec.Command("open", "-a", "WezTerm", scriptPath)
+			}
+		} else if termTrimmed != "" {
+			parts := strings.Fields(termTrimmed)
 			if len(parts) == 1 && !strings.Contains(parts[0], "/") {
 				cmd = exec.Command("open", "-a", parts[0], scriptPath)
 			} else {
@@ -2492,10 +2524,30 @@ func (r *Runner) OpenExternalTerminal(customTermCmd string, targetPath string, i
 			cmd = exec.Command("open", scriptPath)
 		}
 	case "windows":
-		cmd = exec.Command("cmd.exe", "/c", "start", scriptPath)
+		if strings.Contains(termTrimmed, "{script}") || strings.Contains(termTrimmed, "{cmd}") {
+			rendered := strings.ReplaceAll(termTrimmed, "{script}", scriptPath)
+			rendered = strings.ReplaceAll(rendered, "{cmd}", scriptPath)
+			cmd = exec.Command("cmd.exe", "/c", rendered)
+		} else if strings.Contains(termLower, "wt") || strings.Contains(termLower, "windowsterminal") {
+			cmd = exec.Command("wt.exe", "new-tab", "cmd.exe", "/k", scriptPath)
+		} else {
+			cmd = exec.Command("cmd.exe", "/c", "start", scriptPath)
+		}
 	default: // linux / unix
-		if customTermCmd != "" {
-			parts := strings.Fields(customTermCmd)
+		if strings.Contains(termTrimmed, "{script}") || strings.Contains(termTrimmed, "{cmd}") {
+			rendered := strings.ReplaceAll(termTrimmed, "{script}", shellQuote(scriptPath))
+			rendered = strings.ReplaceAll(rendered, "{cmd}", shellQuote(scriptPath))
+			cmd = exec.Command("sh", "-c", rendered)
+		} else if strings.Contains(termLower, "ghostty") {
+			cmd = exec.Command("ghostty", "-e", scriptPath)
+		} else if strings.Contains(termLower, "alacritty") {
+			cmd = exec.Command("alacritty", "-e", scriptPath)
+		} else if strings.Contains(termLower, "kitty") {
+			cmd = exec.Command("kitty", scriptPath)
+		} else if strings.Contains(termLower, "wezterm") {
+			cmd = exec.Command("wezterm", "start", "--", scriptPath)
+		} else if termTrimmed != "" {
+			parts := strings.Fields(termTrimmed)
 			args := append(parts[1:], scriptPath)
 			cmd = exec.Command(parts[0], args...)
 		} else if _, err := exec.LookPath("x-terminal-emulator"); err == nil {

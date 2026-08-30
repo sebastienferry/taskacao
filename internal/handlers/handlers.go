@@ -1528,6 +1528,12 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/sync"):
 		subAction = "sync"
 		id = strings.TrimSuffix(rawPath, "/sync")
+	case strings.HasSuffix(rawPath, "/clone"):
+		subAction = "clone"
+		id = strings.TrimSuffix(rawPath, "/clone")
+	case strings.HasSuffix(rawPath, "/duplicate"):
+		subAction = "clone"
+		id = strings.TrimSuffix(rawPath, "/duplicate")
 	case strings.HasSuffix(rawPath, "/migrate"):
 		subAction = "migrate"
 		id = strings.TrimSuffix(rawPath, "/migrate")
@@ -2149,6 +2155,25 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sub-action: /api/tasks/{id}/clone — clone/duplicate a task or story
+	if subAction == "clone" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		var req models.CloneTaskRequest
+		if r.Body != nil && r.Body != http.NoBody {
+			_ = json.NewDecoder(r.Body).Decode(&req)
+		}
+		cloned, err := h.db.CloneTask(id, req)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, cloned)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		task, err := h.db.GetTaskByID(id)
@@ -2619,21 +2644,25 @@ func (h *Handler) HandleOpenExternalTerminal(w http.ResponseWriter, r *http.Requ
 	}
 
 	settings, _ := h.db.GetSettings()
-	termCmd := req.TerminalCommand
-	if termCmd == "" && settings != nil && settings.ExternalTerminalCommand != "" {
-		termCmd = settings.ExternalTerminalCommand
-	}
+	termCmd := strings.TrimSpace(req.TerminalCommand)
 
 	targetPath := req.Path
 	var proj *models.Project
-	if targetPath == "" && req.ProjectID != "" {
+	if req.ProjectID != "" {
 		p, err := h.db.GetProjectByID(req.ProjectID)
 		if err == nil && p != nil {
 			proj = p
-			if p.RepoPath != "" {
+			if targetPath == "" && p.RepoPath != "" {
 				targetPath = p.RepoPath
 			}
 		}
+	}
+
+	if termCmd == "" && proj != nil && proj.ExternalTerminalCommand != "" {
+		termCmd = proj.ExternalTerminalCommand
+	}
+	if termCmd == "" && settings != nil && settings.ExternalTerminalCommand != "" {
+		termCmd = settings.ExternalTerminalCommand
 	}
 
 	if targetPath == "" && settings != nil && settings.RepoPath != "" {
@@ -2673,6 +2702,15 @@ func (h *Handler) LaunchTaskExternalTerminal(taskID, command, skillID, customTer
 	}
 
 	settings, _ := h.db.GetSettings()
+	var proj *models.Project
+	if task.ProjectID != "" {
+		proj, _ = h.db.GetProjectByID(task.ProjectID)
+	}
+
+	customTermCmd = strings.TrimSpace(customTermCmd)
+	if customTermCmd == "" && proj != nil && proj.ExternalTerminalCommand != "" {
+		customTermCmd = proj.ExternalTerminalCommand
+	}
 	if customTermCmd == "" && settings != nil && settings.ExternalTerminalCommand != "" {
 		customTermCmd = settings.ExternalTerminalCommand
 	}
@@ -2690,11 +2728,6 @@ func (h *Handler) LaunchTaskExternalTerminal(taskID, command, skillID, customTer
 		if _, statErr := os.Stat(*task.WorktreePath); statErr == nil {
 			targetPath = *task.WorktreePath
 		}
-	}
-
-	var proj *models.Project
-	if task.ProjectID != "" {
-		proj, _ = h.db.GetProjectByID(task.ProjectID)
 	}
 
 	useWorktrees := true

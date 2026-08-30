@@ -197,6 +197,8 @@ export interface Project {
   parallelism?: number
   /** Mode d'exécution des terminaux : 'integrated' (web xterm) ou 'external' (vrai terminal OS). */
   ttyMode?: TtyMode
+  /** Commande ou application de terminal externe spécifique à ce projet (ex: 'Ghostty', 'iTerm', 'Terminal'). */
+  externalTerminalCommand?: string
   createdAt: string
   updatedAt: string
 }
@@ -302,6 +304,22 @@ export interface Task {
   activities?: TaskActivity[]
   createdAt: string
   updatedAt: string
+}
+
+export interface CloneTaskRequest {
+  title?: string
+  projectId?: string
+  status?: Status
+  priority?: Priority
+  sprint?: string
+  assignee?: string
+  assigneeAvatar?: string
+  includeDescription?: boolean
+  includeLabels?: boolean
+  includeParent?: boolean
+  includeSprint?: boolean
+  includeAssignee?: boolean
+  source?: TaskSource
 }
 
 export interface GitDiffFile {

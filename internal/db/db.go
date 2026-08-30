@@ -286,6 +286,7 @@ func (d *DB) initSchema() error {
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN jira_project TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN parallelism INTEGER NOT NULL DEFAULT 1;")
 	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN tty_mode TEXT NOT NULL DEFAULT 'integrated';")
+	_, _ = d.conn.Exec("ALTER TABLE projects ADD COLUMN external_terminal_command TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE settings ADD COLUMN external_terminal_command TEXT NOT NULL DEFAULT '';")
 	_, _ = d.conn.Exec("ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default';")
 	_, _ = d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);")
@@ -2531,10 +2532,15 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 		`, id, now.Format(time.RFC3339))
 	}
 
+	issueType := strings.TrimSpace(req.IssueType)
+	parentKey := req.ParentKey
+	parentTitle := req.ParentTitle
+	parentType := req.ParentType
+
 	_, err := d.conn.Exec(`
-		INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, source, external_url, sprint, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, projID, key, req.Title, req.Description, string(req.Status), string(req.Priority), string(labelsJSON), pinnedVal, req.Assignee, req.AssigneeAvatar, newPos, req.DueDate, req.Source, extURL, strings.TrimSpace(req.Sprint), now, now)
+		INSERT INTO tasks (id, project_id, key, title, description, status, priority, labels, pinned, assignee, assignee_avatar, position, due_date, source, external_url, issue_type, parent_key, parent_title, parent_type, sprint, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, projID, key, req.Title, req.Description, string(req.Status), string(req.Priority), string(labelsJSON), pinnedVal, req.Assignee, req.AssigneeAvatar, newPos, req.DueDate, req.Source, extURL, issueType, parentKey, parentTitle, parentType, strings.TrimSpace(req.Sprint), now, now)
 
 	if err != nil {
 		return nil, err
@@ -2557,12 +2563,115 @@ func (d *DB) CreateTask(req models.CreateTaskRequest) (*models.Task, error) {
 		Sprint:         strings.TrimSpace(req.Sprint),
 		Source:         req.Source,
 		ExternalURL:    extURL,
+		IssueType:      issueType,
+		ParentKey:      parentKey,
+		ParentTitle:    parentTitle,
+		ParentType:     parentType,
 		Activities:     []models.TaskActivity{},
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
 
 	return task, nil
+}
+
+// CloneTask creates a duplicate/clone of an existing task with customized or preserved parameters.
+func (d *DB) CloneTask(taskID string, req models.CloneTaskRequest) (*models.Task, error) {
+	d.mu.RLock()
+	src, err := d.getTaskByIDUnsafe(taskID)
+	d.mu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	if src == nil {
+		return nil, fmt.Errorf("task not found: %s", taskID)
+	}
+
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = fmt.Sprintf("%s (Copie)", src.Title)
+	}
+
+	targetProjectID := strings.TrimSpace(req.ProjectID)
+	if targetProjectID == "" {
+		targetProjectID = src.ProjectID
+	}
+
+	status := req.Status
+	if status == "" {
+		status = models.StatusToClarify
+	}
+
+	priority := req.Priority
+	if priority == "" {
+		priority = src.Priority
+	}
+
+	desc := ""
+	if req.IncludeDescription == nil || *req.IncludeDescription {
+		desc = src.Description
+	}
+
+	labels := []string{}
+	if req.IncludeLabels == nil || *req.IncludeLabels {
+		for _, l := range src.Labels {
+			if strings.EqualFold(l, "Specified") || strings.EqualFold(l, "Implemented") || strings.EqualFold(l, "Review") || strings.EqualFold(l, "Finished") {
+				continue
+			}
+			labels = append(labels, l)
+		}
+	}
+	labels = SetWorkflowLabel(labels, "New")
+
+	sprint := ""
+	if req.Sprint != "" {
+		sprint = req.Sprint
+	} else if req.IncludeSprint == nil || *req.IncludeSprint {
+		sprint = src.Sprint
+	}
+
+	assignee := ""
+	assigneeAvatar := ""
+	if req.Assignee != "" {
+		assignee = req.Assignee
+		assigneeAvatar = req.AssigneeAvatar
+	} else if req.IncludeAssignee == nil || *req.IncludeAssignee {
+		assignee = src.Assignee
+		assigneeAvatar = src.AssigneeAvatar
+	}
+
+	parentKey := ""
+	parentTitle := ""
+	parentType := ""
+	if req.IncludeParent == nil || *req.IncludeParent {
+		parentKey = src.ParentKey
+		parentTitle = src.ParentTitle
+		parentType = src.ParentType
+	}
+
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		source = src.Source
+	}
+
+	createReq := models.CreateTaskRequest{
+		ProjectID:      targetProjectID,
+		Title:          title,
+		Description:    desc,
+		Status:         status,
+		Priority:       priority,
+		Labels:         labels,
+		Assignee:       assignee,
+		AssigneeAvatar: assigneeAvatar,
+		Sprint:         sprint,
+		Source:         source,
+		IssueType:      src.IssueType,
+		ParentKey:      parentKey,
+		ParentTitle:    parentTitle,
+		ParentType:     parentType,
+	}
+
+	return d.CreateTask(createReq)
 }
 
 func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, error) {
@@ -5543,7 +5652,7 @@ func parseStageColumns(raw string) map[string][]string {
 
 func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 	rows, err := d.conn.Query(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.parallelism, p.tty_mode, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.parallelism, p.tty_mode, p.external_terminal_command, p.created_at, p.updated_at,
 		       COUNT(t.id) as task_count
 		FROM projects p
 		LEFT JOIN tasks t ON t.project_id = p.id
@@ -5563,9 +5672,9 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		var useWorktrees int
 		var trackerColumnsJSON, stageColumnsJSON, sprintsJSON, issueTypesJSON string
 		var monoRepo int
-		var aiProv, aiCmd, specFw, jiraProj, projType, ttyMode sql.NullString
+		var aiProv, aiCmd, specFw, jiraProj, projType, ttyMode, extTerm sql.NullString
 		err := rows.Scan(
-			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.Parallelism, &ttyMode, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+			&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.Parallelism, &ttyMode, &extTerm, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 		)
 		if err != nil {
 			return nil, err
@@ -5590,6 +5699,9 @@ func (d *DB) getProjectsUnsafe() ([]models.Project, error) {
 		p.TtyMode = "integrated"
 		if ttyMode.Valid && ttyMode.String != "" {
 			p.TtyMode = ttyMode.String
+		}
+		if extTerm.Valid {
+			p.ExternalTerminalCommand = extTerm.String
 		}
 		if aiProv.Valid {
 			p.AIProvider = aiProv.String
@@ -5629,14 +5741,14 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	var useWorktrees int
 	var trackerColumnsJSON, stageColumnsJSON, sprintsJSON, issueTypesJSON string
 	var monoRepo int
-	var aiProv, aiCmd, specFw, jiraProj, projType, ttyMode sql.NullString
+	var aiProv, aiCmd, specFw, jiraProj, projType, ttyMode, extTerm sql.NullString
 	err := d.conn.QueryRow(`
-		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.parallelism, p.tty_mode, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.slug, p.description, p.icon, p.color, p.repo_path, p.repo_paths, p.use_worktrees, p.board_id, p.tracker_columns, p.stage_columns, p.sprints, p.issue_types, p.mono_repo, p.git_remote_url, p.linear_team, p.github_repo, p.jira_project, p.issue_tracker, p.tracker_url, p.project_type, p.is_default, p.stage_mapping, p.skill_overrides, p.ai_provider, p.ai_command_template, p.spec_framework, p.parallelism, p.tty_mode, p.external_terminal_command, p.created_at, p.updated_at,
 		       (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count
 		FROM projects p
 		WHERE p.id = ? OR p.slug = ?
 	`, id, id).Scan(
-		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.Parallelism, &ttyMode, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
+		&p.ID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.RepoPath, &repoPathsJSON, &useWorktrees, &p.BoardID, &trackerColumnsJSON, &stageColumnsJSON, &sprintsJSON, &issueTypesJSON, &monoRepo, &p.GitRemoteUrl, &p.LinearTeam, &p.GithubRepo, &jiraProj, &p.IssueTracker, &p.TrackerUrl, &projType, &isDefault, &stageMappingJSON, &skillOverridesJSON, &aiProv, &aiCmd, &specFw, &p.Parallelism, &ttyMode, &extTerm, &p.CreatedAt, &p.UpdatedAt, &p.TaskCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -5664,6 +5776,9 @@ func (d *DB) getProjectByIDUnsafe(id string) (*models.Project, error) {
 	p.TtyMode = "integrated"
 	if ttyMode.Valid && ttyMode.String != "" {
 		p.TtyMode = ttyMode.String
+	}
+	if extTerm.Valid {
+		p.ExternalTerminalCommand = extTerm.String
 	}
 	if aiProv.Valid {
 		p.AIProvider = aiProv.String
@@ -5776,11 +5891,12 @@ func (d *DB) CreateProject(req models.CreateProjectRequest) (*models.Project, er
 	if ttyMode == "" {
 		ttyMode = "integrated"
 	}
+	extTermCmd := strings.TrimSpace(req.ExternalTerminalCommand)
 
 	_, err := d.conn.Exec(`
-		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, use_worktrees, board_id, tracker_columns, stage_columns, sprints, issue_types, mono_repo, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, parallelism, tty_mode, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), useWorktreesInt, req.BoardID, "[]", "{}", "[]", string(issueTypesBytes), monoRepoInt, gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, parallelism, ttyMode, now, now)
+		INSERT INTO projects (id, name, slug, description, icon, color, repo_path, repo_paths, use_worktrees, board_id, tracker_columns, stage_columns, sprints, issue_types, mono_repo, git_remote_url, linear_team, github_repo, jira_project, issue_tracker, tracker_url, project_type, is_default, stage_mapping, skill_overrides, ai_provider, ai_command_template, spec_framework, parallelism, tty_mode, external_terminal_command, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, name, slug, req.Description, icon, color, req.RepoPath, string(repoPathsBytes), useWorktreesInt, req.BoardID, "[]", "{}", "[]", string(issueTypesBytes), monoRepoInt, gitRemote, req.LinearTeam, githubRepo, jiraProject, issueTracker, req.TrackerUrl, projectType, isDefInt, string(stageMappingBytes), string(skillOverridesBytes), aiProvider, aiCmd, specFramework, parallelism, ttyMode, extTermCmd, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -5892,6 +6008,9 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 	if p.TtyMode == "" {
 		p.TtyMode = "integrated"
 	}
+	if req.ExternalTerminalCommand != nil {
+		p.ExternalTerminalCommand = strings.TrimSpace(*req.ExternalTerminalCommand)
+	}
 	if req.IsDefault != nil {
 		p.IsDefault = *req.IsDefault
 		if p.IsDefault {
@@ -5941,9 +6060,9 @@ func (d *DB) UpdateProject(id string, req models.UpdateProjectRequest) (*models.
 
 	_, err = d.conn.Exec(`
 		UPDATE projects
-		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, use_worktrees = ?, board_id = ?, tracker_columns = ?, stage_columns = ?, sprints = ?, issue_types = ?, mono_repo = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, parallelism = ?, tty_mode = ?, updated_at = ?
+		SET name = ?, slug = ?, description = ?, icon = ?, color = ?, repo_path = ?, repo_paths = ?, use_worktrees = ?, board_id = ?, tracker_columns = ?, stage_columns = ?, sprints = ?, issue_types = ?, mono_repo = ?, git_remote_url = ?, linear_team = ?, github_repo = ?, jira_project = ?, issue_tracker = ?, tracker_url = ?, project_type = ?, is_default = ?, stage_mapping = ?, skill_overrides = ?, ai_provider = ?, ai_command_template = ?, spec_framework = ?, parallelism = ?, tty_mode = ?, external_terminal_command = ?, updated_at = ?
 		WHERE id = ?
-	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), useWorktreesInt, p.BoardID, string(trackerColumnsBytes), string(stageColumnsBytes), string(sprintsBytes), string(issueTypesBytes), monoRepoInt, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.Parallelism, p.TtyMode, p.UpdatedAt, p.ID)
+	`, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.RepoPath, string(repoPathsBytes), useWorktreesInt, p.BoardID, string(trackerColumnsBytes), string(stageColumnsBytes), string(sprintsBytes), string(issueTypesBytes), monoRepoInt, p.GitRemoteUrl, p.LinearTeam, p.GithubRepo, p.JiraProject, p.IssueTracker, p.TrackerUrl, NormalizeProjectType(p.ProjectType), isDefInt, string(stageMappingBytes), string(skillOverridesBytes), p.AIProvider, p.AICommandTemplate, p.SpecFramework, p.Parallelism, p.TtyMode, p.ExternalTerminalCommand, p.UpdatedAt, p.ID)
 	if err != nil {
 		return nil, err
 	}

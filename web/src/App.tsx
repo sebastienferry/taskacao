@@ -14,6 +14,7 @@ import { DigestView } from './components/DigestView'
 import { SkillsView } from './components/SkillsView'
 import { PinnedBar } from './components/PinnedBar'
 import { QuickAddModal } from './components/QuickAddModal'
+import { CloneTaskModal } from './components/CloneTaskModal'
 import { TaskDetailModal } from './components/TaskDetailModal'
 import { CommandPalette } from './components/CommandPalette'
 import { ProfileModal } from './components/ProfileModal'
@@ -108,6 +109,7 @@ const MainContent: React.FC = () => {
 
       {/* Global Modals & Overlays */}
       <QuickAddModal />
+      <CloneTaskModal />
       <TaskDetailModal />
       <ProjectModal />
       <GitDiffModal />

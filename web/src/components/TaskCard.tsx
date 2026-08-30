@@ -19,6 +19,7 @@ import {
   Eye,
   Trash2,
   Copy,
+  CopyPlus,
   Pin,
 } from 'lucide-react'
 import type { Task, Priority } from '../types'
@@ -49,6 +50,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     openInEditor,
     openExternalTerminal,
     setIsTerminalPanelOpen,
+    openCloneModal,
     deleteTask,
     moveTaskWorkflowStage,
     projects,
@@ -67,26 +69,54 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
   // quand il n'y a pas la place au-dessus.
   const [advancing, setAdvancing] = useState<'step' | 'auto' | null>(null)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
-  const [menuPos, setMenuPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
+  const [menuPos, setMenuPos] = useState<{ left: number; top?: number; bottom?: number; maxHeight: number } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuNodeRef = useRef<HTMLDivElement>(null)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
 
-  const MENU_WIDTH = 208
-  const MENU_MAX_HEIGHT = 320
+  const MENU_WIDTH = 214
+  const MENU_MAX_HEIGHT = 380
   const MENU_GAP = 6
+  const MARGIN = 8
+  const BOTTOM_RESERVE = 36 // Reserve space for global bottom StatusBar
 
   const openMenuAt = () => {
-    const rect = menuButtonRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const spaceAbove = rect.top
-    const spaceBelow = window.innerHeight - rect.bottom
-    // Un menu ancré à droite du bouton, recadré pour rester dans la fenêtre.
-    const left = Math.max(8, Math.min(rect.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8))
-    if (spaceAbove >= Math.min(MENU_MAX_HEIGHT, spaceBelow) && spaceAbove > 220) {
-      setMenuPos({ left, bottom: window.innerHeight - rect.top + MENU_GAP })
+    const btn = menuButtonRef.current
+    if (!btn) return
+    const rect = btn.getBoundingClientRect()
+
+    // Annuler l'effet de zoom de l'interface car le portail subit le zoom à son tour
+    const zoomRaw = getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')
+    const zoom = parseFloat(zoomRaw) || 1
+
+    const btnTop = rect.top / zoom
+    const btnBottom = rect.bottom / zoom
+    const btnRight = rect.right / zoom
+
+    const vpHeight = window.innerHeight / zoom
+    const vpWidth = window.innerWidth / zoom
+
+    const spaceAbove = btnTop - MARGIN
+    const spaceBelow = vpHeight - btnBottom - BOTTOM_RESERVE
+
+    // Aligner à droite du bouton tout en restant dans les limites horizontales de l'écran
+    const left = Math.max(MARGIN, Math.min(btnRight - MENU_WIDTH, vpWidth - MENU_WIDTH - MARGIN))
+
+    // Préférer l'ouverture vers le bas si l'espace est suffisant ou plus grand que vers le haut
+    if (spaceBelow >= 220 || spaceBelow >= spaceAbove) {
+      const maxHeight = Math.max(140, Math.min(MENU_MAX_HEIGHT, spaceBelow - MENU_GAP))
+      setMenuPos({
+        left,
+        top: btnBottom + MENU_GAP,
+        maxHeight,
+      })
     } else {
-      setMenuPos({ left, top: rect.bottom + MENU_GAP })
+      const maxHeight = Math.max(140, Math.min(MENU_MAX_HEIGHT, spaceAbove - MENU_GAP))
+      setMenuPos({
+        left,
+        bottom: vpHeight - btnTop + MENU_GAP,
+        maxHeight,
+      })
     }
     setIsMenuOpen(true)
   }
@@ -612,7 +642,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
                 top: menuPos.top,
                 bottom: menuPos.bottom,
                 width: MENU_WIDTH,
-                maxHeight: MENU_MAX_HEIGHT,
+                maxHeight: menuPos.maxHeight || MENU_MAX_HEIGHT,
               }}
               className="overflow-y-auto rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl p-1 z-[100] animate-in fade-in-0 zoom-in-95 duration-100 text-xs">
               {/* Action de l'étape courante du workflow (nom du skill) */}
@@ -747,6 +777,19 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
                   <span>Ouvrir sur le tracker</span>
                 </a>
               )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMenuOpen(false)
+                  openCloneModal(task)
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                title="Créer une copie de cette story"
+              >
+                <CopyPlus size={12} className="text-cyan-400" />
+                <span>Cloner la story</span>
+              </button>
 
               <button
                 type="button"

@@ -120,14 +120,15 @@ type Project struct {
 	IsDefault         bool              `json:"isDefault"`
 	StageMapping      map[string]string `json:"stageMapping,omitempty"`      // mapping AI workflow labels to tracker statuses
 	SkillOverrides    map[string]string `json:"skillOverrides,omitempty"`    // skillId -> custom skill name override
-	AIProvider        string            `json:"aiProvider,omitempty"`        // "agy", "claude", "vibe", "gemini", "cursor", "custom"
-	AICommandTemplate string            `json:"aiCommandTemplate,omitempty"` // e.g. 'agy -p "{prompt}"'
-	SpecFramework     string            `json:"specFramework,omitempty"`     // "speckit", "openspec"
-	Parallelism       int               `json:"parallelism"`                 // 1 to 3 concurrent AI background workers
-	TtyMode           string            `json:"ttyMode,omitempty"`           // "integrated" or "external"
-	TaskCount         int               `json:"taskCount"`
-	CreatedAt         time.Time         `json:"createdAt"`
-	UpdatedAt         time.Time         `json:"updatedAt"`
+	AIProvider              string            `json:"aiProvider,omitempty"`        // "agy", "claude", "vibe", "gemini", "cursor", "custom"
+	AICommandTemplate       string            `json:"aiCommandTemplate,omitempty"` // e.g. 'agy -p "{prompt}"'
+	SpecFramework           string            `json:"specFramework,omitempty"`     // "speckit", "openspec"
+	Parallelism             int               `json:"parallelism"`                 // 1 to 3 concurrent AI background workers
+	TtyMode                 string            `json:"ttyMode,omitempty"`           // "integrated" or "external"
+	ExternalTerminalCommand string            `json:"externalTerminalCommand,omitempty"` // e.g. "Ghostty", "Terminal", "iTerm", "alacritty", "kitty"
+	TaskCount               int               `json:"taskCount"`
+	CreatedAt               time.Time         `json:"createdAt"`
+	UpdatedAt               time.Time         `json:"updatedAt"`
 }
 
 // TrackerColumn is one column of the tracker's own board, with the tracker
@@ -285,40 +286,42 @@ type CreateProjectRequest struct {
 	AIProvider        string            `json:"aiProvider,omitempty"`
 	AICommandTemplate string            `json:"aiCommandTemplate,omitempty"`
 	SpecFramework     string            `json:"specFramework,omitempty"`
-	Parallelism       int               `json:"parallelism,omitempty"`
-	TtyMode           string            `json:"ttyMode,omitempty"`
+	Parallelism             int               `json:"parallelism,omitempty"`
+	TtyMode                 string            `json:"ttyMode,omitempty"`
+	ExternalTerminalCommand string            `json:"externalTerminalCommand,omitempty"`
 }
 
 type UpdateProjectRequest struct {
-	Name              *string              `json:"name,omitempty"`
-	Slug              *string              `json:"slug,omitempty"`
-	Description       *string              `json:"description,omitempty"`
-	Icon              *string              `json:"icon,omitempty"`
-	Color             *string              `json:"color,omitempty"`
-	RepoPath          *string              `json:"repoPath,omitempty"`
-	RepoPaths         *[]string            `json:"repoPaths,omitempty"`
-	UseWorktrees      *bool                `json:"useWorktrees,omitempty"`
-	BoardID           *string              `json:"boardId,omitempty"`
-	TrackerColumns    *[]TrackerColumn     `json:"trackerColumns,omitempty"`
-	Sprints           *[]TrackerSprint     `json:"sprints,omitempty"`
-	IssueTypes        *[]string            `json:"issueTypes,omitempty"`
-	MonoRepo          *bool                `json:"monoRepo,omitempty"`
-	StageColumns      *map[string][]string `json:"stageColumns,omitempty"`
-	GitRemoteUrl      *string              `json:"gitRemoteUrl,omitempty"`
-	LinearTeam        *string              `json:"linearTeam,omitempty"`
-	GithubRepo        *string              `json:"githubRepo,omitempty"`
-	JiraProject       *string              `json:"jiraProject,omitempty"`
-	IssueTracker      *string              `json:"issueTracker,omitempty"`
-	TrackerUrl        *string              `json:"trackerUrl,omitempty"`
-	ProjectType       *string              `json:"projectType,omitempty"`
-	IsDefault         *bool                `json:"isDefault,omitempty"`
-	StageMapping      *map[string]string   `json:"stageMapping,omitempty"`
-	SkillOverrides    *map[string]string   `json:"skillOverrides,omitempty"`
-	AIProvider        *string              `json:"aiProvider,omitempty"`
-	AICommandTemplate *string              `json:"aiCommandTemplate,omitempty"`
-	SpecFramework     *string              `json:"specFramework,omitempty"`
-	Parallelism       *int                 `json:"parallelism,omitempty"`
-	TtyMode           *string              `json:"ttyMode,omitempty"`
+	Name                    *string              `json:"name,omitempty"`
+	Slug                    *string              `json:"slug,omitempty"`
+	Description             *string              `json:"description,omitempty"`
+	Icon                    *string              `json:"icon,omitempty"`
+	Color                   *string              `json:"color,omitempty"`
+	RepoPath                *string              `json:"repoPath,omitempty"`
+	RepoPaths               *[]string            `json:"repoPaths,omitempty"`
+	UseWorktrees            *bool                `json:"useWorktrees,omitempty"`
+	BoardID                 *string              `json:"boardId,omitempty"`
+	TrackerColumns          *[]TrackerColumn     `json:"trackerColumns,omitempty"`
+	Sprints                 *[]TrackerSprint     `json:"sprints,omitempty"`
+	IssueTypes              *[]string            `json:"issueTypes,omitempty"`
+	MonoRepo                *bool                `json:"monoRepo,omitempty"`
+	StageColumns            *map[string][]string `json:"stageColumns,omitempty"`
+	GitRemoteUrl            *string              `json:"gitRemoteUrl,omitempty"`
+	LinearTeam              *string              `json:"linearTeam,omitempty"`
+	GithubRepo              *string              `json:"githubRepo,omitempty"`
+	JiraProject             *string              `json:"jiraProject,omitempty"`
+	IssueTracker            *string              `json:"issueTracker,omitempty"`
+	TrackerUrl              *string              `json:"trackerUrl,omitempty"`
+	ProjectType             *string              `json:"projectType,omitempty"`
+	IsDefault               *bool                `json:"isDefault,omitempty"`
+	StageMapping            *map[string]string   `json:"stageMapping,omitempty"`
+	SkillOverrides          *map[string]string   `json:"skillOverrides,omitempty"`
+	AIProvider              *string              `json:"aiProvider,omitempty"`
+	AICommandTemplate       *string              `json:"aiCommandTemplate,omitempty"`
+	SpecFramework           *string              `json:"specFramework,omitempty"`
+	Parallelism             *int                 `json:"parallelism,omitempty"`
+	TtyMode                 *string              `json:"ttyMode,omitempty"`
+	ExternalTerminalCommand *string              `json:"externalTerminalCommand,omitempty"`
 }
 
 // NormalizeParallelism keeps the concurrent background agent workers count between 1 and 3.
@@ -664,6 +667,26 @@ type CreateTaskRequest struct {
 	Source         string   `json:"source,omitempty"`
 	ExternalURL    *string  `json:"externalUrl,omitempty"`
 	Sprint         string   `json:"sprint,omitempty"`
+	IssueType      string   `json:"issueType,omitempty"`
+	ParentKey      string   `json:"parentKey,omitempty"`
+	ParentTitle    string   `json:"parentTitle,omitempty"`
+	ParentType     string   `json:"parentType,omitempty"`
+}
+
+type CloneTaskRequest struct {
+	Title              string   `json:"title,omitempty"`
+	ProjectID          string   `json:"projectId,omitempty"`
+	Status             Status   `json:"status,omitempty"`
+	Priority           Priority `json:"priority,omitempty"`
+	Sprint             string   `json:"sprint,omitempty"`
+	Assignee           string   `json:"assignee,omitempty"`
+	AssigneeAvatar     string   `json:"assigneeAvatar,omitempty"`
+	IncludeDescription *bool    `json:"includeDescription,omitempty"`
+	IncludeLabels      *bool    `json:"includeLabels,omitempty"`
+	IncludeParent      *bool    `json:"includeParent,omitempty"`
+	IncludeSprint      *bool    `json:"includeSprint,omitempty"`
+	IncludeAssignee    *bool    `json:"includeAssignee,omitempty"`
+	Source             string   `json:"source,omitempty"`
 }
 
 type UpdateTaskRequest struct {

@@ -4,6 +4,7 @@ import type {
   SkillEditorEntry,
   TTYLaunchResult,
   Task,
+  CloneTaskRequest,
   Status,
   Priority,
   UserSettings,
@@ -224,6 +225,12 @@ interface AppContextType {
   addToast: (toast: Omit<ToastMessage, 'id'>) => void
   removeToast: (id: string) => void
   createTask: (task: { title: string; description?: string; status?: Status; priority?: Priority; labels?: string[]; assignee?: string; dueDate?: string | null; sprint?: string; source?: TaskSource; externalUrl?: string; projectId?: string }) => Promise<Task | null>
+  cloneTask: (taskId: string, req?: CloneTaskRequest, openAfterClone?: boolean) => Promise<Task | null>
+  isCloneModalOpen: boolean
+  setIsCloneModalOpen: (open: boolean) => void
+  cloneSourceTask: Task | null
+  setCloneSourceTask: (task: Task | null) => void
+  openCloneModal: (task: Task) => void
   /**
    * assigneeAccountId accompagne un changement d'assigné : Jira n'assigne que
    * par identifiant de compte, jamais par nom affiché.
@@ -613,6 +620,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false)
   const [quickAddInitialStatus, setQuickAddInitialStatus] = useState<Status>('backlog')
+  const [isCloneModalOpen, setIsCloneModalOpen] = useState(false)
+  const [cloneSourceTask, setCloneSourceTask] = useState<Task | null>(null)
+
+  const openCloneModal = useCallback((task: Task) => {
+    setCloneSourceTask(task)
+    setIsCloneModalOpen(true)
+  }, [])
+
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isProfileOpen, setIsProfileOpen] = useState(false)
   const [settings, setSettings] = useState<UserSettings>(defaultSettings)
@@ -1725,6 +1740,43 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         description: `${created.key}: ${created.title} (${(created.source || 'local').toUpperCase()})`,
       })
       return created
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: t.toasts.error,
+        description: err.message,
+      })
+      return null
+    }
+  }
+
+  const cloneTask = async (
+    taskId: string,
+    req?: CloneTaskRequest,
+    openAfterClone: boolean = true
+  ): Promise<Task | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/clone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: req ? JSON.stringify(req) : undefined,
+      })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || 'Erreur lors du clonage de la tâche')
+      }
+      const cloned: Task = await res.json()
+      setTasks(prev => [cloned, ...prev])
+      fetchProjects()
+      addToast({
+        type: 'success',
+        title: 'Story clonée avec succès',
+        description: `${cloned.key}: ${cloned.title} (${(cloned.source || 'local').toUpperCase()})`,
+      })
+      if (openAfterClone) {
+        setSelectedTask(cloned)
+      }
+      return cloned
     } catch (err: any) {
       addToast({
         type: 'error',
@@ -3640,6 +3692,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setIsQuickAddOpen,
         quickAddInitialStatus,
         setQuickAddInitialStatus,
+        isCloneModalOpen,
+        setIsCloneModalOpen,
+        cloneSourceTask,
+        setCloneSourceTask,
+        openCloneModal,
         isCommandPaletteOpen,
         setIsCommandPaletteOpen,
         isProfileOpen,
@@ -3651,6 +3708,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         addToast,
         removeToast,
         createTask,
+        cloneTask,
         updateTask,
         moveTaskToTrackerStatus,
         getTaskComments,

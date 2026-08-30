@@ -27,6 +27,7 @@ import {
   Save,
   Check,
   Copy,
+  CopyPlus,
   MessageSquare,
   ArrowRight,
   Folder,
@@ -55,6 +56,7 @@ export const TaskDetailModal: React.FC = () => {
     setDiffTask,
     updateTask,
     deleteTask,
+    openCloneModal,
     migrateTasks,
     runSkill,
     isSkillRunning,
@@ -2083,6 +2085,15 @@ export const TaskDetailModal: React.FC = () => {
                 </button>
 
                 <button
+                  type="button"
+                  onClick={() => openCloneModal(selectedTask)}
+                  className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-cyan-400 hover:bg-cyan-500/10 transition-colors cursor-pointer"
+                  title="Cloner cette story"
+                >
+                  <CopyPlus size={15} />
+                </button>
+
+                <button
                   onClick={handleDelete}
                   className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10 transition-colors"
                   title={t.taskModal.delete}
@@ -2345,6 +2356,15 @@ export const TaskDetailModal: React.FC = () => {
               title={isPinned(selectedTask.id) ? 'Désépingler ce ticket' : 'Épingler ce ticket'}
             >
               {isPinned(selectedTask.id) ? <PinOff size={16} /> : <Pin size={16} />}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openCloneModal(selectedTask)}
+              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-cyan-400 hover:bg-cyan-500/10 transition-colors cursor-pointer"
+              title="Cloner cette story"
+            >
+              <CopyPlus size={16} />
             </button>
 
             <button

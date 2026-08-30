@@ -478,14 +478,16 @@ export const ProfileModal: React.FC = () => {
                 </div>
 
                 {/* Quick Presets */}
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                   {[
-                    { cmd: '', label: 'Auto (OS)' },
-                    { cmd: 'Terminal', label: 'Terminal.app' },
-                    { cmd: 'iTerm', label: 'iTerm2' },
-                    { cmd: 'Ghostty', label: 'Ghostty' },
-                    { cmd: 'Alacritty', label: 'Alacritty' },
-                    { cmd: 'kitty', label: 'Kitty' },
+                    { cmd: '', label: 'Auto (OS)', desc: 'Terminal par défaut' },
+                    { cmd: 'Ghostty', label: 'Ghostty', desc: 'macOS & Linux' },
+                    { cmd: 'Terminal', label: 'Terminal.app', desc: 'macOS natif' },
+                    { cmd: 'iTerm', label: 'iTerm2', desc: 'macOS' },
+                    { cmd: 'Alacritty', label: 'Alacritty', desc: 'GPU accéléré' },
+                    { cmd: 'kitty', label: 'Kitty', desc: 'GPU accéléré' },
+                    { cmd: 'WezTerm', label: 'WezTerm', desc: 'Multiplexeur' },
+                    { cmd: 'Warp', label: 'Warp', desc: 'AI Terminal' },
                   ].map(preset => {
                     const isSelected = externalTerminalCommand === preset.cmd
                     return (
@@ -493,27 +495,31 @@ export const ProfileModal: React.FC = () => {
                         key={preset.cmd}
                         type="button"
                         onClick={() => setExternalTerminalCommand(preset.cmd)}
-                        className={`py-1.5 px-2 rounded-lg text-xs font-semibold border transition-all cursor-pointer text-center ${
+                        className={`py-2 px-2.5 rounded-xl text-left border transition-all cursor-pointer ${
                           isSelected
                             ? 'bg-[var(--accent-light)] border-[var(--accent-color)] accent-text shadow-xs'
                             : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'
                         }`}
                       >
-                        {preset.label}
+                        <div className="font-bold text-xs">{preset.label}</div>
+                        <div className="text-[9.5px] opacity-75">{preset.desc}</div>
                       </button>
                     )
                   })}
                 </div>
 
                 {/* Custom Command Input */}
-                <div className="flex items-center gap-2 pt-1">
+                <div className="space-y-1 pt-1">
                   <input
                     type="text"
                     value={externalTerminalCommand}
                     onChange={e => setExternalTerminalCommand(e.target.value)}
-                    placeholder="Ex: Terminal, iTerm, Ghostty, alacritty, gnome-terminal"
+                    placeholder="Ex: Ghostty, Terminal, iTerm, alacritty, kitty ou modèle custom"
                     className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
                   />
+                  <p className="text-[10px] text-[var(--text-muted)]">
+                    Pour une commande sur mesure, vous pouvez utiliser le placeholder <code className="text-amber-400 font-bold">{'{script}'}</code> (ex: <code className="text-[var(--text-secondary)]">ghostty -e {'{script}'}</code> ou <code className="text-[var(--text-secondary)]">open -na Ghostty --args -e {'{script}'}</code>).
+                  </p>
                 </div>
               </div>
 

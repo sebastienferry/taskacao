@@ -25,6 +25,7 @@ import {
   Kanban,
   Tag,
   Plus,
+  CopyPlus,
   X,
 } from "lucide-react"
 import { useApp } from "../context/AppContext"
@@ -45,6 +46,7 @@ export const ListView: React.FC = () => {
     setDiffTask,
     updateTask,
     deleteTask,
+    openCloneModal,
     activities,
     hideDone,
     toggleHideDone,
@@ -754,6 +756,15 @@ export const ListView: React.FC = () => {
               title={`Ouvrir dans ${settings.editorCommand || "l'éditeur"}`}
             >
               <Code2 size={13} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openCloneModal(task)}
+              className="p-1 rounded text-[var(--text-muted)] hover:text-cyan-400 hover:bg-cyan-500/10 transition-colors cursor-pointer"
+              title="Cloner cette story"
+            >
+              <CopyPlus size={13} />
             </button>
 
             <button
