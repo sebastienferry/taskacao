@@ -32,6 +32,7 @@ export const QuickAddModal: React.FC = () => {
   const [source, setSource] = useState<TaskSource>(
     (defaultProj?.issueTracker as TaskSource) || 'local'
   )
+  const [issueType, setIssueType] = useState<string>('')
   const [sprint, setSprint] = useState('')
   const [labels, setLabels] = useState<string[]>([])
   const [labelInput, setLabelInput] = useState('')
@@ -67,6 +68,7 @@ export const QuickAddModal: React.FC = () => {
       setDescription('')
       setStatus(quickAddInitialStatus || 'to_clarify')
       setPriority('medium')
+      setIssueType('')
       const initialProjId = selectedProjectId !== 'all' ? selectedProjectId : (projects[0]?.id || 'default')
       setTaskProjectId(initialProjId)
       const proj = projects.find(p => p.id === initialProjId) || projects[0]
@@ -113,6 +115,7 @@ export const QuickAddModal: React.FC = () => {
       description: description.trim(),
       status,
       priority,
+      issueType: issueType.trim() || undefined,
       labels,
       sprint: sprint.trim() || undefined,
       source,
@@ -239,6 +242,35 @@ export const QuickAddModal: React.FC = () => {
                   }`}
                 >
                   <span className="text-sm leading-none">{opt.icon}</span>
+                  <span>{opt.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Issue Type Selector */}
+          <div>
+            <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
+              Type de ticket
+            </label>
+            <div className="grid grid-cols-4 gap-1.5">
+              {[
+                { id: '', label: 'Défaut', icon: '⚪' },
+                { id: 'Story', label: 'Story', icon: '📘' },
+                { id: 'Bug', label: 'Bug', icon: '🐛' },
+                { id: 'Task', label: 'Tâche', icon: '📝' },
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setIssueType(opt.id)}
+                  className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-xl border text-[11px] font-semibold transition-all cursor-pointer ${
+                    issueType === opt.id
+                      ? 'border-[var(--accent-color)] bg-[var(--accent-light)] accent-text shadow-xs'
+                      : 'border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:border-[var(--accent-color)]/50'
+                  }`}
+                >
+                  <span>{opt.icon}</span>
                   <span>{opt.label}</span>
                 </button>
               ))}

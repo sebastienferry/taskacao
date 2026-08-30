@@ -47,6 +47,7 @@ import { TaskComments } from './TaskComments'
 import { LookupField, type LookupOption } from './LookupField'
 import { MarkdownEditor } from './Markdown'
 import { sprintLookup, macroLookup, isProjectCompatible } from '../lib/lookups'
+import { issueTypeStyle } from '../lib/issueTypes'
 
 export const TaskDetailModal: React.FC = () => {
   const {
@@ -535,6 +536,35 @@ export const TaskDetailModal: React.FC = () => {
       </span>
     </span>
   )
+
+  const renderIssueTypeSelector = () => {
+    if (!selectedTask) return null
+    const current = selectedTask.issueType || ''
+    return (
+      <select
+        value={current}
+        onChange={e => updateTask(selectedTask.id, { issueType: e.target.value })}
+        className="px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border cursor-pointer focus:outline-none transition-colors bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[var(--accent-color)]/50 shrink-0"
+        style={
+          current
+            ? {
+                color: issueTypeStyle(current).color,
+                background: issueTypeStyle(current).background,
+                borderColor: issueTypeStyle(current).border,
+              }
+            : {}
+        }
+        title="Changer le type de ticket (Story, Bug, Tâche...)"
+      >
+        <option value="">Type: Défaut</option>
+        <option value="Story">📘 Story</option>
+        <option value="Bug">🐛 Bug</option>
+        <option value="Task">📝 Tâche</option>
+        <option value="Improvement">⚡ Amélioration</option>
+        <option value="Technical debt">🔧 Dette technique</option>
+      </select>
+    )
+  }
 
   const handleSave = async () => {
     if (!title.trim() || isSaving) return
@@ -1963,12 +1993,7 @@ export const TaskDetailModal: React.FC = () => {
               {/* Left: Référence ParentKey / TaskKey (chacune ouvre le tracker) */}
               <div className="flex items-center gap-2.5 min-w-0">
                 {renderTaskRef()}
-
-                {selectedTask.issueType && (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium text-[var(--text-muted)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] shrink-0">
-                    {selectedTask.issueType}
-                  </span>
-                )}
+                {renderIssueTypeSelector()}
               </div>
 
               {/* Right: Quick switcher to Modal, PR Link, Delete, Close */}
@@ -2237,13 +2262,7 @@ export const TaskDetailModal: React.FC = () => {
         <div className="flex items-center justify-between px-6 py-3.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30 shrink-0">
           <div className="flex items-center gap-3">
             {renderTaskRef()}
-            <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-              {selectedTask.issueType && (
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium text-[var(--text-muted)] bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
-                  {selectedTask.issueType}
-                </span>
-              )}
-            </div>
+            {renderIssueTypeSelector()}
           </div>
 
           <div className="flex items-center gap-2">

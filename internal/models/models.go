@@ -687,30 +687,29 @@ type CloneTaskRequest struct {
 	IncludeSprint      *bool    `json:"includeSprint,omitempty"`
 	IncludeAssignee    *bool    `json:"includeAssignee,omitempty"`
 	Source             string   `json:"source,omitempty"`
+	IssueType          string   `json:"issueType,omitempty"`
 }
 
 type UpdateTaskRequest struct {
-	ProjectID      *string   `json:"projectId,omitempty"`
-	Title          *string   `json:"title,omitempty"`
-	Description    *string   `json:"description,omitempty"`
-	Status         *Status   `json:"status,omitempty"`
-	Priority       *Priority `json:"priority,omitempty"`
-	Labels         *[]string `json:"labels,omitempty"`
-	Assignee       *string   `json:"assignee,omitempty"`
-	AssigneeAvatar *string   `json:"assigneeAvatar,omitempty"`
-	// AssigneeAccountID carries the tracker identity behind Assignee, so the
-	// change can be pushed to Jira: its API assigns by accountId, never by
-	// display name. Empty string unassigns the work item.
-	AssigneeAccountID *string `json:"assigneeAccountId,omitempty"`
-	Position          *int    `json:"position,omitempty"`
-	DueDate           *string `json:"dueDate,omitempty"`
-	BranchName        *string `json:"branchName,omitempty"`
-	PrURL             *string `json:"prUrl,omitempty"`
-	RepoPath          *string `json:"repoPath,omitempty"`
-	TrackerStatus     *string `json:"trackerStatus,omitempty"`
-	Sprint            *string `json:"sprint,omitempty"`
-	Source            *string `json:"source,omitempty"`
-	ExternalURL       *string `json:"externalUrl,omitempty"`
+	ProjectID         *string   `json:"projectId,omitempty"`
+	Title             *string   `json:"title,omitempty"`
+	Description       *string   `json:"description,omitempty"`
+	Status            *Status   `json:"status,omitempty"`
+	Priority          *Priority `json:"priority,omitempty"`
+	Labels            *[]string `json:"labels,omitempty"`
+	Assignee          *string   `json:"assignee,omitempty"`
+	AssigneeAvatar    *string   `json:"assigneeAvatar,omitempty"`
+	AssigneeAccountID *string   `json:"assigneeAccountId,omitempty"`
+	Position          *int      `json:"position,omitempty"`
+	DueDate           *string   `json:"dueDate,omitempty"`
+	BranchName        *string   `json:"branchName,omitempty"`
+	PrURL             *string   `json:"prUrl,omitempty"`
+	RepoPath          *string   `json:"repoPath,omitempty"`
+	TrackerStatus     *string   `json:"trackerStatus,omitempty"`
+	Sprint            *string   `json:"sprint,omitempty"`
+	Source            *string   `json:"source,omitempty"`
+	ExternalURL       *string   `json:"externalUrl,omitempty"`
+	IssueType         *string   `json:"issueType,omitempty"`
 }
 
 type Skill struct {

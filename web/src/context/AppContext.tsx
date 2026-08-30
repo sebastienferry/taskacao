@@ -224,7 +224,7 @@ interface AppContextType {
   toasts: ToastMessage[]
   addToast: (toast: Omit<ToastMessage, 'id'>) => void
   removeToast: (id: string) => void
-  createTask: (task: { title: string; description?: string; status?: Status; priority?: Priority; labels?: string[]; assignee?: string; dueDate?: string | null; sprint?: string; source?: TaskSource; externalUrl?: string; projectId?: string }) => Promise<Task | null>
+  createTask: (task: { title: string; description?: string; status?: Status; priority?: Priority; labels?: string[]; assignee?: string; dueDate?: string | null; sprint?: string; source?: TaskSource; externalUrl?: string; projectId?: string; issueType?: string }) => Promise<Task | null>
   cloneTask: (taskId: string, req?: CloneTaskRequest, openAfterClone?: boolean) => Promise<Task | null>
   isCloneModalOpen: boolean
   setIsCloneModalOpen: (open: boolean) => void
@@ -1719,6 +1719,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     source?: TaskSource
     externalUrl?: string
     projectId?: string
+    issueType?: string
   }): Promise<Task | null> => {
     try {
       const defaultProj = taskData.projectId || (selectedProjectId !== 'all' ? selectedProjectId : (projects[0]?.id || 'default'))
