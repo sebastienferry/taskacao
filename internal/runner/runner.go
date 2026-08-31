@@ -473,9 +473,15 @@ func mapStatusToLinearState(status models.Status) string {
 		return "In Progress"
 	case models.StatusToTest, models.StatusToValidate:
 		return "In Review"
-	case models.StatusToClose, models.StatusDone:
+	case models.StatusToClose:
+		return "In Review"
+	case models.StatusDone, models.StatusFinished:
 		return "Done"
 	default:
+		s := strings.ToLower(string(status))
+		if s == "finished" || s == "done" || s == "closed" || s == "completed" {
+			return "Done"
+		}
 		return "Backlog"
 	}
 }
@@ -978,6 +984,30 @@ func cleanGithubIssueNum(keyOrNumber string) (int, error) {
 	return strconv.Atoi(s)
 }
 
+func isFinishedStatus(status *models.Status, labels []string) (bool, bool) {
+	// returns (isClosed, hasExplicitState)
+	if status != nil {
+		s := strings.ToLower(string(*status))
+		if s == "finished" || s == "done" || s == "closed" || s == "completed" {
+			return true, true
+		}
+		for _, l := range labels {
+			clean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(l), "#"))
+			if clean == "finished" || clean == "closed" || clean == "done" {
+				return true, true
+			}
+		}
+		return false, true
+	}
+	for _, l := range labels {
+		clean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(l), "#"))
+		if clean == "finished" || clean == "closed" || clean == "done" {
+			return true, true
+		}
+	}
+	return false, false
+}
+
 func (r *Runner) UpdateGithubIssueState(repo string, repoPath string, keyOrNumber string, status models.Status) error {
 	repo, repoPath = ResolveGithubRepo(repo, repoPath)
 
@@ -995,7 +1025,8 @@ func (r *Runner) UpdateGithubIssueState(repo string, repoPath string, keyOrNumbe
 	}
 
 	state := "open"
-	if status == models.StatusFinished || status == models.StatusDone {
+	isClosed, _ := isFinishedStatus(&status, nil)
+	if isClosed {
 		state = "closed"
 	}
 
@@ -1047,13 +1078,17 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 		ghPath = "gh"
 	}
 
-	// 1. Update State if provided
-	if status != nil {
-		_ = r.UpdateGithubIssueState(repo, repoPath, keyOrNumber, *status)
+	isClosed, hasState := isFinishedStatus(status, labels)
+	state := "open"
+	if isClosed {
+		state = "closed"
 	}
 
-	// 2. Update issue via REST API (PATCH repos/{owner}/{repo}/issues/{issue_number})
+	// 1. Update issue via REST API (PATCH repos/{owner}/{repo}/issues/{issue_number})
 	payload := make(map[string]interface{})
+	if hasState {
+		payload["state"] = state
+	}
 	if title != nil && *title != "" {
 		payload["title"] = *title
 	}
@@ -1121,11 +1156,23 @@ func (r *Runner) UpdateGithubIssue(repo string, repoPath string, keyOrNumber str
 
 	// Only invoke gh issue edit if there are actual fields/flags to edit
 	if len(args) > baseArgsLen {
-		output, err := r.runCommand(ctx, repoPath, ghPath, args...)
-		if err != nil {
-			return fmt.Errorf("gh issue edit failed: %w (output: %s)", err, output)
-		}
+		_, _ = r.runCommand(ctx, repoPath, ghPath, args...)
 	}
+
+	// Also close or reopen via CLI fallback if state changed
+	if hasState {
+		var stateArgs []string
+		if state == "closed" {
+			stateArgs = []string{"issue", "close", strconv.Itoa(num)}
+		} else {
+			stateArgs = []string{"issue", "reopen", strconv.Itoa(num)}
+		}
+		if repo != "" {
+			stateArgs = append(stateArgs, "-R", repo)
+		}
+		_, _ = r.runCommand(ctx, repoPath, ghPath, stateArgs...)
+	}
+
 	return nil
 }
 

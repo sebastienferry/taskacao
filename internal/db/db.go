@@ -2802,6 +2802,17 @@ func (d *DB) UpdateTask(id string, req models.UpdateTaskRequest) (*models.Task, 
 		}
 	}
 
+	// Forçage de la cohérence de clôture / finition
+	if explicitStage == "finished" || explicitStage == "closed" || strings.EqualFold(existing.TrackerStatus, "Done") || strings.EqualFold(existing.TrackerStatus, "Closed") || strings.EqualFold(existing.TrackerStatus, "Terminé") || existing.Status == models.StatusFinished || existing.Status == models.StatusDone || string(existing.Status) == "closed" {
+		existing.Status = models.StatusFinished
+		existing.Labels = SetWorkflowLabel(existing.Labels, "#finished")
+		if proj, _ := d.getProjectByIDUnsafe(existing.ProjectID); proj != nil {
+			if target := TrackerStatusForStage(proj, "finished"); target != "" {
+				existing.TrackerStatus = target
+			}
+		}
+	}
+
 	if req.RepoPath != nil {
 		trimmed := strings.TrimSpace(*req.RepoPath)
 		if trimmed == "" {
@@ -4662,15 +4673,27 @@ func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 		priorityForUpdate = &task.Priority
 	}
 
+	syncStatus := task.Status
+	for _, l := range task.Labels {
+		clean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(l), "#"))
+		if clean == "finished" || clean == "closed" || clean == "done" {
+			syncStatus = models.StatusFinished
+			break
+		}
+	}
+	if strings.EqualFold(task.TrackerStatus, "Done") || strings.EqualFold(task.TrackerStatus, "Closed") || strings.EqualFold(task.TrackerStatus, "Terminé") {
+		syncStatus = models.StatusFinished
+	}
+
 	if isLinear {
-		steps = append(steps, fmt.Sprintf("Exécution: linear issue update %s (statut: %s, labels: %v)", task.Key, task.Status, task.Labels))
-		err := d.runner.UpdateLinearIssue(task.Key, titleForUpdate, descForUpdate, priorityForUpdate, &task.Status, task.Labels)
+		steps = append(steps, fmt.Sprintf("Exécution: linear issue update %s (statut: %s, labels: %v)", task.Key, syncStatus, task.Labels))
+		err := d.runner.UpdateLinearIssue(task.Key, titleForUpdate, descForUpdate, priorityForUpdate, &syncStatus, task.Labels)
 		if err != nil {
 			hasError = true
 			outputText = fmt.Sprintf("Erreur Linear CLI : %v", err)
 			steps = append(steps, fmt.Sprintf("❌ Échec : %v", err))
 		} else {
-			outputText = fmt.Sprintf("Issue Linear %s synchronisée avec succès (Titre: %s, Statut: %s, Labels: %v)", task.Key, task.Title, task.Status, task.Labels)
+			outputText = fmt.Sprintf("Issue Linear %s synchronisée avec succès (Titre: %s, Statut: %s, Labels: %v)", task.Key, task.Title, syncStatus, task.Labels)
 			steps = append(steps, fmt.Sprintf("✅ Issue Linear %s mise à jour avec succès via la CLI", task.Key))
 		}
 	} else if isJira {
@@ -4678,8 +4701,8 @@ func (d *DB) processTrackerUpdateJob(ctx context.Context, job SkillJob) {
 		outputText = "Erreur: Le support de Jira a été retiré"
 		steps = append(steps, "❌ Échec : Jira n'est plus pris en charge")
 	} else if isGithub {
-		steps = append(steps, fmt.Sprintf("Exécution: gh issue edit %s (Dépôt: %s, Statut: %s, Labels: %v, Supprimés: %v)", task.Key, repo, task.Status, task.Labels, job.RemovedLabels))
-		err := d.runner.UpdateGithubIssue(repo, repoPath, task.Key, titleForUpdate, descForUpdate, &task.Status, task.Labels, job.RemovedLabels)
+		steps = append(steps, fmt.Sprintf("Exécution: gh issue edit %s (Dépôt: %s, Statut: %s, Labels: %v, Supprimés: %v)", task.Key, repo, syncStatus, task.Labels, job.RemovedLabels))
+		err := d.runner.UpdateGithubIssue(repo, repoPath, task.Key, titleForUpdate, descForUpdate, &syncStatus, task.Labels, job.RemovedLabels)
 		if err != nil {
 			hasError = true
 			outputText = fmt.Sprintf("Erreur GitHub CLI : %v", err)

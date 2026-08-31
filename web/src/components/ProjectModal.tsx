@@ -1468,8 +1468,8 @@ export const ProjectModal: React.FC = () => {
                           clarified: findStatus(['cadré', 'clarified', 'specify', 'to_specify', 'triage', 'todo', 'unstarted'], 'to_specify'),
                           specified: findStatus(['ready', 'specified', 'spec', 'plan', 'to_implement', 'todo'], 'to_implement'),
                           implemented: findStatus(['in progress', 'progress', 'dev', 'started', 'implemented', 'doing', 'to_test'], 'to_test'),
-                          reviewed: findStatus(['review', 'pr', 'qa', 'test', 'reviewed', 'to_test'], 'to_test'),
-                          finished: findStatus(['done', 'closed', 'completed', 'finished', 'to_close'], 'to_close'),
+                          reviewed: findStatus(['review', 'pr', 'qa', 'test', 'reviewed', 'to_close'], 'to_close'),
+                          finished: findStatus(['done', 'closed', 'completed', 'finished', 'termine'], 'finished'),
                         })
                         addToast({
                           type: 'success',

@@ -3,6 +3,7 @@ import { Check, ExternalLink, Layers, Target, User, CalendarRange, Inbox, Eye, E
 import { useApp } from '../context/AppContext'
 import { LookupField, type LookupOption } from './LookupField'
 import { macroLookup, sprintLookup } from '../lib/lookups'
+import { resolveTaskStage } from '../lib/workflow'
 import type { MacroMeta, Task } from '../types'
 
 /**
@@ -88,11 +89,20 @@ export const CurationTable: React.FC = () => {
     return !(task.assignee || '').trim()
   }
 
+  const isDoneTask = (t: Task): boolean => {
+    if (t.status === 'finished' || t.status === 'done' || (t.status as any) === 'closed') return true
+    if (t.trackerStatus && ['done', 'closed', 'finished', 'completed', 'terminé', 'termine'].includes(t.trackerStatus.toLowerCase())) return true
+    const labels = (t.labels || []).map(l => l.toLowerCase().replace(/^#+/, ''))
+    if (labels.includes('finished') || labels.includes('closed') || labels.includes('done') || labels.includes('termine')) return true
+    return resolveTaskStage(t, currentProject) === 'finished'
+  }
+
   // Le décompte porte sur tout ce que la liste reçoit, y compris les dimensions
   // non sélectionnées : c'est ce qui donne envie d'en cocher une autre.
+  // Les tâches terminées / fermées sont exclues lorsque hideDone est actif.
   const pool = useMemo(
-    () => tasks.filter(t => (hideDone ? t.status !== 'finished' && t.status !== 'done' : true)),
-    [tasks, hideDone]
+    () => tasks.filter(t => (hideDone ? !isDoneTask(t) : true)),
+    [tasks, hideDone, currentProject]
   )
 
   const counts = useMemo(() => {
