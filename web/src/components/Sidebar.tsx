@@ -501,7 +501,7 @@ export const Sidebar: React.FC = () => {
             </button>
             )}
 
-            {/* Puis « Mes tâches » : ce qui m'attend, avant de choisir une vue. */}
+            {/* 1. Mes tâches */}
             <button
               onClick={() => setAssigneeFilter(isMyTasksActive ? null : settings.userName)}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -516,30 +516,8 @@ export const Sidebar: React.FC = () => {
                 {!sidebarCollapsed && <span className="truncate">{t.nav.myTasks}</span>}
               </div>
             </button>
-            <button
-              onClick={() => setActiveView('board')}
-              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                activeView === 'board'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
-              }`}
-              title={t.nav.board}
-            >
-              <Columns size={15} className="shrink-0" />
-              {!sidebarCollapsed && <span className="truncate">{t.nav.board}</span>}
-            </button>
-            <button
-              onClick={() => setActiveView('list')}
-              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                activeView === 'list'
-                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
-              }`}
-              title={t.nav.list}
-            >
-              <ListFilter size={15} className="shrink-0" />
-              {!sidebarCollapsed && <span className="truncate">{t.nav.list}</span>}
-            </button>
+
+            {/* 2. Triage */}
             <button
               onClick={() => setActiveView('triage')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -554,7 +532,36 @@ export const Sidebar: React.FC = () => {
                 {!sidebarCollapsed && <span className="truncate">Triage</span>}
               </div>
             </button>
-            {/* Roadmap */}
+
+            {/* 3. Backlog */}
+            <button
+              onClick={() => setActiveView('list')}
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'list'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Backlog"
+            >
+              <ListFilter size={15} className="shrink-0 text-indigo-400" />
+              {!sidebarCollapsed && <span className="truncate">Backlog</span>}
+            </button>
+
+            {/* 4. Kanban */}
+            <button
+              onClick={() => setActiveView('board')}
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'board'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Kanban"
+            >
+              <Columns size={15} className="shrink-0 text-emerald-400" />
+              {!sidebarCollapsed && <span className="truncate">Kanban</span>}
+            </button>
+
+            {/* 5. Roadmap */}
             <button
               onClick={() => setActiveView('roadmap')}
               className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -564,9 +571,11 @@ export const Sidebar: React.FC = () => {
               }`}
               title="Roadmap : NOW / NEXT / FUTURE"
             >
-              <MapIcon size={15} className="shrink-0" />
+              <MapIcon size={15} className="shrink-0 text-amber-400" />
               {!sidebarCollapsed && <span className="truncate">Roadmap</span>}
             </button>
+
+            {/* 6. Activités */}
             <button
               onClick={() => setActiveView('activities')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -592,7 +601,8 @@ export const Sidebar: React.FC = () => {
                 ) : null
               )}
             </button>
-            {/* Skills du workflow : une par pas, éditables dans l'outil */}
+
+            {/* 7. Skills */}
             <button
               onClick={() => setActiveView('skills')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -607,6 +617,8 @@ export const Sidebar: React.FC = () => {
                 {!sidebarCollapsed && <span className="truncate">Skills</span>}
               </div>
             </button>
+
+            {/* 8. Synchro */}
             <button
               onClick={() => setActiveView('sync')}
               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -614,11 +626,11 @@ export const Sidebar: React.FC = () => {
                   ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
               }`}
-              title={t.nav.sync || "Synchronisation"}
+              title="Synchro (Synchronisation)"
             >
               <div className="flex items-center gap-2.5 min-w-0 truncate">
                 <RefreshCw size={15} className={`shrink-0 text-indigo-400 ${isSyncing ? 'animate-spin' : ''}`} />
-                {!sidebarCollapsed && <span className="truncate">{t.nav.sync || "Synchronisation"}</span>}
+                {!sidebarCollapsed && <span className="truncate">Synchro</span>}
               </div>
             </button>
             {/* Équipes : la charge par personne, quand les tickets portent une équipe */}

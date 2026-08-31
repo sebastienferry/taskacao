@@ -12,6 +12,8 @@ import {
   Settings,
   Terminal as TerminalIcon,
   Target,
+  SlidersHorizontal,
+  Map as MapIcon,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Status, Priority } from '../types'
@@ -185,15 +187,15 @@ export const Header: React.FC = () => {
         {/* View Mode Switcher (Icon-only) */}
         <div className="flex items-center bg-[var(--bg-primary)] p-0.5 rounded-lg border border-[var(--border-color)] shadow-2xs">
           <button
-            onClick={() => setActiveView('board')}
+            onClick={() => setActiveView('triage')}
             className={`p-1.5 rounded-md transition-all cursor-pointer ${
-              activeView === 'board'
-                ? 'bg-[var(--bg-secondary)] text-[var(--text-primary)] shadow-xs font-bold border border-[var(--border-color)]'
+              activeView === 'triage'
+                ? 'bg-[var(--bg-secondary)] text-violet-400 shadow-xs font-bold border border-[var(--border-color)]'
                 : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
-            title={t.header.boardView}
+            title="Triage"
           >
-            <Columns size={15} />
+            <SlidersHorizontal size={15} />
           </button>
           <button
             onClick={() => setActiveView('list')}
@@ -202,9 +204,31 @@ export const Header: React.FC = () => {
                 ? 'bg-[var(--bg-secondary)] text-[var(--text-primary)] shadow-xs font-bold border border-[var(--border-color)]'
                 : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
-            title={t.header.listView}
+            title="Backlog"
           >
             <ListFilter size={15} />
+          </button>
+          <button
+            onClick={() => setActiveView('board')}
+            className={`p-1.5 rounded-md transition-all cursor-pointer ${
+              activeView === 'board'
+                ? 'bg-[var(--bg-secondary)] text-[var(--text-primary)] shadow-xs font-bold border border-[var(--border-color)]'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+            title="Kanban"
+          >
+            <Columns size={15} />
+          </button>
+          <button
+            onClick={() => setActiveView('roadmap')}
+            className={`p-1.5 rounded-md transition-all cursor-pointer ${
+              activeView === 'roadmap'
+                ? 'bg-[var(--bg-secondary)] text-amber-400 shadow-xs font-bold border border-[var(--border-color)]'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+            title="Roadmap"
+          >
+            <MapIcon size={15} />
           </button>
           <button
             onClick={() => setActiveView('activities')}
@@ -227,7 +251,7 @@ export const Header: React.FC = () => {
                 ? 'bg-[var(--bg-secondary)] text-indigo-300 shadow-xs font-bold border border-[var(--border-color)]'
                 : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
-            title={t.nav.sync || "Synchronisation"}
+            title="Synchro"
           >
             <RefreshCw size={14} className={isSyncing ? 'animate-spin text-indigo-400' : ''} />
           </button>
