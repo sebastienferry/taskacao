@@ -1514,6 +1514,61 @@ func (d *DB) TaskWorktreesEnabled(task *models.Task) bool {
 	return proj.UseWorktrees
 }
 
+// GenerateTaskBranchName formats a valid, clean git branch name for a task.
+func GenerateTaskBranchName(key, title string) string {
+	cleanKey := strings.TrimSpace(key)
+	var kb strings.Builder
+	for _, r := range strings.ToLower(cleanKey) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			kb.WriteRune(r)
+		}
+	}
+	cleanKey = kb.String()
+	if cleanKey == "" {
+		cleanKey = "task"
+	}
+
+	var tb strings.Builder
+	for _, r := range strings.ToLower(title) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			tb.WriteRune(r)
+		} else {
+			tb.WriteRune('-')
+		}
+	}
+	slug := tb.String()
+	for strings.Contains(slug, "--") {
+		slug = strings.ReplaceAll(slug, "--", "-")
+	}
+	slug = strings.Trim(slug, "-")
+	if len(slug) > 35 {
+		slug = strings.TrimRight(slug[:35], "-")
+	}
+	if slug == "" {
+		slug = "work"
+	}
+	return fmt.Sprintf("%s-%s", cleanKey, slug)
+}
+
+// SanitizeBranchName removes characters illegal in git branch names.
+func SanitizeBranchName(branch string) string {
+	branch = strings.TrimSpace(branch)
+	var b strings.Builder
+	for _, r := range branch {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '/' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	res := b.String()
+	for strings.Contains(res, "--") {
+		res = strings.ReplaceAll(res, "--", "-")
+	}
+	res = strings.Trim(res, "-")
+	return res
+}
+
 func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string, string, error) {
 	if mainRepoPath == "" || task == nil {
 		return mainRepoPath, "", nil
@@ -1535,23 +1590,22 @@ func (d *DB) EnsureTaskWorktree(mainRepoPath string, task *models.Task) (string,
 	// Ensure .tasks/ is ignored by Git
 	_ = d.EnsureGitIgnoreTasks(mainRepoPath)
 
-	// Compute branch name if not set
+	// Compute or sanitize branch name
 	if task.BranchName == nil || *task.BranchName == "" {
-		cleanTitle := strings.ToLower(task.Title)
-		cleanTitle = strings.ReplaceAll(cleanTitle, " ", "-")
-		cleanTitle = strings.ReplaceAll(cleanTitle, "'", "-")
-		cleanTitle = strings.ReplaceAll(cleanTitle, "\"", "")
-		cleanTitle = strings.ReplaceAll(cleanTitle, "/", "-")
-		cleanTitle = strings.ReplaceAll(cleanTitle, "\\", "-")
-		if len(cleanTitle) > 30 {
-			cleanTitle = cleanTitle[:30]
-		}
-		branch := fmt.Sprintf("%s-%s", task.Key, cleanTitle)
+		branch := GenerateTaskBranchName(task.Key, task.Title)
 		task.BranchName = &branch
 
 		d.mu.Lock()
 		_, _ = d.conn.Exec("UPDATE tasks SET branch_name = ? WHERE id = ?", branch, task.ID)
 		d.mu.Unlock()
+	} else {
+		sanitized := SanitizeBranchName(*task.BranchName)
+		if sanitized != *task.BranchName {
+			task.BranchName = &sanitized
+			d.mu.Lock()
+			_, _ = d.conn.Exec("UPDATE tasks SET branch_name = ? WHERE id = ?", sanitized, task.ID)
+			d.mu.Unlock()
+		}
 	}
 
 	targetBranch := *task.BranchName
@@ -1819,23 +1873,22 @@ func (d *DB) EnsureTaskGitBranch(repoPath string, task *models.Task) (string, er
 		return "", nil
 	}
 
-	// Compute branch name if not set
+	// Compute or sanitize branch name
 	if task.BranchName == nil || *task.BranchName == "" {
-		cleanTitle := strings.ToLower(task.Title)
-		cleanTitle = strings.ReplaceAll(cleanTitle, " ", "-")
-		cleanTitle = strings.ReplaceAll(cleanTitle, "'", "-")
-		cleanTitle = strings.ReplaceAll(cleanTitle, "\"", "")
-		cleanTitle = strings.ReplaceAll(cleanTitle, "/", "-")
-		cleanTitle = strings.ReplaceAll(cleanTitle, "\\", "-")
-		if len(cleanTitle) > 30 {
-			cleanTitle = cleanTitle[:30]
-		}
-		branch := fmt.Sprintf("%s-%s", task.Key, cleanTitle)
+		branch := GenerateTaskBranchName(task.Key, task.Title)
 		task.BranchName = &branch
 
 		d.mu.Lock()
 		_, _ = d.conn.Exec("UPDATE tasks SET branch_name = ? WHERE id = ?", branch, task.ID)
 		d.mu.Unlock()
+	} else {
+		sanitized := SanitizeBranchName(*task.BranchName)
+		if sanitized != *task.BranchName {
+			task.BranchName = &sanitized
+			d.mu.Lock()
+			_, _ = d.conn.Exec("UPDATE tasks SET branch_name = ? WHERE id = ?", sanitized, task.ID)
+			d.mu.Unlock()
+		}
 	}
 
 	targetBranch := *task.BranchName
