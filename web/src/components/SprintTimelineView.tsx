@@ -89,7 +89,23 @@ export const SprintTimelineView: React.FC = () => {
 
   // Fold/Collapse Closed Sprints State
   const [collapsedSprints, setCollapsedSprints] = useState<Record<string, boolean>>({})
-  const [hideClosedSprints, setHideClosedSprints] = useState<boolean>(false)
+  const [hideClosedSprints, setHideClosedSprints] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('taskflow_sprint_hide_closed')
+      if (stored !== null) return stored === 'true'
+    } catch {}
+    return true // Masqués par défaut
+  })
+
+  const handleToggleHideClosedSprints = () => {
+    setHideClosedSprints(prev => {
+      const next = !prev
+      try {
+        localStorage.setItem('taskflow_sprint_hide_closed', String(next))
+      } catch {}
+      return next
+    })
+  }
 
   const [backlogSearch, setBacklogSearch] = useState<string>('')
   const [isBacklogOpen, setIsBacklogOpen] = useState<boolean>(true)
@@ -622,7 +638,7 @@ export const SprintTimelineView: React.FC = () => {
             {sprints.some(s => s.state === 'closed') && (
               <button
                 type="button"
-                onClick={() => setHideClosedSprints(!hideClosedSprints)}
+                onClick={handleToggleHideClosedSprints}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer shadow-xs ${
                   hideClosedSprints
                     ? 'bg-slate-500/15 text-slate-300 border-slate-500/30 hover:bg-slate-500/25'
