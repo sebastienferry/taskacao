@@ -781,6 +781,26 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 	// Sub-action: /api/projects/{id}/macros — the macro metadata TaskFlow owns:
 	// horizon (NOW / NEXT / LATER), shaping notes and todos.
 	if len(parts) >= 2 && (parts[1] == "macros" || parts[1] == "epics") {
+		// Creation: /api/projects/{id}/macros/create
+		if len(parts) >= 3 && parts[2] == "create" && r.Method == http.MethodPost {
+			var req struct {
+				Title   string            `json:"title"`
+				Horizon string            `json:"horizon"`
+				Fields  map[string]string `json:"fields,omitempty"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid macro payload: "+err.Error())
+				return
+			}
+			created, err := h.db.CreateMacro(id, req.Title, req.Horizon, req.Fields)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, created)
+			return
+		}
+
 		switch r.Method {
 		case http.MethodGet:
 			macros, err := h.db.GetProjectMacros(id)

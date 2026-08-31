@@ -558,18 +558,22 @@ func (d *DB) CreateMacro(projectID string, title string, horizon string, fields 
 	}
 
 	key := ""
-	if proj.IssueTracker == "github" || proj.GithubRepo != "" {
+	if (proj.IssueTracker == "github" || proj.GithubRepo != "") && proj.GithubRepo != "" {
 		num, err := d.runner.CreateGithubMilestone(proj.GithubRepo, proj.RepoPath, title, "")
-		if err != nil {
-			return nil, fmt.Errorf("erreur création milestone GitHub: %w", err)
-		}
-		if num > 0 {
+		if err == nil && num > 0 {
 			key = fmt.Sprintf("M-%d", num)
 		}
 	}
 
 	if key == "" {
-		key = fmt.Sprintf("MACRO-%d", time.Now().Unix()%100000)
+		var maxM int
+		row := d.conn.QueryRow("SELECT COALESCE(MAX(CAST(SUBSTR(key, 3) AS INTEGER)), 0) FROM macros WHERE project_id = ? AND key LIKE 'M-%'", projectID)
+		_ = row.Scan(&maxM)
+		if maxM > 0 {
+			key = fmt.Sprintf("M-%d", maxM+1)
+		} else {
+			key = fmt.Sprintf("M-%d", (time.Now().Unix()%90000)+10000)
+		}
 	}
 
 	status := "open"
