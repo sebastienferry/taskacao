@@ -27,7 +27,7 @@ import { useApp } from '../context/AppContext'
 import { issueTypeStyle } from '../lib/issueTypes'
 import { Avatar } from './Avatar'
 import { shortElapsed, isElapsedStale } from '../lib/elapsed'
-import { skillForStage, stageFromColumn, getNextStepInfo } from '../lib/workflow'
+import { resolveTaskStage, getNextStepInfo } from '../lib/workflow'
 
 interface TaskCardProps {
   task: Task
@@ -257,36 +257,13 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
 
   // Determine current workflow stage action (Clarifier ➔ Spécifier ➔ Coder ➔ Créer PR ➔ Merge ➔ #finished)
   const getWorkflowAction = () => {
-    const isFinished = task.status === 'finished' || task.status === 'done' || task.labels?.some(l => l.toLowerCase() === 'finished')
-    if (isFinished) return null
-
-    // La colonne du board pilote quand le projet a affecté des étapes à ses
-    // colonnes : c'est l'état réel du travail côté équipe, alors qu'un label
-    // peut n'avoir jamais été posé. À défaut, la déduction par labels reprend.
-    const columnStage = stageFromColumn(task, taskProject)
-    if (columnStage) {
-      if (columnStage === 'finished') return null
-      // Une PR déjà ouverte sur une étape de revue : l'action utile est la fusion.
-      if (columnStage === 'reviewed' && task.prUrl) {
-        return {
-          id: 'merge',
-          label: 'Merge',
-          icon: <CheckCircle2 size={11} className="text-emerald-400" />,
-          title: 'Fusionner la Pull Request / branche et finaliser la tâche (#finished)',
-          action: async (e: React.MouseEvent) => {
-            e.stopPropagation()
-            await moveTaskWorkflowStage(task.id, 'finished')
-          },
-        }
-      }
-      const fromColumn = skillAction(skillForStage(columnStage) || '')
-      if (fromColumn) return fromColumn
-    }
+    const stage = resolveTaskStage(task, taskProject)
+    if (stage === 'finished') return null
 
     // If PR is already created or task is in reviewed stage -> Action is "Merge"
     if (
+      stage === 'reviewed' ||
       task.status === 'to_close' ||
-      task.labels?.some(l => l.toLowerCase() === 'reviewed') ||
       Boolean(task.prUrl && (task.status === 'to_test' || task.status === 'to_validate'))
     ) {
       return {
@@ -302,73 +279,22 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     }
 
     // If code is implemented / to_test (and no PR created yet) -> Action is "Créer PR"
-    if (
-      task.status === 'to_test' ||
-      task.status === 'to_validate' ||
-      task.labels?.some(l => l.toLowerCase() === 'implemented')
-    ) {
-      return {
-        id: 'create_pr',
-        label: skillLabel('create_pr', 'Créer PR'),
-        icon: <GitPullRequest size={11} className="text-purple-400" />,
-        title: 'Lancer la revue de code et générer la Pull Request',
-        action: async (e: React.MouseEvent) => {
-          e.stopPropagation()
-          if (isSkillRunning) return
-          await runSkill(task.id, 'create_pr')
-        },
-      }
+    if (stage === 'implemented' || task.status === 'to_test' || task.status === 'to_validate') {
+      return skillAction('create_pr')
     }
 
     // If spec is ready / to_implement -> Action is "Coder"
-    if (
-      task.status === 'to_implement' ||
-      task.status === 'in_progress' ||
-      task.labels?.some(l => l.toLowerCase() === 'specified')
-    ) {
-      return {
-        id: 'implement',
-        label: skillLabel('implement', 'Coder'),
-        icon: <Flame size={11} className="text-indigo-400" />,
-        title: "Lancer l'implémentation du code par l'agent IA",
-        action: async (e: React.MouseEvent) => {
-          e.stopPropagation()
-          if (isSkillRunning) return
-          await runSkill(task.id, 'implement')
-        },
-      }
+    if (stage === 'specified' || task.status === 'to_implement' || task.status === 'in_progress') {
+      return skillAction('implement')
     }
 
     // If clarified / to_specify -> Action is "Spécifier"
-    if (
-      task.status === 'to_specify' ||
-      task.labels?.some(l => l.toLowerCase() === 'clarified')
-    ) {
-      return {
-        id: 'specify',
-        label: skillLabel('specify', 'Spécifier'),
-        icon: <FileCode size={11} className="text-blue-400" />,
-        title: 'Rédiger la spécification technique (Spec Kit / OpenSpec)',
-        action: async (e: React.MouseEvent) => {
-          e.stopPropagation()
-          if (isSkillRunning) return
-          await runSkill(task.id, 'specify')
-        },
-      }
+    if (stage === 'clarified' || task.status === 'to_specify') {
+      return skillAction('specify')
     }
 
     // Default: Backlog / to_clarify -> Action is "Clarifier"
-    return {
-      id: 'clarify',
-      label: skillLabel('clarify', 'Clarifier'),
-      icon: <Sparkles size={11} className="text-amber-400" />,
-      title: 'Clarifier les exigences et cadrer la tâche',
-      action: async (e: React.MouseEvent) => {
-        e.stopPropagation()
-        if (isSkillRunning) return
-        await runSkill(task.id, 'clarify')
-      },
-    }
+    return skillAction('clarify')
   }
 
   const workflowAction = getWorkflowAction()
