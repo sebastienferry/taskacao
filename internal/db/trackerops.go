@@ -314,6 +314,82 @@ func (d *DB) processTrackerOpJob(ctx context.Context, job SkillJob) {
 	}
 
 	d.finishTrackerOp(job.ActivityID, steps, output, err)
+
+	// Wire worker execution results to trigger local post-back handler
+	now := time.Now()
+	payload := models.TaskPostBackPayload{
+		TaskID:           op.TaskID,
+		TaskKey:          op.TaskKey,
+		ProjectID:        op.ProjectID,
+		ActivityID:       job.ActivityID,
+		OpKind:           string(op.Kind),
+		TrackerUpdatedAt: &now,
+	}
+	if err != nil {
+		errStr := err.Error()
+		payload.Error = &errStr
+	}
+
+	switch op.Kind {
+	case TrackerOpAssign:
+		if op.AssigneeName != "" {
+			a := op.AssigneeName
+			payload.Assignee = &a
+		}
+	case TrackerOpStage:
+		if op.Stage != "" {
+			stg := op.Stage
+			payload.Stage = &stg
+		}
+		if op.BranchName != "" {
+			br := op.BranchName
+			payload.BranchName = &br
+		}
+		if op.PrURL != "" {
+			pr := op.PrURL
+			payload.PrURL = &pr
+		}
+		if op.TargetStatus != "" {
+			ts := op.TargetStatus
+			payload.TrackerStatus = &ts
+		}
+	case TrackerOpTransition:
+		if op.TargetStatus != "" {
+			ts := op.TargetStatus
+			payload.TrackerStatus = &ts
+		}
+	case TrackerOpSetParent:
+		if op.EpicKey != "" {
+			pk := op.EpicKey
+			payload.ParentKey = &pk
+		}
+	case TrackerOpSetSprint:
+		if op.SprintName != "" {
+			sp := op.SprintName
+			payload.Sprint = &sp
+		}
+	case TrackerOpSetTeam:
+		if op.TeamName != "" {
+			tm := op.TeamName
+			payload.Team = &tm
+		}
+		if op.TeamID != "" {
+			tmid := op.TeamID
+			payload.TeamID = &tmid
+		}
+	}
+
+	taskIDs := op.TaskIDs
+	if len(taskIDs) == 0 && (op.TaskID != "" || op.TaskKey != "") {
+		taskIDs = []string{op.TaskID}
+	}
+	for _, tid := range taskIDs {
+		if strings.TrimSpace(tid) != "" {
+			p := payload
+			p.TaskID = tid
+			_, _, _ = d.PostBackTask(p)
+		}
+	}
 }
 
 func (d *DB) runAssignOp(ctx context.Context, op TrackerOp, steps *[]string) (string, error) {

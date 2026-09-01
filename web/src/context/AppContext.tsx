@@ -1323,6 +1323,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     fetchGitStatus()
   }, [fetchGitStatus])
 
+  // Real-time SSE post-back and state update listener
+  useEffect(() => {
+    let eventSource: EventSource | null = null
+    try {
+      eventSource = new EventSource(`${API_BASE}/events`)
+      eventSource.addEventListener('task_updated', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data)
+          if (data && data.task) {
+            setTasks(prevTasks => {
+              const idx = prevTasks.findIndex(t => t.id === data.task.id || t.key === data.task.key)
+              if (idx >= 0) {
+                const next = [...prevTasks]
+                next[idx] = { ...next[idx], ...data.task }
+                return next
+              }
+              return [data.task, ...prevTasks]
+            })
+            if (selectedTask && (selectedTask.id === data.task.id || selectedTask.key === data.task.key)) {
+              setSelectedTask(data.task)
+            }
+          } else {
+            fetchTasks()
+          }
+          fetchActivities()
+          fetchActivityStats()
+        } catch (err) {
+          console.error('Error handling SSE task_updated event:', err)
+        }
+      })
+    } catch (err) {
+      console.error('Failed to initialize SSE EventSource:', err)
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close()
+      }
+    }
+  }, [fetchTasks, fetchActivities, fetchActivityStats, selectedTask])
+
   // Active Job Count (queued or running)
   const activeJobCount = activities.filter(
     a => a.status === 'queued' || a.status === 'pending' || a.status === 'running'

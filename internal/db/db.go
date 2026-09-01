@@ -105,6 +105,8 @@ type DB struct {
 	// termRunner, quand il est branché, fait tourner les pas du workflow dans
 	// la session PTY de la tâche au lieu de tubes anonymes.
 	termRunner TerminalSessionRunner
+	postBackListeners []PostBackListener
+	postBackMu        sync.RWMutex
 }
 
 func NewDB(dbPath string) (*DB, error) {
