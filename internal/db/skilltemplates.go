@@ -299,6 +299,42 @@ implementation, and testing, all the way to opening a clean Pull Request, updati
 - The test results demonstrating that build, lint, and tests pass.
 - Summary of settled scope and key architectural decisions.`,
 	},
+	{
+		ID:          "rewrite_story",
+		Name:        "Rewrite Story",
+		DirName:     models.SkillDirNames["rewrite_story"],
+		Command:     "/rewrite-story",
+		FromStage:   "",
+		ToStage:     "",
+		Interactive: false,
+		Description: "Reformate la description d'une tâche en User Story structurée GFM, avec inclusion facultative des commentaires.",
+		Icon:        "Sparkles",
+		Color:       "cyan",
+		Steps: []string{
+			"Analyse du titre, de la description et des commentaires du ticket",
+			"Reformulation au format User Story + Contexte + Critères d'acceptation",
+			"Aperçu et confirmation par l'utilisateur",
+		},
+		title:           "Rewrite Story",
+		frontmatterDesc: "Reformat a story or task description into structured markdown, optionally incorporating task comments.",
+		goal: `Reformat a task's title, description, and optional comments into a clean GitHub-Flavored Markdown specification (User Story: As a..., I want..., So that... + Context + Acceptance Criteria + Notes).`,
+		readFirst: `- The task: title, description, and task comments (if requested or passed as context).
+- Standard GitHub-Flavored Markdown (GFM) formatting guidelines.`,
+		stepsBody: `1. Inspect the task title, raw description, and comments (if provided).
+2. Extract the core intent, user value, technical context, and acceptance criteria.
+3. Generate a structured GFM document containing:
+   - **User Story**: As a <role>, I want <feature>, So that <benefit>.
+   - **Context**: Problem background and technical overview.
+   - **Acceptance Criteria**: Checkbox list (- [ ]) of verifiable functional & non-functional requirements.
+   - **Notes**: Extra technical details or risks mentioned in comments.
+4. Output the reformatted markdown directly for preview and user confirmation.`,
+		guardTitle: "Do not",
+		guard: `- Do not mutate task title, status, priority, assignee, branch, or pull request.
+- Do not delete or overwrite task comments.
+- Do not invent artificial requirements not implied by the description or comments.`,
+		report: `- The reformatted GFM description preview.
+- List of comment points integrated into acceptance criteria (if any).`,
+	},
 }
 
 // StageSkillByID returns the unified skill for an internal id. "review" is the
@@ -310,6 +346,9 @@ func StageSkillByID(skillID string) (StageSkill, bool) {
 	}
 	if skillID == "pick" || skillID == "pick_issue" || skillID == "pickup_issue" || skillID == "pickup-issue" || skillID == "pick-issue" {
 		skillID = "pickup"
+	}
+	if skillID == "rewrite" || skillID == "rewrite-story" || skillID == "rewrite_story" {
+		skillID = "rewrite_story"
 	}
 	for _, s := range StageSkills {
 		if s.ID == skillID {

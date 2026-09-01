@@ -1,5 +1,5 @@
 ---
-description: Relit le diff, prépare le commit et ouvre la merge request.
+description: Review the branch like a peer would, fix what the review finds, then open the merge request and leave the merge to the user.
 argument-hint: <TICKET-KEY> [contexte]
 ---
 # Review and Pull Request

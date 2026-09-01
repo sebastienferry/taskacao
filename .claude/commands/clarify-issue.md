@@ -1,5 +1,5 @@
 ---
-description: Analyse les ambiguïtés techniques et produit 3 à 5 questions de cadrage.
+description: Analyse a ticket against the code, surface what is genuinely undecided, and ask the few questions that unblock specification.
 argument-hint: <TICKET-KEY> [contexte]
 ---
 # Clarify Issue

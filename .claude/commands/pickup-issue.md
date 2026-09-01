@@ -1,5 +1,5 @@
 ---
-description: Exécute en autonomie complète toutes les étapes d'un ticket jusqu'à la création de la Pull Request.
+description: Pick a ticket and autonomously execute all development steps up to Pull Request creation.
 argument-hint: <TICKET-KEY> [contexte]
 ---
 # Pickup Issue (Auto-Pilot to PR)

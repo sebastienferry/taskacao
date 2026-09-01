@@ -2,7 +2,7 @@
 name: specify-issue
 description: Write the executable specification of a ticket in the project's Spec-Driven Design framework, before any code.
 ---
-# Specify Issue (Spec Kit SDD)
+# Specify Issue (OpenSpec SDD)
 
 Stage: clarified -> specified.
 

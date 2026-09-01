@@ -1,5 +1,5 @@
 ---
-description: Rédige le compte-rendu de fin, vérifie la fusion et nettoie l'espace local.
+description: Close the ticket properly: confirm the merge, write the handover and the acceptance checklist, then clean the local workspace.
 argument-hint: <TICKET-KEY> [contexte]
 ---
 # Handoff and Close

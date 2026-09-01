@@ -354,8 +354,11 @@ var SkillDirNames = map[string]string{
 	"create_pr": "create-pr",
 	"review":    "create-pr",
 	"handoff":   "handoff-issue",
-	"pickup":    "pickup-issue",
-	"pick":      "pickup-issue",
+	"pickup":        "pickup-issue",
+	"pick":          "pickup-issue",
+	"rewrite_story": "rewrite-story",
+	"rewrite-story": "rewrite-story",
+	"rewrite":       "rewrite-story",
 }
 
 // SkillAgentDirs are the per-repository directories the agent CLIs read their
@@ -725,8 +728,9 @@ type Skill struct {
 }
 
 type RunSkillRequest struct {
-	SkillID string `json:"skillId"`
-	Prompt  string `json:"prompt,omitempty"`
+	SkillID      string `json:"skillId"`
+	Prompt       string `json:"prompt,omitempty"`
+	WithComments bool   `json:"withComments,omitempty"`
 }
 
 type RunSkillResponse struct {
