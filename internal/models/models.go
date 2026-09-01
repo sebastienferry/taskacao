@@ -348,17 +348,20 @@ type InstalledSkillInfo struct {
 // database (which renders the files) and the runner (which invokes the agent)
 // need it, and a second list would drift.
 var SkillDirNames = map[string]string{
-	"clarify":   "clarify-issue",
-	"specify":   "specify-issue",
-	"implement": "code-issue",
-	"create_pr": "create-pr",
-	"review":    "create-pr",
-	"handoff":   "handoff-issue",
+	"clarify":       "clarify-issue",
+	"specify":       "specify-issue",
+	"implement":     "code-issue",
+	"create_pr":     "create-pr",
+	"review":        "create-pr",
+	"handoff":       "handoff-issue",
 	"pickup":        "pickup-issue",
 	"pick":          "pickup-issue",
 	"rewrite_story": "rewrite-story",
 	"rewrite-story": "rewrite-story",
 	"rewrite":       "rewrite-story",
+	"refine_macro":  "refine-macro",
+	"refine-macro":  "refine-macro",
+	"refine":        "refine-macro",
 }
 
 // SkillAgentDirs are the per-repository directories the agent CLIs read their
@@ -377,6 +380,7 @@ type SkillEditorEntry struct {
 	Description    string   `json:"description"`
 	FromStage      string   `json:"fromStage"`
 	ToStage        string   `json:"toStage"`
+	Scope          string   `json:"scope,omitempty"`
 	Interactive    bool     `json:"interactive"`
 	Content        string   `json:"content"`
 	DefaultContent string   `json:"defaultContent"`

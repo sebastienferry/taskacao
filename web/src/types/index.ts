@@ -688,6 +688,7 @@ export interface SkillEditorEntry {
   description: string
   fromStage: string
   toStage: string
+  scope?: 'task' | 'macro' | string
   interactive: boolean
   content: string
   defaultContent: string

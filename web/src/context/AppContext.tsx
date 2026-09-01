@@ -248,6 +248,7 @@ interface AppContextType {
   fetchProjectIssueTypes: (projectId: string) => Promise<string[]>
   fetchProjectMacros: (projectId: string) => Promise<MacroMeta[]>
   fetchProjectEpics: (projectId: string) => Promise<MacroMeta[]>
+  refineMacro: (key: string, projectId?: string) => Promise<{ todos: MacroTodo[]; specFramework?: string } | null>
   saveMacroMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
   saveEpicMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
   createStoryFromMacroTodo: (projectId: string, macroKey: string, todoId: string) => Promise<{ macro: MacroMeta | null; epic: MacroMeta | null; storyKey: string } | null>
@@ -2049,6 +2050,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }
   const fetchProjectEpics = fetchProjectMacros
 
+  const refineMacro = async (key: string, projectId?: string): Promise<{ todos: MacroTodo[]; specFramework?: string } | null> => {
+    try {
+      const targetProj = projectId || currentProject?.id || ''
+      const url = targetProj
+        ? `${API_BASE}/projects/${encodeURIComponent(targetProj)}/macros/${encodeURIComponent(key)}/refine`
+        : `${API_BASE}/macros/${encodeURIComponent(key)}/refine`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Erreur lors du raffinage de la macro')
+      return { todos: data.todos || [], specFramework: data.specFramework }
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Raffinage de macro échoué', description: err.message })
+      return null
+    }
+  }
+
   const saveMacroMeta = async (
     projectId: string,
     key: string,
@@ -3727,6 +3747,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         fetchProjectIssueTypes,
         fetchProjectMacros,
         fetchProjectEpics,
+        refineMacro,
         saveMacroMeta,
         saveEpicMeta,
         createStoryFromMacroTodo,
