@@ -348,17 +348,20 @@ type InstalledSkillInfo struct {
 // database (which renders the files) and the runner (which invokes the agent)
 // need it, and a second list would drift.
 var SkillDirNames = map[string]string{
-	"clarify":   "clarify-issue",
-	"specify":   "specify-issue",
-	"implement": "code-issue",
-	"create_pr": "create-pr",
-	"review":    "create-pr",
-	"handoff":   "handoff-issue",
+	"clarify":       "clarify-issue",
+	"specify":       "specify-issue",
+	"implement":     "code-issue",
+	"create_pr":     "create-pr",
+	"review":        "create-pr",
+	"handoff":       "handoff-issue",
 	"pickup":        "pickup-issue",
 	"pick":          "pickup-issue",
 	"rewrite_story": "rewrite-story",
 	"rewrite-story": "rewrite-story",
 	"rewrite":       "rewrite-story",
+	"refine_macro":  "refine-macro",
+	"refine-macro":  "refine-macro",
+	"refine":        "refine-macro",
 }
 
 // SkillAgentDirs are the per-repository directories the agent CLIs read their
@@ -377,6 +380,7 @@ type SkillEditorEntry struct {
 	Description    string   `json:"description"`
 	FromStage      string   `json:"fromStage"`
 	ToStage        string   `json:"toStage"`
+	Scope          string   `json:"scope,omitempty"`
 	Interactive    bool     `json:"interactive"`
 	Content        string   `json:"content"`
 	DefaultContent string   `json:"defaultContent"`
@@ -851,3 +855,39 @@ type DailyDigestRequest struct {
 	Assignee string `json:"assignee,omitempty"` // narrow to one person
 	Enrich   bool   `json:"enrich,omitempty"`   // run the AI agenda pass
 }
+
+// TaskPostBackPayload represents an incoming update payload from local actions or background tracker operations.
+type TaskPostBackPayload struct {
+	TaskID           string     `json:"taskId"`
+	TaskKey          string     `json:"taskKey,omitempty"`
+	ProjectID        string     `json:"projectId,omitempty"`
+	Title            *string    `json:"title,omitempty"`
+	Description      *string    `json:"description,omitempty"`
+	Status           *Status    `json:"status,omitempty"`
+	Stage            *string    `json:"stage,omitempty"`
+	Assignee         *string    `json:"assignee,omitempty"`
+	AssigneeAvatar   *string    `json:"assigneeAvatar,omitempty"`
+	BranchName       *string    `json:"branchName,omitempty"`
+	PrURL            *string    `json:"prUrl,omitempty"`
+	Labels           *[]string  `json:"labels,omitempty"`
+	TrackerStatus    *string    `json:"trackerStatus,omitempty"`
+	Sprint           *string    `json:"sprint,omitempty"`
+	Team             *string    `json:"team,omitempty"`
+	TeamID           *string    `json:"teamId,omitempty"`
+	ParentKey        *string    `json:"parentKey,omitempty"`
+	ParentTitle      *string    `json:"parentTitle,omitempty"`
+	ParentType       *string    `json:"parentType,omitempty"`
+	TrackerUpdatedAt *time.Time `json:"trackerUpdatedAt,omitempty"`
+	Error            *string    `json:"error,omitempty"`
+	ActivityID       string     `json:"activityId,omitempty"`
+	OpKind           string     `json:"opKind,omitempty"`
+}
+
+// TaskPostBackResult represents the response returned after processing a post-back.
+type TaskPostBackResult struct {
+	Success  bool          `json:"success"`
+	Task     *Task         `json:"task,omitempty"`
+	Activity *TaskActivity `json:"activity,omitempty"`
+	Error    string        `json:"error,omitempty"`
+}
+

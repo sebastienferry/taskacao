@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"tasks/internal/db"
@@ -20,19 +21,72 @@ import (
 	"tasks/internal/terminal"
 )
 
+type Event struct {
+	Type     string               `json:"type"` // e.g. "task_updated", "postback"
+	Task     *models.Task         `json:"task,omitempty"`
+	Activity *models.TaskActivity `json:"activity,omitempty"`
+	Error    string               `json:"error,omitempty"`
+}
+
 type Handler struct {
 	db          *db.DB
 	terminalMgr *terminal.Manager
 	// dataDir is where the application keeps its own files, the environment file
 	// holding the tracker token included. Empty when the process could not
 	// resolve one, in which case the token can only go to the database.
-	dataDir string
+	dataDir     string
+	subscribers map[chan Event]bool
+	subMu       sync.RWMutex
 }
 
 func NewHandler(database *db.DB) *Handler {
-	return &Handler{
+	h := &Handler{
 		db:          database,
 		terminalMgr: terminal.NewManager(),
+		subscribers: make(map[chan Event]bool),
+	}
+	if database != nil {
+		database.RegisterPostBackListener(func(task *models.Task, activity *models.TaskActivity, err error) {
+			errStr := ""
+			if err != nil {
+				errStr = err.Error()
+			}
+			h.BroadcastEvent(Event{
+				Type:     "task_updated",
+				Task:     task,
+				Activity: activity,
+				Error:    errStr,
+			})
+		})
+	}
+	return h
+}
+
+func (h *Handler) SubscribeEvents() chan Event {
+	h.subMu.Lock()
+	defer h.subMu.Unlock()
+	ch := make(chan Event, 20)
+	h.subscribers[ch] = true
+	return ch
+}
+
+func (h *Handler) UnsubscribeEvents(ch chan Event) {
+	h.subMu.Lock()
+	defer h.subMu.Unlock()
+	if _, ok := h.subscribers[ch]; ok {
+		delete(h.subscribers, ch)
+		close(ch)
+	}
+}
+
+func (h *Handler) BroadcastEvent(event Event) {
+	h.subMu.RLock()
+	defer h.subMu.RUnlock()
+	for ch := range h.subscribers {
+		select {
+		case ch <- event:
+		default:
+		}
 	}
 }
 
@@ -801,6 +855,25 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Refinement: /api/projects/{id}/macros/{key}/refine
+		if len(parts) >= 4 && parts[3] == "refine" && r.Method == http.MethodPost {
+			key := parts[2]
+			if decoded, err := url.PathUnescape(parts[2]); err == nil {
+				key = decoded
+			}
+			todos, framework, err := h.db.RefineMacro(id, key)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"key":           key,
+				"todos":         todos,
+				"specFramework": framework,
+			})
+			return
+		}
+
 		switch r.Method {
 		case http.MethodGet:
 			macros, err := h.db.GetProjectMacros(id)
@@ -1208,6 +1281,11 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleTasks(w http.ResponseWriter, r *http.Request) {
+	if (r.URL.Path == "/api/tasks/postback" || strings.HasSuffix(r.URL.Path, "/postback")) && r.Method == http.MethodPost {
+		h.HandleTaskPostBack(w, r)
+		return
+	}
+
 	if (r.URL.Path == "/api/tasks/stage" || r.URL.Path == "/api/tasks/transition") && r.Method == http.MethodPost {
 		var req struct {
 			TaskID  string `json:"taskId"`
@@ -1608,6 +1686,9 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(rawPath, "/chat"):
 		subAction = "chat"
 		id = strings.TrimSuffix(rawPath, "/chat")
+	case strings.HasSuffix(rawPath, "/postback"):
+		subAction = "postback"
+		id = strings.TrimSuffix(rawPath, "/postback")
 	default:
 		id = rawPath
 	}
@@ -1616,6 +1697,11 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		id = unescaped
 	}
 	id = strings.TrimSpace(id)
+
+	if subAction == "postback" && r.Method == http.MethodPost {
+		h.HandleTaskPostBack(w, r)
+		return
+	}
 
 	// Sub-action: /api/tasks/{id}/move
 	if subAction == "move" && (r.Method == http.MethodPatch || r.Method == http.MethodPost) {
@@ -2910,4 +2996,112 @@ func (h *Handler) HandleTaskPins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, tasks)
+}
+
+// HandleMacroRoute handles direct macro API requests like POST /api/macros/{key}/refine.
+func (h *Handler) HandleMacroRoute(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/macros/")
+	path = strings.TrimPrefix(path, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusBadRequest, "Clé de macro obligatoire")
+		return
+	}
+	key, err := url.PathUnescape(parts[0])
+	if err != nil || key == "" {
+		key = parts[0]
+	}
+
+	if len(parts) >= 2 && parts[1] == "refine" && r.Method == http.MethodPost {
+		projectID := r.URL.Query().Get("projectId")
+		todos, framework, err := h.db.RefineMacro(projectID, key)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"key":           key,
+			"todos":         todos,
+			"specFramework": framework,
+		})
+		return
+	}
+
+	writeError(w, http.StatusNotFound, "Route non trouvée")
+}
+
+// HandleTaskPostBack receives post-back task updates resulting from local actions or external tracker operations.
+// POST /api/tasks/postback
+// POST /api/tasks/{id}/postback
+func (h *Handler) HandleTaskPostBack(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var payload models.TaskPostBackPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request payload: "+err.Error())
+		return
+	}
+
+	rawPath := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
+	rawPath = strings.TrimSuffix(rawPath, "/postback")
+	rawPath = strings.Trim(rawPath, "/")
+	if payload.TaskID == "" && payload.TaskKey == "" && rawPath != "" && rawPath != "postback" {
+		payload.TaskID = rawPath
+	}
+
+	task, act, err := h.db.PostBackTask(payload)
+	if err != nil && task == nil {
+		writeJSON(w, http.StatusBadRequest, models.TaskPostBackResult{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+
+	writeJSON(w, http.StatusOK, models.TaskPostBackResult{
+		Success:  err == nil,
+		Task:     task,
+		Activity: act,
+		Error:    errStr,
+	})
+}
+
+// HandleEventsSSE handles real-time SSE stream connections.
+// GET /api/events
+// GET /api/events/sse
+func (h *Handler) HandleEventsSSE(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "Streaming unsupported")
+		return
+	}
+
+	ch := h.SubscribeEvents()
+	defer h.UnsubscribeEvents(ch)
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event, open := <-ch:
+			if !open {
+				return
+			}
+			data, _ := json.Marshal(event)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
+			flusher.Flush()
+		}
+	}
 }

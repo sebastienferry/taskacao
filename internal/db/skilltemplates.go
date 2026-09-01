@@ -25,6 +25,7 @@ type StageSkill struct {
 	Command     string
 	FromStage   string
 	ToStage     string
+	Scope       string // "task" (default) or "macro"
 	Interactive bool
 	Description string // shown in the TaskFlow interface, in French
 	Icon        string
@@ -335,6 +336,33 @@ implementation, and testing, all the way to opening a clean Pull Request, updati
 		report: `- The reformatted GFM description preview.
 - List of comment points integrated into acceptance criteria (if any).`,
 	},
+	{
+		ID:          "refine_macro",
+		Name:        "Refine Macro",
+		DirName:     models.SkillDirNames["refine_macro"],
+		Command:     "/refine-macro",
+		FromStage:   "macro",
+		ToStage:     "macro",
+		Scope:       "macro",
+		Interactive: false,
+		Description: "Transforme le cadrage d'une macro en un plan d'action de TODOs structuré selon le cadre SDD du projet.",
+		Icon:        "ListChecks",
+		Color:       "orange",
+		Steps: []string{
+			"Analyse du titre et du texte de cadrage de la macro",
+			"Structuration du plan d'action selon le cadre SDD (SpecKit ou OpenSpec)",
+			"Génération des items MacroTodo prêts à être appliqués",
+		},
+		title:           "Refine Macro",
+		frontmatterDesc: "Refine a macro framing text into a structured action plan of todos respecting the project SDD framework.",
+		goal: `Transform high-level macro framing text into an actionable, structured todo list aligned with the active Spec-Driven Design framework (SpecKit or OpenSpec).`,
+		guardTitle: "Do not",
+		guard: `- Do not overwrite existing todos without user confirmation in the UI.
+- Do not generate unstructured or generic todo items.
+- Do not mutate tracker issues or milestones directly without user trigger.`,
+		report: `- Structured list of proposed MacroTodo items.
+- Rationale behind the task breakdown.`,
+	},
 }
 
 // StageSkillByID returns the unified skill for an internal id. "review" is the
@@ -349,6 +377,9 @@ func StageSkillByID(skillID string) (StageSkill, bool) {
 	}
 	if skillID == "rewrite" || skillID == "rewrite-story" || skillID == "rewrite_story" {
 		skillID = "rewrite_story"
+	}
+	if skillID == "refine" || skillID == "refine-macro" || skillID == "refine_macro" {
+		skillID = "refine_macro"
 	}
 	for _, s := range StageSkills {
 		if s.ID == skillID {
@@ -369,6 +400,36 @@ func specifyFrameworkName(specFramework string) string {
 		return "Specify Issue (Spec Kit SDD)"
 	}
 	return "Specify Issue (Spec-Driven Design)"
+}
+
+func refineMacroFrameworkName(specFramework string) string {
+	if strings.EqualFold(strings.TrimSpace(specFramework), "openspec") {
+		return "Refine Macro (OpenSpec SDD)"
+	} else if strings.EqualFold(strings.TrimSpace(specFramework), "speckit") {
+		return "Refine Macro (Spec Kit SDD)"
+	}
+	return "Refine Macro (Spec-Driven Design)"
+}
+
+func refineMacroFrameworkBody(specFramework string) (readFirst, steps string) {
+	readFirst = `- The macro title and framing description.
+- The active project SDD framework (SpecKit or OpenSpec).
+- Existing macro todos to avoid duplicating completed work.`
+
+	steps = `1. Read the macro title and high-level framing description.
+2. Structure the action plan according to the selected SDD framework:
+
+   **If using SpecKit SDD:**
+   - Group action items into User Stories and Feature Modules.
+   - Format each todo item clearly with functional scope (e.g. "[US-1] User Story description" or "[FEAT] Feature item").
+
+   **If using OpenSpec SDD:**
+   - Group action items into Capabilities and Change Proposals.
+   - Format each todo item clearly with delta scope (e.g. "[CAP-1] Capability requirement" or "[CHANGE] Proposal change").
+
+3. Output the generated checklist of actionable todos for preview before applying to the macro.`
+
+	return readFirst, steps
 }
 
 // specifyFrameworkBody produces the specification instructions, supporting explicit
@@ -466,6 +527,10 @@ func RenderSkillContent(s StageSkill, specFramework string) string {
 		name = specifyFrameworkName(specFramework)
 		readFirst, steps = specifyFrameworkBody(specFramework)
 	}
+	if s.ID == "refine_macro" {
+		name = refineMacroFrameworkName(specFramework)
+		readFirst, steps = refineMacroFrameworkBody(specFramework)
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "---\nname: %s\ndescription: %s\n---\n", s.DirName, s.frontmatterDesc)
@@ -498,6 +563,9 @@ func ProjectSkillTemplates(specFramework string) []ProjectSkillTemplate {
 		name := s.Name
 		if s.ID == "specify" {
 			name = specifyFrameworkName(specFramework)
+		}
+		if s.ID == "refine_macro" {
+			name = refineMacroFrameworkName(specFramework)
 		}
 		out = append(out, ProjectSkillTemplate{
 			ID:          s.ID,

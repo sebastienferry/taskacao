@@ -23,6 +23,8 @@ import {
   Loader2,
   Pencil,
   ArrowRightLeft,
+  Sparkles,
+  ListChecks,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField } from './LookupField'
@@ -95,6 +97,7 @@ export const RoadmapView: React.FC = () => {
     activeJobCount,
     addToast,
     migrateMacro,
+    refineMacro,
   } = useApp()
 
   const [roadmapMode, setRoadmapMode] = useState<'sprints' | 'macros'>('sprints')
@@ -104,6 +107,9 @@ export const RoadmapView: React.FC = () => {
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [onlyIssues, setOnlyIssues] = useState(false)
   const [showClosed, setShowClosed] = useState(false)
+
+  const [isRefining, setIsRefining] = useState(false)
+  const [refinePreview, setRefinePreview] = useState<{ todos: MacroTodo[]; specFramework?: string } | null>(null)
 
   const [showMigrateModal, setShowMigrateModal] = useState(false)
   const [migrateTargetProjectId, setMigrateTargetProjectId] = useState('')
@@ -405,6 +411,38 @@ export const RoadmapView: React.FC = () => {
     if (!text) return
     setNewTodo('')
     persist(row.key, { todos: [...todosOf(row), { id: '', text, done: false }] })
+  }
+
+  const handleRefineMacro = async () => {
+    if (!selected) return
+    const text = (draftDescription || selected.meta?.description || '').trim()
+    if (!text) {
+      addToast({
+        type: 'warning',
+        title: 'Cadrage requis',
+        description: 'Veuillez saisir un texte de cadrage (description) avant de raffiner la macro.',
+      })
+      return
+    }
+
+    if (draftDirty) {
+      await persist(selected.key, { description: draftDescription })
+      setDraftDirty(false)
+    }
+
+    setIsRefining(true)
+    const result = await refineMacro(selected.key, currentProject?.id)
+    setIsRefining(false)
+
+    if (result && result.todos && result.todos.length > 0) {
+      setRefinePreview(result)
+    } else if (result) {
+      addToast({
+        type: 'info',
+        title: 'Aucun TODO généré',
+        description: 'Le texte de cadrage n\'a pas permis de générer de nouveaux items de TODO.',
+      })
+    }
   }
 
   return (
@@ -1372,18 +1410,30 @@ export const RoadmapView: React.FC = () => {
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-[10px] font-bold uppercase tracking-[.08em] text-[var(--text-muted)]">Framing</span>
-                      {draftDirty && (
+                      <div className="flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => {
-                            persist(selected.key, { description: draftDescription })
-                            setDraftDirty(false)
-                          }}
-                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold text-white accent-bg cursor-pointer"
+                          disabled={isRefining}
+                          onClick={handleRefineMacro}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold text-orange-300 bg-orange-500/10 border border-orange-500/30 hover:bg-orange-500/20 disabled:opacity-50 cursor-pointer"
+                          title="Raffiner le cadrage avec l'IA pour générer la checklist de TODOs"
                         >
-                          <Save size={10} /> Enregistrer
+                          {isRefining ? <Loader2 size={10} className="animate-spin text-orange-400" /> : <Sparkles size={10} className="text-orange-400" />}
+                          <span>Raffiner la macro (AI)</span>
                         </button>
-                      )}
+                        {draftDirty && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              persist(selected.key, { description: draftDescription })
+                              setDraftDirty(false)
+                            }}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold text-white accent-bg cursor-pointer"
+                          >
+                            <Save size={10} /> Enregistrer
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <MarkdownEditor
                       value={draftDescription}
@@ -1748,6 +1798,93 @@ export const RoadmapView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal d'aperçu du raffinage de macro (AI) */}
+      {refinePreview && selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl p-5 max-w-lg w-full shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex items-start justify-between border-b border-[var(--border-color)] pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-orange-400" />
+                  <h3 className="text-sm font-bold text-[var(--text-primary)]">
+                    Raffinage de la macro {selected.key}
+                  </h3>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                    refinePreview.specFramework === 'openspec'
+                      ? 'bg-purple-500/10 text-purple-400 border border-purple-500/30'
+                      : 'bg-blue-500/10 text-blue-400 border border-blue-500/30'
+                  }`}>
+                    {refinePreview.specFramework === 'openspec' ? 'OpenSpec SDD' : 'SpecKit SDD'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[var(--text-muted)] mt-1">
+                  {refinePreview.todos.length} item(s) de TODO généré(s) d'après le texte de cadrage.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRefinePreview(null)}
+                className="text-[var(--text-muted)] hover:text-[var(--text-primary)] p-1 rounded-lg cursor-pointer"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto py-3 space-y-2 my-2 pr-1">
+              {refinePreview.todos.map((todo, idx) => (
+                <div key={todo.id || idx} className="flex items-start gap-2 p-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)]">
+                  <ListChecks size={13} className="text-orange-400 shrink-0 mt-0.5" />
+                  <span className="text-[11.5px] leading-snug text-[var(--text-primary)] flex-1 font-mono">
+                    {todo.text}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-[var(--border-color)] pt-3 mt-auto">
+              <button
+                type="button"
+                onClick={() => setRefinePreview(null)}
+                className="px-3 py-1.5 rounded-xl text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const existing = todosOf(selected)
+                  await persist(selected.key, { todos: [...existing, ...refinePreview.todos] })
+                  setRefinePreview(null)
+                  addToast({
+                    type: 'success',
+                    title: 'TODOs ajoutés',
+                    description: `${refinePreview.todos.length} item(s) ajoutés à la checklist de ${selected.key}`,
+                  })
+                }}
+                className="px-3 py-1.5 rounded-xl text-xs font-bold text-[var(--text-primary)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] hover:border-[var(--accent-color)] cursor-pointer"
+              >
+                Ajouter aux TODOs
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await persist(selected.key, { todos: refinePreview.todos })
+                  setRefinePreview(null)
+                  addToast({
+                    type: 'success',
+                    title: 'TODOs remplacés',
+                    description: `Checklist de ${selected.key} remplacée par les ${refinePreview.todos.length} item(s) générés.`,
+                  })
+                }}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-white accent-bg cursor-pointer"
+              >
+                Remplacer les TODOs
+              </button>
+            </div>
           </div>
         </div>
       )}

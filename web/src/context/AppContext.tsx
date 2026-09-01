@@ -248,6 +248,7 @@ interface AppContextType {
   fetchProjectIssueTypes: (projectId: string) => Promise<string[]>
   fetchProjectMacros: (projectId: string) => Promise<MacroMeta[]>
   fetchProjectEpics: (projectId: string) => Promise<MacroMeta[]>
+  refineMacro: (key: string, projectId?: string) => Promise<{ todos: MacroTodo[]; specFramework?: string } | null>
   saveMacroMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
   saveEpicMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
   createStoryFromMacroTodo: (projectId: string, macroKey: string, todoId: string) => Promise<{ macro: MacroMeta | null; epic: MacroMeta | null; storyKey: string } | null>
@@ -1322,6 +1323,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     fetchGitStatus()
   }, [fetchGitStatus])
 
+  // Real-time SSE post-back and state update listener
+  useEffect(() => {
+    let eventSource: EventSource | null = null
+    try {
+      eventSource = new EventSource(`${API_BASE}/events`)
+      eventSource.addEventListener('task_updated', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data)
+          if (data && data.task) {
+            setTasks(prevTasks => {
+              const idx = prevTasks.findIndex(t => t.id === data.task.id || t.key === data.task.key)
+              if (idx >= 0) {
+                const next = [...prevTasks]
+                next[idx] = { ...next[idx], ...data.task }
+                return next
+              }
+              return [data.task, ...prevTasks]
+            })
+            if (selectedTask && (selectedTask.id === data.task.id || selectedTask.key === data.task.key)) {
+              setSelectedTask(data.task)
+            }
+          } else {
+            fetchTasks()
+          }
+          fetchActivities()
+          fetchActivityStats()
+        } catch (err) {
+          console.error('Error handling SSE task_updated event:', err)
+        }
+      })
+    } catch (err) {
+      console.error('Failed to initialize SSE EventSource:', err)
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close()
+      }
+    }
+  }, [fetchTasks, fetchActivities, fetchActivityStats, selectedTask])
+
   // Active Job Count (queued or running)
   const activeJobCount = activities.filter(
     a => a.status === 'queued' || a.status === 'pending' || a.status === 'running'
@@ -2048,6 +2090,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
   const fetchProjectEpics = fetchProjectMacros
+
+  const refineMacro = async (key: string, projectId?: string): Promise<{ todos: MacroTodo[]; specFramework?: string } | null> => {
+    try {
+      const targetProj = projectId || currentProject?.id || ''
+      const url = targetProj
+        ? `${API_BASE}/projects/${encodeURIComponent(targetProj)}/macros/${encodeURIComponent(key)}/refine`
+        : `${API_BASE}/macros/${encodeURIComponent(key)}/refine`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Erreur lors du raffinage de la macro')
+      return { todos: data.todos || [], specFramework: data.specFramework }
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Raffinage de macro échoué', description: err.message })
+      return null
+    }
+  }
 
   const saveMacroMeta = async (
     projectId: string,
@@ -3727,6 +3788,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         fetchProjectIssueTypes,
         fetchProjectMacros,
         fetchProjectEpics,
+        refineMacro,
         saveMacroMeta,
         saveEpicMeta,
         createStoryFromMacroTodo,
