@@ -11,8 +11,9 @@
     "specify-issue",
     "code-issue",
     "create-pr",
-    "handoff-issue"
+    "handoff-issue",
+    "pickup-issue"
   ],
   "specFramework": "openspec",
-  "updatedAt": "2026-08-28T21:02:46+02:00"
+  "updatedAt": "2026-09-01T20:22:21+02:00"
 }

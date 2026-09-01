@@ -302,7 +302,7 @@ interface AppContextType {
   moveTask: (id: string, newStatus: Status, newPosition: number) => Promise<void>
   moveTaskWorkflowStage: (taskId: string, targetStage: WorkflowStage) => Promise<Task | null>
   deleteTask: (id: string) => Promise<boolean>
-  runSkill: (taskId: string, skillId: string, prompt?: string) => Promise<TaskActivity | null>
+  runSkill: (taskId: string, skillId: string, prompt?: string, opts?: { withComments?: boolean }) => Promise<TaskActivity | null>
   syncAll: () => Promise<void>
   syncLinear: (team?: string) => Promise<void>
   syncGithub: (repo?: string) => Promise<void>
@@ -2892,7 +2892,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return updated
   }
 
-  const runSkill = async (taskId: string, skillId: string, prompt?: string): Promise<TaskActivity | null> => {
+  const runSkill = async (
+    taskId: string,
+    skillId: string,
+    prompt?: string,
+    opts?: { withComments?: boolean }
+  ): Promise<TaskActivity | null> => {
     setIsSkillRunning(true)
     setRunningSkillId(skillId)
     addToast({
@@ -2905,7 +2910,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const res = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/run-skill`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skillId, prompt }),
+        body: JSON.stringify({ skillId, prompt, withComments: opts?.withComments }),
       })
       if (!res.ok) {
         const errorData = await res.json()

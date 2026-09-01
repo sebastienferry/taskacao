@@ -176,6 +176,8 @@ export const TaskDetailModal: React.FC = () => {
   const [specFramework, setSpecFramework] = useState<SpecFramework>(settings.specFramework || 'speckit')
   const [isExpandedSpec, setIsExpandedSpec] = useState(false)
   const [copiedSpec, setCopiedSpec] = useState(false)
+  const [withComments, setWithComments] = useState(false)
+  const [dismissedRewriteId, setDismissedRewriteId] = useState<string | null>(null)
   const [isMaximized, setIsMaximized] = useState(false)
   const [isTtyOpen, setIsTtyOpenState] = useState<boolean>(() => {
     try {
@@ -696,6 +698,7 @@ export const TaskDetailModal: React.FC = () => {
   const latestActivity = activities.length > 0 ? activities[0] : null
   const clarifyActivity = activities.find(a => a.skillId === 'clarify')
   const specifyActivity = activities.find(a => a.skillId === 'specify')
+  const rewriteActivity = activities.find(a => a.skillId === 'rewrite_story' || a.skillId === 'rewrite-story')
 
   const handleCopySpec = () => {
     if (!specifyActivity?.output) return
@@ -1698,10 +1701,80 @@ export const TaskDetailModal: React.FC = () => {
       </div>
 
       {/* Description / Acceptance criteria */}
-      <div>
-        <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-          Description & Contexte Technique
-        </label>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+            Description & Contexte Technique
+          </label>
+          <div className="flex items-center gap-3">
+            <label className="inline-flex items-center gap-1.5 text-xs text-[var(--text-secondary)] cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={withComments}
+                onChange={e => setWithComments(e.target.checked)}
+                className="rounded border-[var(--border-color)] text-[var(--accent-color)] focus:ring-0 cursor-pointer"
+              />
+              <span>Inclure les commentaires</span>
+            </label>
+            <button
+              type="button"
+              onClick={() => runSkill(selectedTask.id, 'rewrite_story', '', { withComments })}
+              disabled={isSkillRunning}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/20 disabled:opacity-50 transition-colors"
+              title="Reformuler la description en User Story structurée GFM"
+            >
+              {isSkillRunning && runningSkillId === 'rewrite_story' ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Sparkles size={13} />
+              )}
+              <span>Reformuler la story</span>
+            </button>
+          </div>
+        </div>
+
+        {rewriteActivity?.output && rewriteActivity.id !== dismissedRewriteId && (
+          <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-cyan-300 flex items-center gap-1.5">
+                <Sparkles size={14} />
+                Aperçu de la story reformulée
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (rewriteActivity.output) {
+                      setDescription(rewriteActivity.output)
+                      await updateTask(selectedTask.id, { description: rewriteActivity.output })
+                      setDismissedRewriteId(rewriteActivity.id)
+                      addToast({
+                        type: 'success',
+                        title: 'Description mise à jour',
+                        description: 'La description de la tâche a été remplacée par la version reformulée.',
+                      })
+                    }
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-colors flex items-center gap-1"
+                >
+                  <Check size={13} />
+                  Appliquer à la description
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDismissedRewriteId(rewriteActivity.id)}
+                  className="px-2 py-1 rounded-lg text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  Masquer
+                </button>
+              </div>
+            </div>
+            <div className="p-3 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] max-h-60 overflow-y-auto">
+              <MarkdownEditor value={rewriteActivity.output} onChange={() => {}} minHeight={120} />
+            </div>
+          </div>
+        )}
+
         <MarkdownEditor
           value={description}
           onChange={setDescription}

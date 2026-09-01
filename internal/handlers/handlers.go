@@ -1645,6 +1645,18 @@ func (h *Handler) HandleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if req.WithComments || strings.Contains(req.Prompt, "--with-comments") {
+			comments, err := h.db.GetTaskComments(id)
+			if err == nil && len(comments) > 0 {
+				var commentStr strings.Builder
+				commentStr.WriteString("\n\n---\nTask Comments Context:\n")
+				for i, c := range comments {
+					commentStr.WriteString(fmt.Sprintf("%d. [%s]: %s\n", i+1, c.Author, c.Body))
+				}
+				req.Prompt = strings.TrimSpace(req.Prompt + commentStr.String())
+			}
+		}
+
 		task, activity, err := h.db.EnqueueSkillOnTask(id, req.SkillID, req.Prompt)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())

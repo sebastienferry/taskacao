@@ -1,5 +1,5 @@
 ---
-description: Exécute le plan d'implémentation et valide par les tests.
+description: Implement the ticket from its specification and prove it works with the project's own build, linters and tests.
 argument-hint: <TICKET-KEY> [contexte]
 ---
 # Implement Code
