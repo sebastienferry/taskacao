@@ -21,6 +21,7 @@ import {
   Copy,
   CopyPlus,
   Pin,
+  X,
 } from 'lucide-react'
 import type { Task, Priority } from '../types'
 import { useApp } from '../context/AppContext'
@@ -60,6 +61,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
     skillLabel,
     t,
     addToast,
+    setTaskSprint,
   } = useApp()
 
   // Le menu est rendu dans un portail avec un positionnement fixe : les colonnes
@@ -729,6 +731,21 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, isDragging, onDragStar
                 <Copy size={12} className="text-slate-400" />
                 <span>Copier la référence</span>
               </button>
+
+              {Boolean(task.sprint) && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsMenuOpen(false)
+                    await setTaskSprint(task.id, '', '')
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px] text-amber-400 hover:bg-amber-500/10 transition-colors cursor-pointer"
+                  title="Retirer la tâche du sprint et la renvoyer au backlog"
+                >
+                  <X size={12} />
+                  <span>Retirer du sprint</span>
+                </button>
+              )}
 
               <div className="h-px bg-[var(--border-color)] my-1" />
 

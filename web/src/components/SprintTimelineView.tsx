@@ -238,6 +238,20 @@ export const SprintTimelineView: React.FC = () => {
     })
   }, [tasks, sprints, backlogSearch, currentProject, showDoneInBacklog])
 
+  const selectedTaskIds = useMemo(
+    () => Object.keys(checkedTaskIds).filter(id => checkedTaskIds[id]),
+    [checkedTaskIds]
+  )
+
+  const selectedSprintTaskIds = useMemo(
+    () =>
+      selectedTaskIds.filter(id => {
+        const t = tasks.find(item => item.id === id)
+        return Boolean(t && (t.sprint || '').trim() !== '')
+      }),
+    [selectedTaskIds, tasks]
+  )
+
   const selectedBacklogList = useMemo(
     () => unscheduledTasks.filter(t => checkedTaskIds[t.id]),
     [unscheduledTasks, checkedTaskIds]
@@ -533,6 +547,23 @@ export const SprintTimelineView: React.FC = () => {
     setBatchBusy(false)
   }
 
+  // Batch remove tasks from sprint (send back to backlog)
+  const handleBatchRemoveFromSprint = async () => {
+    const ids = selectedSprintTaskIds.length > 0 ? selectedSprintTaskIds : selectedTaskIds
+    if (ids.length === 0) return
+
+    setBatchBusy(true)
+    if (currentProject?.id) {
+      await setTasksSprint(currentProject.id, ids, '', '')
+    } else {
+      for (const id of ids) {
+        await setTaskSprint(id, '', '')
+      }
+    }
+    setCheckedTaskIds({})
+    setBatchBusy(false)
+  }
+
   return (
     <div className="flex-1 flex flex-col h-full bg-[var(--bg-primary)] overflow-hidden">
       {/* Top Controls & Auto-Calculation Bar */}
@@ -697,6 +728,71 @@ export const SprintTimelineView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Global Batch Action Bar for Selected Tasks */}
+      {selectedTaskIds.length > 0 && (
+        <div className="bg-[var(--accent-light)]/30 border-b border-[var(--accent-color)]/30 px-4 py-2 flex items-center justify-between gap-3 text-xs animate-in fade-in duration-150 shrink-0 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-[var(--accent-color)] flex items-center gap-1.5">
+              <CheckSquare size={14} />
+              <span>{selectedTaskIds.length} tâche(s) sélectionnée(s)</span>
+            </span>
+            {selectedSprintTaskIds.length > 0 && (
+              <span className="text-[10.5px] text-[var(--text-muted)] font-medium">
+                ({selectedSprintTaskIds.length} affectée(s) à un sprint)
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Target sprint dropdown */}
+            <select
+              value={batchTargetSprint}
+              onChange={e => setBatchTargetSprint(e.target.value)}
+              className="text-xs px-2.5 py-1 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer font-medium"
+            >
+              <option value="">Affecter à un sprint...</option>
+              {sprints.map(sp => (
+                <option key={sp.name} value={sp.name}>
+                  {sp.name}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              disabled={!batchTargetSprint || batchBusy}
+              onClick={handleApplyBatchSprint}
+              className="px-3 py-1 rounded-lg text-xs font-bold bg-[var(--accent-color)] text-white hover:opacity-90 disabled:opacity-40 transition-all cursor-pointer shadow-xs"
+            >
+              {batchBusy ? <Loader2 size={12} className="animate-spin" /> : 'Affecter'}
+            </button>
+
+            {/* Retirer du sprint / Renvoyer au backlog */}
+            <button
+              type="button"
+              disabled={batchBusy}
+              onClick={handleBatchRemoveFromSprint}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 border border-amber-500/30 transition-all cursor-pointer shadow-xs disabled:opacity-40"
+              title="Retirer les tâches sélectionnées du sprint et les renvoyer au backlog"
+            >
+              {batchBusy ? <Loader2 size={12} className="animate-spin" /> : <X size={13} />}
+              <span>
+                Retirer du sprint{selectedSprintTaskIds.length > 0 ? ` (${selectedSprintTaskIds.length})` : ''}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setCheckedTaskIds({})}
+              className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+              title="Désélectionner tout"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Timeline Workspace */}
       <div className="flex-1 flex min-h-0 overflow-hidden relative">
@@ -1035,9 +1131,22 @@ export const SprintTimelineView: React.FC = () => {
                               <div
                                 key={task.id}
                                 onClick={() => setSelectedTask(task)}
-                                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--border-color)] hover:border-[var(--accent-color)] text-xs cursor-pointer transition-colors group shadow-2xs"
+                                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-xs cursor-pointer transition-colors group shadow-2xs ${
+                                  checkedTaskIds[task.id]
+                                    ? 'bg-[var(--accent-light)] border-[var(--accent-color)] text-[var(--accent-color)] font-semibold'
+                                    : 'bg-[var(--bg-primary)] border-[var(--border-color)] hover:border-[var(--accent-color)] text-[var(--text-primary)]'
+                                }`}
                                 title={`${task.key}: ${task.title}`}
                               >
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(checkedTaskIds[task.id])}
+                                  onChange={e => {
+                                    e.stopPropagation()
+                                    toggleTaskCheck(task.id)
+                                  }}
+                                  className="rounded text-[var(--accent-color)] w-3 h-3 cursor-pointer"
+                                />
                                 <span className="font-mono font-bold text-[10px] text-[var(--accent-color)]">
                                   {task.key}
                                 </span>
@@ -1048,6 +1157,17 @@ export const SprintTimelineView: React.FC = () => {
                                 {task.assignee && (
                                   <Avatar name={task.assignee} url={task.assigneeAvatar} size={14} />
                                 )}
+                                <button
+                                  type="button"
+                                  onClick={e => {
+                                    e.stopPropagation()
+                                    handleRemoveTaskFromSprint(task.id)
+                                  }}
+                                  className="p-0.5 rounded text-[var(--text-muted)] hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer ml-0.5"
+                                  title="Retirer du sprint (renvoyer au backlog)"
+                                >
+                                  <X size={11} />
+                                </button>
                               </div>
                             ))}
                           </div>
@@ -1057,9 +1177,22 @@ export const SprintTimelineView: React.FC = () => {
                               <div
                                 key={task.id}
                                 onClick={() => setSelectedTask(task)}
-                                className="flex items-center justify-between gap-2 py-1 px-1.5 rounded hover:bg-[var(--bg-tertiary)]/60 cursor-pointer transition-colors group"
+                                className={`flex items-center justify-between gap-2 py-1 px-1.5 rounded cursor-pointer transition-colors group ${
+                                  checkedTaskIds[task.id]
+                                    ? 'bg-[var(--accent-light)]/20 font-medium'
+                                    : 'hover:bg-[var(--bg-tertiary)]/60'
+                                }`}
                               >
                                 <div className="flex items-center gap-2 min-w-0">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(checkedTaskIds[task.id])}
+                                    onChange={e => {
+                                      e.stopPropagation()
+                                      toggleTaskCheck(task.id)
+                                    }}
+                                    className="rounded text-[var(--accent-color)] w-3 h-3 cursor-pointer"
+                                  />
                                   <span className="text-[10px] font-mono font-bold text-[var(--accent-color)] shrink-0">
                                     {task.key}
                                   </span>
@@ -1091,6 +1224,17 @@ export const SprintTimelineView: React.FC = () => {
                                     title="Discuter avec l'agent IA"
                                   >
                                     <MessageSquare size={11} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={e => {
+                                      e.stopPropagation()
+                                      handleRemoveTaskFromSprint(task.id)
+                                    }}
+                                    className="text-[var(--text-muted)] hover:text-rose-400 p-0.5 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+                                    title="Retirer du sprint (renvoyer au backlog)"
+                                  >
+                                    <X size={11} />
                                   </button>
                                 </div>
                               </div>
