@@ -102,6 +102,8 @@ export const RoadmapView: React.FC = () => {
     refineMacro,
     createBatchTasks,
     setIsTerminalPanelOpen,
+    injectTaskSkill,
+    sendTerminalInput,
   } = useApp()
 
   const [roadmapMode, setRoadmapMode] = useState<'sprints' | 'macros'>('sprints')
@@ -436,9 +438,12 @@ export const RoadmapView: React.FC = () => {
       setDraftDirty(false)
     }
 
+    setIsTerminalPanelOpen(true)
     if (orderedOpen.length > 0) {
       setChatTask(orderedOpen[0])
-      setIsTerminalPanelOpen(true)
+      await injectTaskSkill(orderedOpen[0].id, 'refine_macro')
+    } else {
+      await sendTerminalInput(`/refine-macro ${selected.key}\n`)
     }
 
     setIsRefining(true)

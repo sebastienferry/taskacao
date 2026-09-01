@@ -252,6 +252,7 @@ interface AppContextType {
   fetchProjectEpics: (projectId: string) => Promise<MacroMeta[]>
   refineMacro: (key: string, projectId?: string) => Promise<RefineMacroResult | null>
   createBatchTasks: (reqs: CreateTaskPayload[]) => Promise<Task[]>
+  sendTerminalInput: (input: string, taskId?: string, sessionId?: string) => Promise<boolean>
   saveMacroMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
   saveEpicMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
   createStoryFromMacroTodo: (projectId: string, macroKey: string, todoId: string) => Promise<{ macro: MacroMeta | null; epic: MacroMeta | null; storyKey: string } | null>
@@ -2587,6 +2588,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
+  const sendTerminalInput = async (input: string, taskId?: string, sessionId?: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/terminal/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, sessionId, input }),
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  }
+
   // Un pas interactif ouvre la console de la tâche et arme la confirmation. Le
   // démarrage de l'agent et le lancement de la skill sont deux boutons de cette
   // console : enchaîner les trois tout seul supposait de deviner quand l'invite
@@ -3781,6 +3795,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         fetchProjectEpics,
         refineMacro,
         createBatchTasks,
+        sendTerminalInput,
         saveMacroMeta,
         saveEpicMeta,
         createStoryFromMacroTodo,
