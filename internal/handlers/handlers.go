@@ -801,6 +801,25 @@ func (h *Handler) HandleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Refinement: /api/projects/{id}/macros/{key}/refine
+		if len(parts) >= 4 && parts[3] == "refine" && r.Method == http.MethodPost {
+			key := parts[2]
+			if decoded, err := url.PathUnescape(parts[2]); err == nil {
+				key = decoded
+			}
+			todos, framework, err := h.db.RefineMacro(id, key)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"key":           key,
+				"todos":         todos,
+				"specFramework": framework,
+			})
+			return
+		}
+
 		switch r.Method {
 		case http.MethodGet:
 			macros, err := h.db.GetProjectMacros(id)
@@ -2910,4 +2929,36 @@ func (h *Handler) HandleTaskPins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, tasks)
+}
+
+// HandleMacroRoute handles direct macro API requests like POST /api/macros/{key}/refine.
+func (h *Handler) HandleMacroRoute(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/macros/")
+	path = strings.TrimPrefix(path, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusBadRequest, "Clé de macro obligatoire")
+		return
+	}
+	key, err := url.PathUnescape(parts[0])
+	if err != nil || key == "" {
+		key = parts[0]
+	}
+
+	if len(parts) >= 2 && parts[1] == "refine" && r.Method == http.MethodPost {
+		projectID := r.URL.Query().Get("projectId")
+		todos, framework, err := h.db.RefineMacro(projectID, key)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"key":           key,
+			"todos":         todos,
+			"specFramework": framework,
+		})
+		return
+	}
+
+	writeError(w, http.StatusNotFound, "Route non trouvée")
 }

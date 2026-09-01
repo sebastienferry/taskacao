@@ -128,6 +128,7 @@ func (d *DB) ListProjectSkillEditor(projectIDOrPath string) ([]models.SkillEdito
 			Description:    stage.Description,
 			FromStage:      stage.FromStage,
 			ToStage:        stage.ToStage,
+			Scope:          stage.Scope,
 			Interactive:    stage.Interactive,
 			Content:        content,
 			DefaultContent: def.Content,
