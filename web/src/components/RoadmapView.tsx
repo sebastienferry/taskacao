@@ -391,6 +391,10 @@ export const RoadmapView: React.FC = () => {
     const saved = await saveMacroMeta(currentProject.id, key, patch)
     if (saved) {
       setMacroMeta(prev => [...prev.filter(m => m.key !== saved.key), saved])
+      if (patch.horizon) {
+        setTab(patch.horizon)
+      }
+      setSelectedKey(saved.key)
     }
   }
 
@@ -768,16 +772,29 @@ export const RoadmapView: React.FC = () => {
             <div className="px-4 pt-3.5 pb-3 shrink-0 border-b border-[var(--border-color)]">
               <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <span className="text-[11px] font-mono font-bold" style={{ color: 'var(--accent-color)' }}>{selected.key}</span>
-                {selected.horizon && (
-                  <span className="text-[9px] font-bold px-1.5 rounded-full uppercase tracking-[.08em]"
-                    style={{
-                      color: HORIZON_META[selected.horizon].color,
-                      background: HORIZON_META[selected.horizon].bg,
-                      border: `1px solid ${HORIZON_META[selected.horizon].border}`,
-                    }}>
-                    {HORIZON_META[selected.horizon].label}
-                  </span>
-                )}
+                <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] p-0.5 rounded-lg border border-[var(--border-color)]">
+                  {(['now', 'next', 'later', 'hidden'] as MacroHorizon[]).map(h => {
+                    const active = selected.horizon === h
+                    return (
+                      <button
+                        key={h}
+                        type="button"
+                        onClick={() => persist(selected.key, { horizon: h })}
+                        className={`px-1.5 py-0.5 rounded text-[9.5px] font-bold uppercase tracking-[.06em] transition-all cursor-pointer ${
+                          active
+                            ? 'text-white shadow-xs'
+                            : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                        }`}
+                        style={{
+                          background: active ? HORIZON_META[h].color : 'transparent',
+                        }}
+                        title={`Déplacer vers ${HORIZON_META[h].label}`}
+                      >
+                        {HORIZON_META[h].label}
+                      </button>
+                    )
+                  })}
+                </div>
                 <div className="ml-auto flex items-center gap-1.5 flex-wrap">
                   {/* Switcher de mode de visualisation */}
                   <div className="flex items-center p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
@@ -1548,6 +1565,9 @@ export const RoadmapView: React.FC = () => {
                 )
                 if (created) {
                   setMacroMeta(prev => [...prev.filter(m => m.key !== created.key), created])
+                  if (createMacroHorizon) {
+                    setTab(createMacroHorizon)
+                  }
                   setSelectedKey(created.key)
                   setShowCreateMacroModal(false)
                 }
