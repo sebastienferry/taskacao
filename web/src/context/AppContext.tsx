@@ -33,6 +33,8 @@ import type {
   TeamMember,
   TeamWorkload,
   TaskFacetValue,
+  CreateTaskPayload,
+  RefineMacroResult,
   AutoSyncState,
   TrackerCheck,
 } from '../types'
@@ -248,7 +250,8 @@ interface AppContextType {
   fetchProjectIssueTypes: (projectId: string) => Promise<string[]>
   fetchProjectMacros: (projectId: string) => Promise<MacroMeta[]>
   fetchProjectEpics: (projectId: string) => Promise<MacroMeta[]>
-  refineMacro: (key: string, projectId?: string) => Promise<{ todos: MacroTodo[]; specFramework?: string } | null>
+  refineMacro: (key: string, projectId?: string) => Promise<RefineMacroResult | null>
+  createBatchTasks: (reqs: CreateTaskPayload[]) => Promise<Task[]>
   saveMacroMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
   saveEpicMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
   createStoryFromMacroTodo: (projectId: string, macroKey: string, todoId: string) => Promise<{ macro: MacroMeta | null; epic: MacroMeta | null; storyKey: string } | null>
@@ -2050,7 +2053,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }
   const fetchProjectEpics = fetchProjectMacros
 
-  const refineMacro = async (key: string, projectId?: string): Promise<{ todos: MacroTodo[]; specFramework?: string } | null> => {
+  const refineMacro = async (key: string, projectId?: string): Promise<RefineMacroResult | null> => {
     try {
       const targetProj = projectId || currentProject?.id || ''
       const url = targetProj
@@ -2062,10 +2065,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Erreur lors du raffinage de la macro')
-      return { todos: data.todos || [], specFramework: data.specFramework }
+      return {
+        key: data.key || key,
+        todos: data.todos || [],
+        proposedTasks: data.proposedTasks || [],
+        specFramework: data.specFramework || 'speckit',
+      }
     } catch (err: any) {
       addToast({ type: 'error', title: 'Raffinage de macro échoué', description: err.message })
       return null
+    }
+  }
+
+  const createBatchTasks = async (reqs: CreateTaskPayload[]): Promise<Task[]> => {
+    if (!reqs || reqs.length === 0) return []
+    try {
+      const res = await fetch(`${API_BASE}/tasks/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reqs),
+      })
+      const data = await res.json().catch(() => ([]))
+      if (!res.ok) throw new Error(data.error || 'Erreur lors de la création groupée de cartes')
+      const created: Task[] = Array.isArray(data) ? data : []
+      setTasks(prev => [...created, ...prev])
+      addToast({
+        type: 'success',
+        title: 'Tickets créés',
+        description: `${created.length} ticket(s) créé(s) avec succès.`,
+      })
+      return created
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Échec de création groupée', description: err.message })
+      return []
     }
   }
 
@@ -3748,6 +3780,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         fetchProjectMacros,
         fetchProjectEpics,
         refineMacro,
+        createBatchTasks,
         saveMacroMeta,
         saveEpicMeta,
         createStoryFromMacroTodo,

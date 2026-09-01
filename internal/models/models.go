@@ -855,3 +855,9 @@ type DailyDigestRequest struct {
 	Assignee string `json:"assignee,omitempty"` // narrow to one person
 	Enrich   bool   `json:"enrich,omitempty"`   // run the AI agenda pass
 }
+
+type ProposedMacroTask struct {
+	Title       string `json:"title"`
+	IssueType   string `json:"issueType"`
+	Description string `json:"description"`
+}
