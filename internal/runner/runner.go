@@ -2692,7 +2692,7 @@ func (r *Runner) SessionCommandLine(inv *AIInvocation) (string, func(), error) {
 		return fmt.Sprintf("%s -p %s --auto-approve", shellQuote(bin), promptRef), cleanup, nil
 	case "claude":
 		bin, _ := FindCliTool("claude")
-		return fmt.Sprintf("%s -p %s", shellQuote(bin), promptRef), cleanup, nil
+		return fmt.Sprintf("%s -p %s --dangerously-skip-permissions", shellQuote(bin), promptRef), cleanup, nil
 	case "gemini":
 		bin, _ := FindCliTool("gemini")
 		return fmt.Sprintf("%s -p %s", shellQuote(bin), promptRef), cleanup, nil
