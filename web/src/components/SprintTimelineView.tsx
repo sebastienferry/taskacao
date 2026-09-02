@@ -25,6 +25,7 @@ import {
   SlidersHorizontal,
   Archive,
   RotateCcw,
+  Sparkles,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import {
@@ -54,6 +55,7 @@ export const SprintTimelineView: React.FC = () => {
     setSelectedTask,
     setChatTask,
     addToast,
+    startBatchPickup,
   } = useApp()
 
   // Project sprints (or defaults if none yet)
@@ -780,6 +782,17 @@ export const SprintTimelineView: React.FC = () => {
               <span>
                 Retirer du sprint{selectedSprintTaskIds.length > 0 ? ` (${selectedSprintTaskIds.length})` : ''}
               </span>
+            </button>
+
+            {/* Lancer le lot en auto-pilot */}
+            <button
+              type="button"
+              onClick={() => startBatchPickup(selectedTaskIds)}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold text-purple-300 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-700/50 cursor-pointer shadow-xs"
+              title="Démarrer un unique Git Worktree et exécuter le lot de tâches en auto-pilot"
+            >
+              <Sparkles size={13} className="text-purple-400 animate-pulse" />
+              <span>Lancer le lot (Git tree + Auto-pilot)</span>
             </button>
 
             <button
@@ -1516,6 +1529,15 @@ export const SprintTimelineView: React.FC = () => {
                   className="px-2.5 py-1 rounded text-xs font-bold bg-[var(--accent-color)] text-white hover:opacity-90 disabled:opacity-40 cursor-pointer shadow-xs"
                 >
                   {batchBusy ? '…' : 'Déplacer'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => startBatchPickup(selectedBacklogList.map(t => t.id))}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-bold text-purple-300 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-700/50 cursor-pointer shadow-xs shrink-0"
+                  title="Démarrer un unique Git Worktree et exécuter le lot de tâches du backlog"
+                >
+                  <Sparkles size={12} className="text-purple-400 animate-pulse" />
+                  <span>Auto-pilot</span>
                 </button>
               </div>
             )}
