@@ -32,6 +32,7 @@ import {
   CalendarDays,
   FileCode2,
   SlidersHorizontal,
+  Clock,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { accentBadgeStyle } from '../lib/accents'
@@ -573,6 +574,20 @@ export const Sidebar: React.FC = () => {
             >
               <MapIcon size={15} className="shrink-0 text-amber-400" />
               {!sidebarCollapsed && <span className="truncate">Roadmap</span>}
+            </button>
+
+            {/* Timeline */}
+            <button
+              onClick={() => setActiveView('timeline')}
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeView === 'timeline'
+                  ? 'bg-[var(--accent-light)] accent-text font-bold shadow-xs'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Timeline Sprints"
+            >
+              <Clock size={15} className="shrink-0 text-blue-400" />
+              {!sidebarCollapsed && <span className="truncate">Timeline</span>}
             </button>
 
             {/* 6. Activités */}

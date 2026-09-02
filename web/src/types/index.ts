@@ -403,7 +403,7 @@ export type Language = 'fr' | 'en'
 
 export type Density = 'compact' | 'standard' | 'comfortable'
 
-export type ViewMode = 'board' | 'list' | 'triage' | 'roadmap' | 'activities' | 'sync' | 'digest' | 'skills' | 'team'
+export type ViewMode = 'board' | 'list' | 'triage' | 'roadmap' | 'timeline' | 'activities' | 'sync' | 'digest' | 'skills' | 'team'
 
 export type BoardGroupingMode = 'workflow' | 'status'
 

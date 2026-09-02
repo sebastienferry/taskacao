@@ -342,7 +342,7 @@ interface AppContextType {
  * Vues connues. Ce qui sort du stockage local n'est pas fiable : une vue retirée
  * d'une version à l'autre laisserait un écran vide au démarrage.
  */
-const VIEW_MODES: ViewMode[] = ['board', 'list', 'triage', 'roadmap', 'activities', 'sync', 'digest', 'skills', 'team']
+const VIEW_MODES: ViewMode[] = ['board', 'list', 'triage', 'roadmap', 'timeline', 'activities', 'sync', 'digest', 'skills', 'team']
 
 const defaultSettings: UserSettings = {
   id: 1,
