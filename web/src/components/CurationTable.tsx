@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Check, ExternalLink, Layers, Target, User, CalendarRange, Inbox, Eye, EyeOff } from 'lucide-react'
+import { Check, ExternalLink, Layers, Target, User, CalendarRange, Inbox, Eye, EyeOff, Sparkles } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField, type LookupOption } from './LookupField'
 import { macroLookup, sprintLookup } from '../lib/lookups'
@@ -46,6 +46,7 @@ export const CurationTable: React.FC = () => {
     activeJobCount,
     hideDone,
     toggleHideDone,
+    startBatchPickup,
   } = useApp()
 
   const [macros, setMacros] = useState<MacroMeta[]>([])
@@ -286,6 +287,16 @@ export const CurationTable: React.FC = () => {
               </button>
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={() => startBatchPickup(selectedIds)}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer text-purple-300 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-700/50 shrink-0 shadow-xs"
+            title="Démarrer un unique Git Worktree et exécuter le lot de tâches en auto-pilot"
+          >
+            <Sparkles size={12} className="text-purple-400 animate-pulse" />
+            Lancer le lot (Git tree + Auto-pilot)
+          </button>
 
           <button
             type="button"

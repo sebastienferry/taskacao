@@ -336,6 +336,7 @@ interface AppContextType {
   openInEditor: (options?: { taskId?: string; projectId?: string; path?: string; editorCommand?: string }) => Promise<boolean>
   openExternalTerminal: (options?: { taskId?: string; projectId?: string; path?: string; command?: string; skillId?: string; terminalCommand?: string }) => Promise<boolean>
   startTaskTty: (task: Task, options?: { mode?: 'integrated' | 'external'; command?: string; skillId?: string }) => Promise<void>
+  startBatchPickup: (taskIds: string[]) => Promise<void>
 }
 
 /**
@@ -3569,6 +3570,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [projects, currentProject, openExternalTerminal, injectTaskSkill])
 
+  const startBatchPickup = useCallback(async (taskIds: string[]): Promise<void> => {
+    if (taskIds.length === 0) return
+    const batchTasks = tasks.filter(t => taskIds.includes(t.id))
+    if (batchTasks.length === 0) return
+
+    const keysStr = batchTasks.map(t => t.key).join(' ')
+    const primaryTask = batchTasks[0]
+    const proj = primaryTask.projectId ? projects.find(p => p.id === primaryTask.projectId) : currentProject
+    const isExternal = proj?.ttyMode === 'external'
+
+    const command = `/pickup-issues ${keysStr}`
+
+    addToast({
+      type: 'info',
+      title: `Lancement du lot (${batchTasks.length} tâches)`,
+      description: `Commande : ${command}`,
+      duration: 6000,
+    })
+
+    if (isExternal) {
+      await openExternalTerminal({ taskId: primaryTask.id, command, skillId: 'pickup_issues' })
+      return
+    }
+
+    setChatTask(primaryTask)
+    setIsTerminalPanelOpen(true)
+    await injectTaskSkill(primaryTask.id, 'pickup_issues')
+  }, [tasks, projects, currentProject, addToast, openExternalTerminal, injectTaskSkill])
+
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -3868,6 +3898,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         openInEditor,
         openExternalTerminal,
         startTaskTty,
+        startBatchPickup,
       }}
     >
       {children}
