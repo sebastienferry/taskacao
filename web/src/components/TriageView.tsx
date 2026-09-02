@@ -14,6 +14,7 @@ import {
   Terminal as TerminalIcon,
   X,
   SlidersHorizontal,
+  Sparkles,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { LookupField, type LookupOption } from './LookupField'
@@ -53,6 +54,7 @@ export const TriageView: React.FC = () => {
     setParentFilter,
     projects,
     migrateTasks,
+    startBatchPickup,
   } = useApp()
 
   const [macros, setMacros] = useState<MacroMeta[]>([])
@@ -466,6 +468,16 @@ export const TriageView: React.FC = () => {
               </button>
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={() => startBatchPickup(selectedIds)}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold cursor-pointer text-purple-300 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-700/50 shrink-0 shadow-xs"
+            title="Démarrer un unique Git Worktree et exécuter le lot de tâches en auto-pilot"
+          >
+            <Sparkles size={13} className="text-purple-400 animate-pulse" />
+            Lancer le lot (Git tree + Auto-pilot)
+          </button>
 
           <button
             type="button"

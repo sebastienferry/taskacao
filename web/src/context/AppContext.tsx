@@ -340,6 +340,7 @@ interface AppContextType {
   openInEditor: (options?: { taskId?: string; projectId?: string; path?: string; editorCommand?: string }) => Promise<boolean>
   openExternalTerminal: (options?: { taskId?: string; projectId?: string; path?: string; command?: string; skillId?: string; terminalCommand?: string }) => Promise<boolean>
   startTaskTty: (task: Task, options?: { mode?: 'integrated' | 'external'; command?: string; skillId?: string }) => Promise<void>
+  startBatchPickup: (taskIds: string[]) => Promise<void>
 }
 
 /**
@@ -1326,6 +1327,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     fetchGitStatus()
   }, [fetchGitStatus])
+
+  // Real-time SSE post-back and state update listener
+  useEffect(() => {
+    let eventSource: EventSource | null = null
+    try {
+      eventSource = new EventSource(`${API_BASE}/events`)
+      eventSource.addEventListener('task_updated', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data)
+          if (data && data.task) {
+            setTasks(prevTasks => {
+              const idx = prevTasks.findIndex(t => t.id === data.task.id || t.key === data.task.key)
+              if (idx >= 0) {
+                const next = [...prevTasks]
+                next[idx] = { ...next[idx], ...data.task }
+                return next
+              }
+              return [data.task, ...prevTasks]
+            })
+            if (selectedTask && (selectedTask.id === data.task.id || selectedTask.key === data.task.key)) {
+              setSelectedTask(data.task)
+            }
+          } else {
+            fetchTasks()
+          }
+          fetchActivities()
+          fetchActivityStats()
+        } catch (err) {
+          console.error('Error handling SSE task_updated event:', err)
+        }
+      })
+    } catch (err) {
+      console.error('Failed to initialize SSE EventSource:', err)
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close()
+      }
+    }
+  }, [fetchTasks, fetchActivities, fetchActivityStats, selectedTask])
 
   // Active Job Count (queued or running)
   const activeJobCount = activities.filter(
@@ -3574,6 +3616,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [projects, currentProject, openExternalTerminal, injectTaskSkill])
 
+  const startBatchPickup = useCallback(async (taskIds: string[]): Promise<void> => {
+    if (taskIds.length === 0) return
+    const batchTasks = tasks.filter(t => taskIds.includes(t.id))
+    if (batchTasks.length === 0) return
+
+    const keysStr = batchTasks.map(t => t.key).join(' ')
+    const primaryTask = batchTasks[0]
+    const proj = primaryTask.projectId ? projects.find(p => p.id === primaryTask.projectId) : currentProject
+    const isExternal = proj?.ttyMode === 'external'
+
+    const command = `/pickup-issues ${keysStr}`
+
+    addToast({
+      type: 'info',
+      title: `Lancement du lot (${batchTasks.length} tâches)`,
+      description: `Commande : ${command}`,
+      duration: 6000,
+    })
+
+    if (isExternal) {
+      await openExternalTerminal({ taskId: primaryTask.id, command, skillId: 'pickup_issues' })
+      return
+    }
+
+    setChatTask(primaryTask)
+    setIsTerminalPanelOpen(true)
+    await injectTaskSkill(primaryTask.id, 'pickup_issues')
+  }, [tasks, projects, currentProject, addToast, openExternalTerminal, injectTaskSkill])
+
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -3875,6 +3946,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         openInEditor,
         openExternalTerminal,
         startTaskTty,
+        startBatchPickup,
       }}
     >
       {children}

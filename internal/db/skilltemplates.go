@@ -365,6 +365,44 @@ implementation, and testing, all the way to opening a clean Pull Request, updati
 - Structured list of proposed MacroTodo items.
 - Proposed TaskFlow tickets breakdown (Title, IssueType, Description).`,
 	},
+	{
+		ID:          "pickup_issues",
+		Name:        "Batch Pickup & Auto-Pilot to PR",
+		DirName:     models.SkillDirNames["pickup_issues"],
+		Command:     "/pickup-issues",
+		FromStage:   "new",
+		ToStage:     "reviewed",
+		Interactive: false,
+		Description: "Exécute en autonomie complète toutes les étapes d'un lot de tickets dans un unique Git worktree jusqu'à la PR.",
+		Icon:        "Sparkles",
+		Color:       "purple",
+		Steps: []string{
+			"Initialisation du Git Worktree dédié au lot",
+			"Traitement séquentiel autonome de chaque ticket (Clarify, Specify, Code)",
+			"Exécution des tests complets du projet",
+			"Création d'une unique Pull Request combinée pour le lot",
+		},
+		title:           "Batch Pickup Issues (Single Worktree & Combined PR)",
+		frontmatterDesc: "Batch process a list of selected board tickets sequentially in autonomy inside a single dedicated worktree, producing one combined Pull Request covered by tests and lints.",
+		goal: `Autonomously process a batch of tickets selected from the board sequentially in the exact order provided inside a single dedicated batch worktree.`,
+		readFirst: `- The list of tickets in the batch.
+- The project's code and existing patterns.
+- The project SDD framework.`,
+		stepsBody: `1. **Batch Initialization & Single Worktree Setup**:
+   - Parse input into ordered queue of tickets.
+   - Create or switch to the single dedicated batch worktree/branch.
+2. **Sequential In-Place Ticket Processing Loop**:
+   - Clarify, specify, implement and test each ticket in order inside the same worktree.
+3. **Combined Batch Quality & Verification**:
+   - Run full test and build suites.
+4. **Single Combined Pull Request Creation**:
+   - Open ONE single combined PR referencing all ticket numbers.`,
+		guardTitle: "Do not",
+		guard: `- Do not create separate branches or PRs per ticket.
+- Do not merge into default branch (merging is reserved for human user).`,
+		report: `- The created Pull Request URL.
+- Summary of processed tickets and test results.`,
+	},
 }
 
 // StageSkillByID returns the unified skill for an internal id. "review" is the
@@ -373,6 +411,9 @@ func StageSkillByID(skillID string) (StageSkill, bool) {
 	skillID = strings.TrimSpace(skillID)
 	if skillID == "review" {
 		skillID = "create_pr"
+	}
+	if skillID == "pick_issues" || skillID == "pickup_issues" || skillID == "pickup-issues" {
+		skillID = "pickup_issues"
 	}
 	if skillID == "pick" || skillID == "pick_issue" || skillID == "pickup_issue" || skillID == "pickup-issue" || skillID == "pick-issue" {
 		skillID = "pickup"
