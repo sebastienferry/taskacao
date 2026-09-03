@@ -389,7 +389,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
             <button
               type="button"
               onClick={handleClear}
-              title="Effacer l'écran"
+              title="Effacer le texte à l'écran"
               className="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[10px] rounded font-mono transition-colors cursor-pointer"
             >
               Clear
@@ -401,7 +401,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
               className="flex items-center gap-1 px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[10px] rounded font-mono transition-colors cursor-pointer"
             >
               <RotateCcw size={10} />
-              <span>Reset</span>
+              <span>Relancer le shell</span>
             </button>
 
             {onToggleExpand && (
@@ -419,7 +419,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                title="Fermer la console"
+                title="Masquer le panneau"
                 className="p-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-red-400 rounded transition-colors cursor-pointer"
               >
                 <X size={12} />
