@@ -580,10 +580,6 @@ export const ProfileModal: React.FC = () => {
                   <ShieldCheck size={14} />
                   <span>Vérifier et enregistrer les accès au tracker</span>
                 </button>
-
-                <span className="text-[10px] text-[var(--text-muted)] block">
-                  Sprint et Team sont des champs personnalisés que le CLI acli refuse de renvoyer. Avec un jeton, la synchro Jira lit tout par l'API en une passe, parent inclus. Sans jeton, elle repasse sur acli : le sprint est reconstruit depuis les boards scrum et Team reste vide. Jeton à créer sur id.atlassian.com, section jetons d'API, ou à fournir par la variable d'environnement TASKFLOW_JIRA_API_TOKEN pour qu'il ne soit pas stocké en base.
-                </span>
               </div>
 
             </div>
