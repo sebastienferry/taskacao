@@ -70,10 +70,6 @@ export const ProfileModal: React.FC = () => {
   const [jiraUrl, setJiraUrl] = useState(settings.jiraUrl || '')
   const [jiraEmail, setJiraEmail] = useState(settings.jiraEmail || '')
   const [jiraApiToken, setJiraApiToken] = useState('')
-  // Boucle de synchronisation de fond : éteinte par défaut, c'est un appel
-  // périodique au tracker et il se règle ici.
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState(false)
-  const [autoSyncIntervalSec, setAutoSyncIntervalSec] = useState(60)
 
   // Skill Prompts
   const [promptDigestAgenda, setPromptDigestAgenda] = useState(settings.promptDigestAgenda || '')
@@ -99,8 +95,6 @@ export const ProfileModal: React.FC = () => {
       setJiraUrl(settings.jiraUrl || '')
       setJiraEmail(settings.jiraEmail || '')
       setJiraApiToken('')
-      setAutoSyncEnabled(Boolean(settings.autoSyncEnabled))
-      setAutoSyncIntervalSec(settings.autoSyncIntervalSec || 60)
       setPromptDigestAgenda(settings.promptDigestAgenda || '')
       setPromptClarify(settings.promptClarify || '')
       setPromptSpecify(settings.promptSpecify || '')
@@ -154,8 +148,6 @@ export const ProfileModal: React.FC = () => {
       jiraEmail: jiraEmail.trim(),
       // Vide = conserver le jeton stocké, la sentinelle l'efface.
       jiraApiToken: jiraApiToken.trim(),
-      autoSyncEnabled,
-      autoSyncIntervalSec,
       promptDigestAgenda: promptDigestAgenda.trim(),
       promptClarify: promptClarify.trim(),
       promptSpecify: promptSpecify.trim(),
@@ -588,21 +580,6 @@ export const ProfileModal: React.FC = () => {
                   <ShieldCheck size={14} />
                   <span>Vérifier et enregistrer les accès au tracker</span>
                 </button>
-
-                {/* Boucle de fond : elle ne relit que ce qui a bougé, ce qui la
-                    rend possible sans peser sur le tracker. */}
-                <div className="p-3 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <span className="text-xs font-bold text-[var(--text-primary)] block">
-                        Synchronisation en arrière-plan
-                      </span>
-                      <span className="text-[10px] text-[var(--text-muted)] block mt-0.5">
-                        La synchronisation en arrière-plan est désormais <strong>configurée par projet</strong> dans les paramètres de chaque projet (période réglable de 1 à 30 min, ciblant uniquement les tickets non terminés).
-                      </span>
-                    </div>
-                  </div>
-                </div>
 
                 <span className="text-[10px] text-[var(--text-muted)] block">
                   Sprint et Team sont des champs personnalisés que le CLI acli refuse de renvoyer. Avec un jeton, la synchro Jira lit tout par l'API en une passe, parent inclus. Sans jeton, elle repasse sur acli : le sprint est reconstruit depuis les boards scrum et Team reste vide. Jeton à créer sur id.atlassian.com, section jetons d'API, ou à fournir par la variable d'environnement TASKFLOW_JIRA_API_TOKEN pour qu'il ne soit pas stocké en base.
