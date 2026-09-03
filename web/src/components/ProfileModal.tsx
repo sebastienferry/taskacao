@@ -17,7 +17,6 @@ import {
   FileCode,
   HelpCircle,
   CalendarDays,
-  ShieldCheck,
   Flame,
   GitPullRequest,
   Info,
@@ -41,7 +40,6 @@ export const ProfileModal: React.FC = () => {
   const {
     isProfileOpen,
     setIsProfileOpen,
-    setIsTrackerSetupOpen,
     settings,
     updateSettings,
     t,
@@ -65,12 +63,6 @@ export const ProfileModal: React.FC = () => {
   const [aiCommandTemplate, setAiCommandTemplate] = useState(settings.aiCommandTemplate || 'agy -p "{prompt}"')
   const [specFramework, setSpecFramework] = useState<SpecFramework>(settings.specFramework || 'speckit')
 
-  // Jira REST credentials. acli cannot return the Sprint and Team fields, so
-  // importing them needs an API token of its own.
-  const [jiraUrl, setJiraUrl] = useState(settings.jiraUrl || '')
-  const [jiraEmail, setJiraEmail] = useState(settings.jiraEmail || '')
-  const [jiraApiToken, setJiraApiToken] = useState('')
-
   // Skill Prompts
   const [promptDigestAgenda, setPromptDigestAgenda] = useState(settings.promptDigestAgenda || '')
   const [promptClarify, setPromptClarify] = useState(settings.promptClarify || '')
@@ -92,9 +84,6 @@ export const ProfileModal: React.FC = () => {
       setAiProvider(settings.aiProvider || 'agy')
       setAiCommandTemplate(settings.aiCommandTemplate || 'agy -p "{prompt}"')
       setSpecFramework(settings.specFramework || 'speckit')
-      setJiraUrl(settings.jiraUrl || '')
-      setJiraEmail(settings.jiraEmail || '')
-      setJiraApiToken('')
       setPromptDigestAgenda(settings.promptDigestAgenda || '')
       setPromptClarify(settings.promptClarify || '')
       setPromptSpecify(settings.promptSpecify || '')
@@ -144,10 +133,6 @@ export const ProfileModal: React.FC = () => {
       aiProvider,
       aiCommandTemplate: aiCommandTemplate.trim() || `${aiProvider} -p "{prompt}"`,
       specFramework,
-      jiraUrl: jiraUrl.trim(),
-      jiraEmail: jiraEmail.trim(),
-      // Vide = conserver le jeton stocké, la sentinelle l'efface.
-      jiraApiToken: jiraApiToken.trim(),
       promptDigestAgenda: promptDigestAgenda.trim(),
       promptClarify: promptClarify.trim(),
       promptSpecify: promptSpecify.trim(),
@@ -513,73 +498,6 @@ export const ProfileModal: React.FC = () => {
                     Pour une commande sur mesure, vous pouvez utiliser le placeholder <code className="text-amber-400 font-bold">{'{script}'}</code> (ex: <code className="text-[var(--text-secondary)]">ghostty -e {'{script}'}</code> ou <code className="text-[var(--text-secondary)]">open -na Ghostty --args -e {'{script}'}</code>).
                   </p>
                 </div>
-              </div>
-
-              {/* Jira REST access: needed for the Sprint and Team fields, which
-                  acli refuses to return. */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-[var(--text-secondary)] flex items-center gap-1.5">
-                  <span>Accès API Jira (import des champs Sprint et Team)</span>
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <input
-                    type="text"
-                    value={jiraUrl}
-                    onChange={e => setJiraUrl(e.target.value)}
-                    placeholder="mon-org.atlassian.net"
-                    className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
-                  />
-                  <input
-                    type="email"
-                    value={jiraEmail}
-                    onChange={e => setJiraEmail(e.target.value)}
-                    placeholder="prenom.nom@societe.com"
-                    className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="password"
-                    value={jiraApiToken}
-                    onChange={e => setJiraApiToken(e.target.value)}
-                    placeholder={
-                      settings.jiraApiTokenFromEnv
-                        ? 'Défini par TASKFLOW_JIRA_API_TOKEN'
-                        : settings.jiraApiTokenSet
-                          ? '•••••••• (jeton enregistré, laisser vide pour le conserver)'
-                          : "Jeton d'API Jira"
-                    }
-                    disabled={settings.jiraApiTokenFromEnv}
-                    className="w-full px-3 py-1.5 text-xs font-mono rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all disabled:opacity-60"
-                  />
-                  {settings.jiraApiTokenSet && !settings.jiraApiTokenFromEnv && (
-                    <button
-                      type="button"
-                      onClick={() => setJiraApiToken('__clear__')}
-                      className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-colors cursor-pointer shrink-0"
-                      title="Effacer le jeton enregistré à l'enregistrement"
-                    >
-                      Effacer
-                    </button>
-                  )}
-                </div>
-                {jiraApiToken === '__clear__' && (
-                  <span className="text-[10px] text-rose-300 block">
-                    Le jeton sera effacé à l'enregistrement. Sprint et Team retomberont sur le repli acli, qui ne couvre que le sprint.
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsProfileOpen(false)
-                    setIsTrackerSetupOpen(true)
-                  }}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-semibold text-[var(--accent-color)] bg-[var(--accent-light)] hover:opacity-90 border border-[var(--accent-color)]/30 transition-colors cursor-pointer"
-                  title="Saisir site, e-mail et jeton, et vérifier qu'ils fonctionnent avant de les enregistrer"
-                >
-                  <ShieldCheck size={14} />
-                  <span>Vérifier et enregistrer les accès au tracker</span>
-                </button>
               </div>
 
             </div>
