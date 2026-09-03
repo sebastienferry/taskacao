@@ -462,8 +462,6 @@ export const WorkspaceTerminalPanel: React.FC<WorkspaceTerminalPanelProps> = ({ 
               label={label}
               agentRunning={agentRunning}
               isExpanded={isFullscreen}
-              onToggleExpand={() => setIsFullscreen(v => !v)}
-              onClose={() => setChatTask(null)}
             />
           ) : terminalSessionOverride ? (
             <InteractiveTerminal
@@ -471,8 +469,6 @@ export const WorkspaceTerminalPanel: React.FC<WorkspaceTerminalPanelProps> = ({ 
               sessionId={terminalSessionOverride}
               label={sessionLabel(terminalSessionOverride)}
               isExpanded={isFullscreen}
-              onToggleExpand={() => setIsFullscreen(v => !v)}
-              onClose={() => openTerminalSession('')}
             />
           ) : (
             <InteractiveTerminal
@@ -482,8 +478,6 @@ export const WorkspaceTerminalPanel: React.FC<WorkspaceTerminalPanelProps> = ({ 
               projectId={currentProject?.id}
               label={label}
               isExpanded={isFullscreen}
-              onToggleExpand={() => setIsFullscreen(v => !v)}
-              onClose={() => setIsTerminalPanelOpen(false)}
             />
           )}
           </div>
