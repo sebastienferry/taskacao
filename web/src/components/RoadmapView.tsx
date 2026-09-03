@@ -19,7 +19,6 @@ import {
   Filter,
   Scissors,
   Search,
-  Clock,
   Loader2,
   Pencil,
   ArrowRightLeft,
@@ -29,7 +28,6 @@ import {
 import { useApp } from '../context/AppContext'
 import { LookupField } from './LookupField'
 import { MarkdownEditor } from './Markdown'
-import { SprintTimelineView } from './SprintTimelineView'
 import { sprintLookup, isProjectCompatible } from '../lib/lookups'
 import {
   buildMacroRows,
@@ -100,7 +98,6 @@ export const RoadmapView: React.FC = () => {
     refineMacro,
   } = useApp()
 
-  const [roadmapMode, setRoadmapMode] = useState<'sprints' | 'macros'>('sprints')
   const [tab, setTab] = useState<HorizonTab>('now')
   const [displayMode, setDisplayMode] = useState<'framing' | 'execution'>('execution')
   const [macroMeta, setMacroMeta] = useState<MacroMeta[]>([])
@@ -447,45 +444,7 @@ export const RoadmapView: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      {/* Sub-View Mode Switcher (Timeline Sprints vs Macros Horizons) */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] shrink-0">
-        <div className="flex items-center gap-1.5 bg-[var(--bg-tertiary)] p-0.5 rounded-lg border border-[var(--border-color)]">
-          <button
-            type="button"
-            onClick={() => setRoadmapMode('sprints')}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
-              roadmapMode === 'sprints'
-                ? 'bg-[var(--accent-color)] text-white shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <Clock size={13} />
-            <span>Timeline</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setRoadmapMode('macros')}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
-              roadmapMode === 'macros'
-                ? 'bg-[var(--accent-color)] text-white shadow-xs'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <Route size={13} />
-            <span>Macros & Horizons (NOW/NEXT)</span>
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
-          <span className="font-mono">{currentProject?.name || 'Projet Actif'}</span>
-        </div>
-      </div>
-
-      {roadmapMode === 'sprints' ? (
-        <SprintTimelineView />
-      ) : (
-        <>
-          {/* Barre d'outils : classification, et en mode opérationnel les sprints visés */}
+      {/* Barre d'outils : classification, et en mode opérationnel les sprints visés */}
           <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]/50 shrink-0">
         <div className="flex items-center gap-3 flex-wrap min-w-0">
           <div className="flex items-center p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
@@ -1582,8 +1541,6 @@ export const RoadmapView: React.FC = () => {
           </aside>
         )}
       </div>
-        </>
-      )}
 
       {showCreateMacroModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">

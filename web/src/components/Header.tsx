@@ -14,6 +14,7 @@ import {
   Target,
   SlidersHorizontal,
   Map as MapIcon,
+  Clock,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import type { Status, Priority } from '../types'
@@ -229,6 +230,17 @@ export const Header: React.FC = () => {
             title="Roadmap"
           >
             <MapIcon size={15} />
+          </button>
+          <button
+            onClick={() => setActiveView('timeline')}
+            className={`p-1.5 rounded-md transition-all cursor-pointer ${
+              activeView === 'timeline'
+                ? 'bg-[var(--bg-secondary)] text-blue-400 shadow-xs font-bold border border-[var(--border-color)]'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+            title="Timeline Sprints"
+          >
+            <Clock size={15} />
           </button>
           <button
             onClick={() => setActiveView('activities')}

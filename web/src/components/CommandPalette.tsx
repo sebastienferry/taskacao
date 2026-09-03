@@ -23,6 +23,7 @@ import {
   Terminal as TerminalIcon,
   Map as MapIcon,
   SlidersHorizontal,
+  Clock,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { accentTextStyle } from '../lib/accents'
@@ -204,6 +205,17 @@ export const CommandPalette: React.FC = () => {
       keywords: ['roadmap', 'macros', 'macro', 'horizon', 'now', 'next', 'future', 'vue', 'plan'],
       action: () => {
         setActiveView('roadmap')
+        setIsCommandPaletteOpen(false)
+      },
+    },
+    {
+      id: 'switch_timeline',
+      title: '⏱️ Vue Timeline Sprints',
+      icon: <Clock size={16} className="text-blue-400" />,
+      shortcut: 'TL',
+      keywords: ['timeline', 'sprint', 'sprints', 'planning', 'vue', 'horizons', 'duree', 'chronologie'],
+      action: () => {
+        setActiveView('timeline')
         setIsCommandPaletteOpen(false)
       },
     },
