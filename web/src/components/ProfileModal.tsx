@@ -598,47 +598,10 @@ export const ProfileModal: React.FC = () => {
                         Synchronisation en arrière-plan
                       </span>
                       <span className="text-[10px] text-[var(--text-muted)] block mt-0.5">
-                        {autoSyncEnabled
-                          ? "La boucle relit périodiquement ce qui a changé dans Jira depuis sa passe précédente. Une passe complète d'un projet de mille quatre cents tickets coûte quatorze requêtes ; une passe incrémentale, une seule, qui ne répond le plus souvent aucun ticket."
-                          : 'Rien ne part vers le tracker tant que vous ne synchronisez pas vous-même. Nécessite un jeton d\'API : le CLI acli ne sait pas lire par date de mise à jour.'}
+                        La synchronisation en arrière-plan est désormais <strong>configurée par projet</strong> dans les paramètres de chaque projet (période réglable de 1 à 30 min, ciblant uniquement les tickets non terminés).
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setAutoSyncEnabled(v => !v)}
-                      role="switch"
-                      aria-checked={autoSyncEnabled}
-                      className={`relative w-10 h-5 rounded-full transition-colors shrink-0 cursor-pointer ${
-                        autoSyncEnabled ? 'bg-[var(--accent-color)]' : 'bg-[var(--border-color)]'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
-                          autoSyncEnabled ? 'left-[22px]' : 'left-0.5'
-                        }`}
-                      />
-                    </button>
                   </div>
-
-                  {autoSyncEnabled && (
-                    <div className="flex items-center gap-2">
-                      <label className="text-[10px] text-[var(--text-muted)]">Toutes les</label>
-                      <select
-                        value={autoSyncIntervalSec}
-                        onChange={e => setAutoSyncIntervalSec(Number(e.target.value))}
-                        className="px-2 py-1 text-[11px] rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
-                      >
-                        <option value={60}>minute</option>
-                        <option value={120}>2 minutes</option>
-                        <option value={300}>5 minutes</option>
-                        <option value={900}>15 minutes</option>
-                      </select>
-                      <span className="text-[10px] text-[var(--text-muted)]">
-                        Une passe complète est refaite toutes les 30 minutes : elle seule voit les
-                        tickets sortis du périmètre.
-                      </span>
-                    </div>
-                  )}
                 </div>
 
                 <span className="text-[10px] text-[var(--text-muted)] block">

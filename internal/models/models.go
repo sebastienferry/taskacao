@@ -124,6 +124,8 @@ type Project struct {
 	AICommandTemplate       string            `json:"aiCommandTemplate,omitempty"` // e.g. 'agy -p "{prompt}"'
 	SpecFramework           string            `json:"specFramework,omitempty"`     // "speckit", "openspec"
 	Parallelism             int               `json:"parallelism"`                 // 1 to 3 concurrent AI background workers
+	AutoSyncEnabled         bool              `json:"autoSyncEnabled"`             // Enable background sync for non-finished tickets
+	AutoSyncIntervalMin     int               `json:"autoSyncIntervalMin"`         // Period in minutes (1 to 30)
 	TtyMode                 string            `json:"ttyMode,omitempty"`           // "integrated" or "external"
 	ExternalTerminalCommand string            `json:"externalTerminalCommand,omitempty"` // e.g. "Ghostty", "Terminal", "iTerm", "alacritty", "kitty"
 	TaskCount               int               `json:"taskCount"`
@@ -287,6 +289,8 @@ type CreateProjectRequest struct {
 	AICommandTemplate string            `json:"aiCommandTemplate,omitempty"`
 	SpecFramework     string            `json:"specFramework,omitempty"`
 	Parallelism             int               `json:"parallelism,omitempty"`
+	AutoSyncEnabled         *bool             `json:"autoSyncEnabled,omitempty"`
+	AutoSyncIntervalMin     *int              `json:"autoSyncIntervalMin,omitempty"`
 	TtyMode                 string            `json:"ttyMode,omitempty"`
 	ExternalTerminalCommand string            `json:"externalTerminalCommand,omitempty"`
 }
@@ -320,8 +324,21 @@ type UpdateProjectRequest struct {
 	AICommandTemplate       *string              `json:"aiCommandTemplate,omitempty"`
 	SpecFramework           *string              `json:"specFramework,omitempty"`
 	Parallelism             *int                 `json:"parallelism,omitempty"`
+	AutoSyncEnabled         *bool                `json:"autoSyncEnabled,omitempty"`
+	AutoSyncIntervalMin     *int                 `json:"autoSyncIntervalMin,omitempty"`
 	TtyMode                 *string              `json:"ttyMode,omitempty"`
 	ExternalTerminalCommand *string              `json:"externalTerminalCommand,omitempty"`
+}
+
+// NormalizeAutoSyncIntervalMin clamps the project background sync interval between 1 and 30 minutes (default 5).
+func NormalizeAutoSyncIntervalMin(min int) int {
+	if min < 1 {
+		return 5
+	}
+	if min > 30 {
+		return 30
+	}
+	return min
 }
 
 // NormalizeParallelism keeps the concurrent background agent workers count between 1 and 3.
