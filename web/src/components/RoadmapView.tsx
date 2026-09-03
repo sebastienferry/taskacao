@@ -769,59 +769,15 @@ export const RoadmapView: React.FC = () => {
             <div className="px-4 pt-3.5 pb-3 shrink-0 border-b border-[var(--border-color)]">
               <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <span className="text-[11px] font-mono font-bold" style={{ color: 'var(--accent-color)' }}>{selected.key}</span>
-                <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] p-0.5 rounded-lg border border-[var(--border-color)]">
-                  {(['now', 'next', 'later', 'hidden'] as MacroHorizon[]).map(h => {
-                    const active = selected.horizon === h
-                    return (
-                      <button
-                        key={h}
-                        type="button"
-                        onClick={() => persist(selected.key, { horizon: h })}
-                        className={`px-1.5 py-0.5 rounded text-[9.5px] font-bold uppercase tracking-[.06em] transition-all cursor-pointer ${
-                          active
-                            ? 'text-white shadow-xs'
-                            : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                        }`}
-                        style={{
-                          background: active ? HORIZON_META[h].color : 'transparent',
-                        }}
-                        title={`Déplacer vers ${HORIZON_META[h].label}`}
-                      >
-                        {HORIZON_META[h].label}
-                      </button>
-                    )
-                  })}
-                </div>
+                {selected.horizon && (
+                  <span
+                    className="px-1.5 py-0.5 rounded text-[9.5px] font-bold uppercase tracking-[.06em] text-white"
+                    style={{ background: HORIZON_META[selected.horizon].color }}
+                  >
+                    {HORIZON_META[selected.horizon].label}
+                  </span>
+                )}
                 <div className="ml-auto flex items-center gap-1.5 flex-wrap">
-                  {/* Switcher de mode de visualisation */}
-                  <div className="flex items-center p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
-                    <button
-                      type="button"
-                      onClick={() => setDisplayMode('framing')}
-                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] font-bold transition-all cursor-pointer ${
-                        displayMode === 'framing'
-                          ? 'bg-[var(--accent-color)] text-white shadow-xs'
-                          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                      }`}
-                      title="Mode Framing : Cadrage et Checklist TODOs"
-                    >
-                      <Compass size={11} />
-                      <span>Framing</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDisplayMode('execution')}
-                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] font-bold transition-all cursor-pointer ${
-                        displayMode === 'execution'
-                          ? 'bg-[var(--accent-color)] text-white shadow-xs'
-                          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                      }`}
-                      title="Mode Execution : Stories, Sprints et Découpe"
-                    >
-                      <Target size={11} />
-                      <span>Execution</span>
-                    </button>
-                  </div>
 
                   {selected.tasks[0]?.externalUrl && (
                     <a href={selected.tasks[0].externalUrl} target="_blank" rel="noreferrer"
