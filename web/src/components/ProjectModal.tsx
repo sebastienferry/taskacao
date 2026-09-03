@@ -1319,6 +1319,62 @@ export const ProjectModal: React.FC = () => {
                 </div>
               </div>
 
+              {/* Section Synchronisation en arrière-plan */}
+              <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/20">
+                      <RefreshCw size={16} />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-[var(--text-primary)] block">
+                        Synchronisation en arrière-plan
+                      </span>
+                      <span className="text-[10px] text-[var(--text-muted)] block">
+                        Génère automatiquement des tâches de synchronisation en file d'attente pour les tickets non terminés de ce projet.
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoSyncEnabled}
+                    onClick={() => setAutoSyncEnabled(v => !v)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                      autoSyncEnabled ? 'bg-[var(--accent-color)]' : 'bg-[var(--border-color)]'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                        autoSyncEnabled ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {autoSyncEnabled && (
+                  <div className="pt-2 border-t border-[var(--border-color)] space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[var(--text-secondary)] font-medium">Période de synchronisation :</span>
+                      <span className="font-mono font-bold text-[var(--accent-color)]">{autoSyncIntervalMin} min</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={30}
+                      value={autoSyncIntervalMin}
+                      onChange={e => setAutoSyncIntervalMin(parseInt(e.target.value, 10) || 5)}
+                      className="w-full h-1.5 bg-[var(--bg-primary)] rounded-lg appearance-none cursor-pointer accent-[var(--accent-color)]"
+                    />
+                    <div className="flex justify-between text-[9px] text-[var(--text-muted)] font-mono">
+                      <span>1 min</span>
+                      <span>15 min</span>
+                      <span>30 min</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* TTY Terminal Mode Setting */}
               <div className="p-3.5 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)] space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
