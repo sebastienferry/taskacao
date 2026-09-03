@@ -550,13 +550,13 @@ export const ProfileModal: React.FC = () => {
               </div>
 
               {/* Command Line Template Configuration */}
-              <div className="space-y-2.5 p-4 rounded-xl bg-slate-950/70 border border-slate-800">
+              <div className="space-y-2.5 p-4 rounded-xl bg-[var(--bg-tertiary)]/70 border border-[var(--border-color)]">
                 <div className="flex items-center justify-between">
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-primary)] flex items-center gap-1.5">
                     <Terminal size={13} className="text-indigo-400" />
                     <span>Modèle de ligne de commande d'exécution (CLI)</span>
                   </label>
-                  <span className="text-[10px] text-slate-400 font-mono">Template bash / zsh</span>
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono">Template bash / zsh</span>
                 </div>
 
                 <div className="space-y-1.5">
@@ -565,22 +565,22 @@ export const ProfileModal: React.FC = () => {
                     value={aiCommandTemplate}
                     onChange={e => setAiCommandTemplate(e.target.value)}
                     placeholder='Ex: agy -p "{prompt}" ou claude -p "{prompt}"'
-                    className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-indigo-500 transition-all"
+                    className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] transition-all"
                   />
-                  <div className="flex flex-wrap items-center gap-1 text-[10.5px] text-slate-400 leading-relaxed pt-1">
+                  <div className="flex flex-wrap items-center gap-1 text-[10.5px] text-[var(--text-muted)] leading-relaxed pt-1">
                     <Info size={12} className="text-indigo-400 shrink-0" />
-                    <span>Variables disponibles :</span>
-                    <code className="bg-slate-800 text-indigo-300 px-1 py-0.5 rounded text-[9.5px] font-mono">{'{prompt}'}</code>
-                    <code className="bg-slate-800 text-indigo-300 px-1 py-0.5 rounded text-[9.5px] font-mono">{'{issueKey}'}</code>
-                    <code className="bg-slate-800 text-indigo-300 px-1 py-0.5 rounded text-[9.5px] font-mono">{'{issueTitle}'}</code>
-                    <code className="bg-slate-800 text-indigo-300 px-1 py-0.5 rounded text-[9.5px] font-mono">{'{branchName}'}</code>
-                    <code className="bg-slate-800 text-indigo-300 px-1 py-0.5 rounded text-[9.5px] font-mono">{'{repoPath}'}</code>
+                    <span className="font-semibold text-[var(--text-secondary)]">Variables disponibles :</span>
+                    <code className="bg-[var(--bg-primary)] text-indigo-400 border border-[var(--border-color)] px-1 py-0.5 rounded text-[9.5px] font-mono">{'{prompt}'}</code>
+                    <code className="bg-[var(--bg-primary)] text-indigo-400 border border-[var(--border-color)] px-1 py-0.5 rounded text-[9.5px] font-mono">{'{issueKey}'}</code>
+                    <code className="bg-[var(--bg-primary)] text-indigo-400 border border-[var(--border-color)] px-1 py-0.5 rounded text-[9.5px] font-mono">{'{issueTitle}'}</code>
+                    <code className="bg-[var(--bg-primary)] text-indigo-400 border border-[var(--border-color)] px-1 py-0.5 rounded text-[9.5px] font-mono">{'{branchName}'}</code>
+                    <code className="bg-[var(--bg-primary)] text-indigo-400 border border-[var(--border-color)] px-1 py-0.5 rounded text-[9.5px] font-mono">{'{repoPath}'}</code>
                   </div>
                 </div>
 
                 {/* Fast Preset buttons */}
-                <div className="pt-2 border-t border-slate-800/80">
-                  <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1.5">
+                <div className="pt-2 border-t border-[var(--border-color)]">
+                  <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-bold mb-1.5">
                     Modèles de commande rapides :
                   </div>
                   <div className="flex flex-wrap gap-1.5">
@@ -596,7 +596,7 @@ export const ProfileModal: React.FC = () => {
                         key={preset.label}
                         type="button"
                         onClick={() => setAiCommandTemplate(preset.cmd)}
-                        className="px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[10.5px] rounded-lg font-mono transition-colors cursor-pointer"
+                        className="px-2 py-1 bg-[var(--bg-primary)] hover:bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent-color)] text-[10.5px] rounded-lg font-mono transition-colors cursor-pointer"
                       >
                         {preset.label}
                       </button>
