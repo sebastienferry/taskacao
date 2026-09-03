@@ -176,9 +176,10 @@ type TrackerSprint struct {
 type MacroMeta struct {
 	ProjectID   string      `json:"projectId"`
 	Key         string      `json:"key"`
-	Horizon     string      `json:"horizon"` // "now", "next", "later", "hidden", "" = non classé
-	Description string      `json:"description"`
-	Todos       []MacroTodo `json:"todos"`
+	Horizon        string      `json:"horizon"` // "now", "next", "later", "hidden", "" = non classé
+	Description    string      `json:"description"`
+	FramingComment string      `json:"framingComment,omitempty"`
+	Todos          []MacroTodo `json:"todos"`
 	// Title et Status viennent du ticket macro lui-même, que la synchro n'importe
 	// pas comme carte. Closed permet de sortir de la roadmap ce qui est terminé
 	// sans avoir à deviner depuis l'état des enfants.

@@ -121,6 +121,7 @@ export interface MacroMeta {
   /** Chaîne vide = macro non encore classée. */
   horizon: MacroHorizon | ''
   description: string
+  framingComment?: string
   todos: MacroTodo[]
   updatedAt: string
 }

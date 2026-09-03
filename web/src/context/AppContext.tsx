@@ -249,8 +249,8 @@ interface AppContextType {
   fetchProjectMacros: (projectId: string) => Promise<MacroMeta[]>
   fetchProjectEpics: (projectId: string) => Promise<MacroMeta[]>
   refineMacro: (key: string, projectId?: string) => Promise<{ todos: MacroTodo[]; specFramework?: string } | null>
-  saveMacroMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
-  saveEpicMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
+  saveMacroMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; framingComment?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
+  saveEpicMeta: (projectId: string, key: string, patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; framingComment?: string; todos?: MacroTodo[]; closed?: boolean }) => Promise<MacroMeta | null>
   createStoryFromMacroTodo: (projectId: string, macroKey: string, todoId: string) => Promise<{ macro: MacroMeta | null; epic: MacroMeta | null; storyKey: string } | null>
   createStoryFromEpicTodo: (projectId: string, epicKey: string, todoId: string) => Promise<{ macro: MacroMeta | null; epic: MacroMeta | null; storyKey: string } | null>
   pendingHorizonPushes: (projectId: string) => Promise<MacroMeta[]>
@@ -2114,7 +2114,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const saveMacroMeta = async (
     projectId: string,
     key: string,
-    patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; todos?: MacroTodo[]; closed?: boolean }
+    patch: { title?: string; horizon?: MacroHorizon | ''; description?: string; framingComment?: string; todos?: MacroTodo[]; closed?: boolean }
   ): Promise<MacroMeta | null> => {
     try {
       const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/macros`, {
